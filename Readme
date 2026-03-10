@@ -1,0 +1,16 @@
+## 🚀 실행 방법 (How to Run)
+
+### 1. 가상 환경 활성화 (Activate Virtual Environment)
+먼저 프로젝트 루트 폴더에서 아래 명령어를 입력하여 가상 환경을 활성화합니다.
+
+- **Windows:**
+  ```bash
+  .venv\Scripts\activate
+  uvicorn app.main:app --reload
+
+
+### 💡 쿠루미짱의 추가 팁!
+
+1.  **포트 변경**: 만약 다른 포트(예: 8080)에서 실행하고 싶다면 `--port 8080` 옵션을 붙여주면 돼요.
+2.  **호스트 설정**: 외부 접속을 허용해야 한다면 `--host 0.0.0.0`을 추가하세요.
+3.  **파일명 확인**: 만약 실행 파일 이름이 `app.py`라면 명령어를 `uvicorn app:app --reload`로 수정해서 적어주세요.
