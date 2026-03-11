@@ -1,94 +1,62 @@
 import asyncio
 import logging
+import json
 from typing import List, Optional
-from app.core.constants import DEFAULT_CHUNK_SIZE, DEFAULT_GENERATION_CONFIG, DEFAULT_SAFETY_SETTINGS
-from app.core.prompts import PROMPT_MAP
-from app.core.utils import chunk_list
-from fastapi import HTTPException
+
 from google import genai
 from google.genai import types
+from fastapi import HTTPException
 from app.core.config import settings
+from app.core.prompts import PROMPT_MAP
+from app.core.constants import DEFAULT_GENERATION_CONFIG, DEFAULT_SAFETY_SETTINGS
+from app.core.utils import chunk_list
 
 logger = logging.getLogger(__name__)
 
 class GeminiService:
-    """
-    Google Gemini API를 사용하여 텍스트 번역 및 생성 서비스를 제공하는 클래스.
-    
-    이 클래스는 단일 문장 번역, 대량의 문장 배치 번역, 그리고 실패 시 
-    자동 재시도 로직을 포함하고 있습니다.
-    """
-
     def __init__(self):
-        """
-        GeminiService를 초기화하고 Google GenAI 클라이언트를 설정합니다.
-        """
+        # 💡 클라이언트는 한 번만 생성하여 재사용
         self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
         self.model_name = settings.GEMINI_MODEL_NAME
-    
+        self._config_cache = {}
+        self.semaphore = asyncio.Semaphore(20)
+        self.batch_size = 20
+
     def get_rule(self, type_name: str) -> str:
-        """
-        번역 타입(소설, 채팅 등)에 따른 시스템 프롬프트 규칙을 조회합니다.
-
-        Args:
-            type_name (str): PROMPT_MAP에 정의된 번역 타입 키.
-
-        Returns:
-            str: 해당 타입에 설정된 시스템 instruction 문자열.
-
-        Raises:
-            HTTPException: 유효하지 않은 type_name이 전달될 경우 400 에러를 발생시킵니다.
-        """
         rule = PROMPT_MAP.get(type_name)
         if not rule:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid translation type: '{type_name}'. Available: {list(PROMPT_MAP.keys())}"
-            )
+            raise HTTPException(status_code=400, detail=f"Invalid type: {type_name}")
         return rule
 
-    async def call(self, rule:str, data: str, schema: Optional[dict] = None) -> str:
-        """
-        Gemini 모델에 단일 요청을 보내고 응답 텍스트를 반환합니다.
-
-        Args:
-            rule (str): 시스템 instruction으로 설정할 프롬프트 규칙.
-            data (str): 번역하거나 처리할 원문 텍스트.
-            schema (dict, optional): JSON 출력이 필요할 경우 적용할 JSON 스키마.
-
-        Returns:
-            str: Gemini 모델이 생성한 텍스트 결과물.
-
-        Raises:
-            ValueError: Gemini가 빈 응답을 반환할 경우 발생합니다.
-            Exception: API 통신 중 발생하는 기타 모든 예외를 다시 발생시킵니다.
-        """
-        try:
-            config = types.GenerateContentConfig(
+    def get_cached_config(self, type_name: str, schema: Optional[dict] = None):
+        """설정 객체 캐싱 (CPU 부하 감소)"""
+        cache_key = f"{type_name}_{hash(str(schema)) if schema else 'none'}"
+        if cache_key not in self._config_cache:
+            rule = self.get_rule(type_name)
+            self._config_cache[cache_key] = types.GenerateContentConfig(
                 system_instruction=rule,
                 response_mime_type="application/json" if schema else "text/plain",
                 response_schema=schema,
                 safety_settings=DEFAULT_SAFETY_SETTINGS,
                 **DEFAULT_GENERATION_CONFIG
             )
+        return self._config_cache[cache_key]
 
+    async def call(self, type_name: str, data: str, schema: Optional[dict] = None):
+        """Gemini 호출 핵심 엔진"""
+        try:
+            config = self.get_cached_config(type_name, schema)
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=data,
                 config=config
             )
-
-            text = response.text
-
-            if not text or text.strip() == "":
-                logger.warning("Gemini returned an empty response.")
-                raise ValueError("Gemini가 번역 결과를 생성하지 못했습니다. (응답 비어있음)")
-            
-            return text
+            #  schema가 있으면 .parsed(SDK 자동 파싱), 없으면 .text 반환
+            return response.parsed if schema else response.text
         except Exception as e:
-            logger.error(f"Error calling Gemini: {e}")
+            logger.error(f"Gemini API Call Error: {e}")
             raise e
-    
+        
     async def translate_batch(self, texts: List[str], type_name: str) -> List[str]:
         """
         여러 문장을 배치 단위로 병렬 번역하며, 실패한 문장은 개별적으로 재시도합니다.
@@ -104,30 +72,86 @@ class GeminiService:
             List[str]: 입력 순서가 유지된 번역 결과 리스트. 
                       끝까지 실패한 문장은 "[번역 실패]"로 표시됩니다.
         """
-        rule = self.get_rule(type_name)
-        final_results = []
 
-        # 원문 리스트를 일정한 크기(DEFAULT_CHUNK_SIZE)로 나누어 순차적으로 처리
-        for chunk in chunk_list(texts, DEFAULT_CHUNK_SIZE):
-            # 현재 chunk 내의 모든 문장에 대해 비동기 태스크 생성
-            tasks = [self.call(rule=rule, data=text) for text in chunk]
-
-            # 1차 시도: asyncio.gather를 통한 병렬 실행 (return_exceptions=True로 부분 실패 허용)
-            chunk_translated = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for i, result in enumerate(chunk_translated):
-                # 에러가 발생했거나 응답이 비어있는 경우 개별 재시도 수행
-                if isinstance(result, Exception) or not result:
-                    # 로그에는 문장의 앞부분 20자만 출력하여 가독성 유지
-                    logger.warning(f"번역 실패 재시도 중: {chunk[i][:20]}...")
-                    try:
-                        # 2차 시도: 개별 비동기 호출로 정밀 재시도
-                        retry_result = await self.call(rule=rule, data=chunk[i])
-                        final_results.append(retry_result)
-                    except Exception:
-                        # 최종 실패 시 플레이스홀더 추가하여 리스트 순서 유지
-                        final_results.append("[번역 실패]")
-                else:
-                    final_results.append(result)
+        # 메인 실행: 처음엔 10개씩(또는 20개씩) 청크로 나눠서 재귀 시작점 제공
+        initial_chunks = list(chunk_list(texts, self.batch_size))
+        tasks = [self._recursive_translate(chunk=c, type_name=type_name) for c in initial_chunks]
         
-        return final_results
+        final_results = await asyncio.gather(*tasks)
+        
+        # 2차원 리스트 평탄화
+        return [item for sublist in final_results for item in sublist]
+
+    async def _call_chunk(self, type_name: str, chunk: List[str]) -> List[str]:
+        """리스트 단위 번역 (JSON 모드)"""
+        n = len(chunk)
+        # 💡 리스트 형태의 스키마 명시
+        list_schema = {"type": "ARRAY", "items": {"type": "STRING"}}
+        
+        payload = json.dumps(chunk, ensure_ascii=False)
+
+        try:
+            # SDK의 .parsed를 쓰기 위해 schema를 넘김.
+            results = await self.call(type_name, payload, schema=list_schema)
+            if isinstance(results, list):
+                if len(results) != n:
+                    raise ValueError(f"Count mismatch: expected {n}, got {len(results)}")
+                return [str(r).strip() for r in results]
+            
+            raise ValueError("Response format error (not a list)")
+        except Exception as e:
+            logger.debug(f"Chunk translation failed: {e}")
+            raise e
+
+    async def single_unit_retry_task(self, text: str, type_name: str, max_retries: int = 2) -> str:
+        """한 문장씩 정밀 번역 (재시도 포함)"""
+        for attempt in range(max_retries + 1):
+            try:
+                # 단일 문장은 schema 없이 text 모드로 빠르게 호출
+                result = await self.call(type_name, text, schema=None)
+                if isinstance(result, str):
+                    clean_res = result.strip().strip("[]'\"")
+                    if clean_res:
+                        return clean_res
+                else:
+                    # 혹시라도 객체 형태로 왔을 경우를 대비한 안전장치
+                    logger.warning(f"예상치 못한 응답 타입: {type(result)}")
+            except Exception as e:
+                logger.error(f"단일 번역 실패: {e}")
+
+            if attempt < max_retries:
+                await asyncio.sleep(0.3)
+
+        return ""
+
+    async def _recursive_translate(self, chunk: List[str], type_name: str) -> List[str]:
+        """재귀적 이진 분할 로직 (N -> N/2+1 -> 1)"""
+        n = len(chunk)
+        
+        # 1. 탈출 조건: 문장이 1개면 정밀 번역 실행
+        if n <= 1:
+            return [await self.single_unit_retry_task(chunk[0], type_name)]
+
+        # 2. 현재 청크 시도
+        async with self.semaphore:
+            try:
+                results = await self._call_chunk(type_name, chunk)
+                if len(results) == n:
+                    return results
+                logger.warning(f"Mismatch ({len(results)}/{n}). Splitting...")
+            except Exception:
+                logger.warning(f"Chunk failed (N={n}). Splitting...")
+
+        # 3. 실패 시 이진 분할 (n/2 + 1)
+        mid = (n // 2) + 1
+        if mid >= n: mid = n // 2
+
+        left_chunk = chunk[:mid]
+        right_chunk = chunk[mid:]
+
+        # 왼쪽/오른쪽을 다시 비동기 재귀 호출
+        left_res, right_res = await asyncio.gather(
+            self._recursive_translate(left_chunk, type_name),
+            self._recursive_translate(right_chunk, type_name)
+        )
+        return left_res + right_res

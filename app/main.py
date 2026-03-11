@@ -1,8 +1,11 @@
+from app.core.config_logger import setup_logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.openapi import set_custom_openapi
 from app.api.v1 import api_router
+
+setup_logging()
 
 app = FastAPI(
     title="Project Cat: AI Server",

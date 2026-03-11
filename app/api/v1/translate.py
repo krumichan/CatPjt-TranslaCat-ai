@@ -26,8 +26,7 @@ async def translate_single(
     Returns:
     - dict: {"translated": "번역된 결과 문자열"}
     """
-    rule = service.get_rule(request.type)
-    translated_text = await service.call(rule=rule, data=request.text)
+    translated_text = await service.call(type_name=request.type, data=request.text)
     return {"translated": translated_text}
 
 @router.post("/batch")
