@@ -1,0 +1,48 @@
+name: AI Server Deploy to OCI
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+    
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/CatPjt-TranslaCat-ai
+            git pull origin main
+
+            echo "${{ secrets.ENV_FILE_CONTENT }}" > .env
+
+            docker build -t translacat-ai .
+            docker stop fastapi-app || true
+            docker rm fastapi-app || true
+
+            docker run -d --name fastapi-app -p 8000:8000 translacat-ai
+
+            echo "Waiting for server to start (Max 5 minutes)..."
+            SUCCESS=false
+            for i in {1..60}; do
+              if curl -s --head http://localhost:8000 | grep -E "200|405" > /dev/null; then
+                echo "Success!"
+                SUCCESS=true
+                break
+              fi
+
+              echo "Attempt $i: Server not ready yet... waiting 5 seconds."
+              sleep 5
+            done
+
+            if [ "$SUCCESS" = false ]; then
+              echo "Error..."
+              docker logs fastapi-app
+              exit 1
+            fi
