@@ -25,7 +25,7 @@ class STTService:
             - device: "cpu" (GPU가 없는 환경을 위해 CPU 사용)
             - compute_type: "int8" (8비트 양자화를 통해 메모리 사용량 절감 및 속도 향상)
         """
-        self.model = WhisperModel("base", device="cpu", compute_type="int8")
+        self.model = WhisperModel("tiny", device="cpu", compute_type="int8", cpu_threads=1, num_workers=1)
     
     async def transcribe_file(self, upload_file) -> str:
         """
@@ -64,7 +64,7 @@ class STTService:
             Exception: 오디오 파일 읽기 실패나 모델 분석 중 오류 발생 시 예외를 발생시킵니다.
         """
         try:
-            segments, _ = self.model.transcribe(audio_path, beam_size=5, language=lang)
+            segments, _ = self.model.transcribe(audio_path, beam_size=1, language=lang, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
             # 인식 정보 로그 출력 (필요 시 주석 해제)
             # logger.info(f"언어 감지: {info.language} (확률: {info.language_probability:.2f})")
             # logger.info(f"오디오 길이: {info.duration:.2f}초")
