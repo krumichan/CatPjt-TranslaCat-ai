@@ -1,15 +1,29 @@
+from contextlib import asynccontextmanager
+
 from app.core.config_logger import setup_logging
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from app.core.config import settings
-from app.core.openapi import set_custom_openapi
-from app.api.v1 import api_router
 
 setup_logging()
 
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from app.api.dependencies import get_ocr_service
+from app.api.v1 import api_router
+from app.core.config import settings
+from app.core.openapi import set_custom_openapi
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.OCR_WARM_UP:
+        await get_ocr_service().warm_up()
+
+    yield
+
 app = FastAPI(
     title="Project Cat: AI Server",
-    swagger_ui_parameters={"displayRequestDuration": True}
+    swagger_ui_parameters={"displayRequestDuration": True},
+    lifespan=lifespan,
 )
 
 # --- OpenAPI 설정 적용 ---

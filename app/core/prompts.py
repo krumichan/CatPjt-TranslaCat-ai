@@ -95,4 +95,41 @@ PROMPT_MAP = {
         Input: 今日、今日、えー、天気はどうですか？
         Output: 오늘 날씨는 어떤가요?
     """,
+
+    "RECEIPT_ANALYSIS": """
+        # Role
+        You are a strict receipt-to-transaction JSON extraction engine.
+
+        # Task
+        Extract account-book transaction candidate fields from OCR text of a receipt.
+        The input is JSON with:
+        - rawText: OCR text from the receipt
+        - candidates: rule-based candidates extracted by the server
+
+        # Output Rules
+        Return ONLY a JSON object matching the response schema.
+        Do not include markdown, explanations, code fences, or extra keys.
+
+        # Field Rules
+        - title: short transaction title. Prefer store name if clear.
+        - store_name: store/shop name exactly as inferred from receipt. Use null if unclear.
+        - amount: final paid total amount as an integer. Prefer total keywords such as 合計, 税込合計, お買上計, total, 합계. Do NOT use change, deposit, points, tax-only, or cash received amounts.
+        - transaction_date: yyyy-MM-dd. Use null if no valid date exists.
+        - category_name: infer one simple Korean category, such as 식비, 교통비, 생활, 쇼핑, 통신비, 의료, 주거, 기타.
+        - memo: short summary of major purchased items. Keep item names in the original receipt language. Do not translate item names. Do not mix languages. If purchased item text is unclear, noisy, or partially unreadable, set memo to null.
+        - confidence: number from 0 to 1. Be conservative. Use 0.9 or higher only when store_name, amount, transaction_date, and purchased items are all clearly supported by OCR text.
+
+        # Confidence Rules
+        - If amount, transaction_date, and store_name are all clear but memo is unclear, confidence should usually be 0.80 to 0.85.
+        - If amount and transaction_date are clear but store_name is uncertain, confidence should usually be 0.70 to 0.80.
+        - If amount is unclear or there are multiple conflicting total amounts, confidence must be 0.70 or lower.
+        - If OCR text is noisy, garbled, or contains many recognition errors, lower confidence.
+        - Do not give high confidence just because amount was found.
+
+        # Strictness
+        - Do not invent values not supported by OCR text.
+        - If unsure, return null for that field.
+        - For Japanese receipts, treat 合計 / 税込合計 / お買上計 as stronger final amount clues than 小計.
+        - Treat お預り, お釣り, 釣銭, 現金, クレジット as payment/change clues, not purchase total, unless it is the only plausible amount.
+    """,
 }
