@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 class OCRService:
     def __init__(self) -> None:
         self._ocr_cache: dict[tuple[str, str], Any] = {}
-        self._lock = asyncio.Lock()
-    
+
+        # OCR 인스턴스 생성 보호용
+        self._create_lock = asyncio.Lock()
+
+        # PaddleOCR predict 동시 실행 방지용
+        # 같은 OCR 인스턴스를 여러 요청이 동시에 사용하면 Paddle 내부 메모리 오류/SIGSEGV가 날 수 있음
+        self._predict_lock = asyncio.Lock()
+
     async def warm_up(self) -> None:
         await self._get_ocr(settings.OCR_LANGUAGE)
 
@@ -44,17 +50,21 @@ class OCRService:
             language = (ocr_language or settings.OCR_LANGUAGE).strip()
             ocr = await self._get_ocr(language)
 
-            return await asyncio.to_thread(
-                self._extract_text_from_path,
-                ocr,
-                temp_file_path,
-            )
+            # 중요:
+            # PaddleOCR/PaddlePaddle 추론 객체는 멀티 요청에서 동시에 predict()를 돌리면
+            # Tensor memory/dimension 오류나 SIGSEGV가 발생할 수 있으므로 직렬화한다.
+            async with self._predict_lock:
+                return await asyncio.to_thread(
+                    self._extract_text_from_path,
+                    ocr,
+                    temp_file_path,
+                )
         finally:
             try:
                 os.remove(temp_file_path)
             except FileNotFoundError:
                 pass
-    
+
     def _validate_file(self, file: UploadFile) -> None:
         content_type = file.content_type
         suffix = Path(file.filename or "").suffix.lower()
@@ -70,15 +80,14 @@ class OCRService:
                 status_code=400,
                 detail="지원하지 않는 이미지 확장자입니다.",
             )
-    
+
     def _write_temp_file(self, contents: bytes, suffix: str) -> str:
         processed_contents, processed_suffix = self._preprocess_image(contents, suffix)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=processed_suffix) as temp_file:
             temp_file.write(processed_contents)
-
             return temp_file.name
-    
+
     def _preprocess_image(self, contents: bytes, suffix: str) -> tuple[bytes, str]:
         try:
             image = Image.open(io.BytesIO(contents))
@@ -89,13 +98,9 @@ class OCRService:
 
             width, height = image.size
 
-            if width > settings.OCR_MAX_IMAGE_WIDTH:
-                ratio = settings.OCR_MAX_IMAGE_WIDTH / width
-                new_height = int(height * ratio)
-                image = image.resize(
-                    (settings.OCR_MAX_IMAGE_WIDTH, new_height),
-                    Image.LANCZOS,
-                )
+            # width만 제한하면 세로로 긴 영수증에서 여전히 큰 이미지가 들어갈 수 있음.
+            # width / height / 총 픽셀 수를 모두 제한한다.
+            image = self._resize_image_safely(image)
 
             output = io.BytesIO()
 
@@ -115,8 +120,39 @@ class OCRService:
                 "이미지 전처리에 실패하여 원본 파일로 OCR을 진행합니다.",
                 exc_info=True,
             )
-
             return contents, suffix
+
+    def _resize_image_safely(self, image: Image.Image) -> Image.Image:
+        width, height = image.size
+
+        max_width = settings.OCR_MAX_IMAGE_WIDTH
+        max_height = settings.OCR_MAX_IMAGE_HEIGHT
+        max_pixels = settings.OCR_MAX_IMAGE_PIXELS
+
+        ratio = min(
+            max_width / width if width > max_width else 1.0,
+            max_height / height if height > max_height else 1.0,
+        )
+
+        if width * height > max_pixels:
+            pixel_ratio = (max_pixels / (width * height)) ** 0.5
+            ratio = min(ratio, pixel_ratio)
+
+        if ratio < 1.0:
+            new_width = max(1, int(width * ratio))
+            new_height = max(1, int(height * ratio))
+
+            logger.info(
+                "OCR 이미지 리사이즈: %sx%s -> %sx%s",
+                width,
+                height,
+                new_width,
+                new_height,
+            )
+
+            return image.resize((new_width, new_height), Image.LANCZOS)
+
+        return image
 
     async def _get_ocr(self, language: str) -> Any:
         cache_key = (language, settings.OCR_VERSION)
@@ -124,7 +160,7 @@ class OCRService:
         if cache_key in self._ocr_cache:
             return self._ocr_cache[cache_key]
 
-        async with self._lock:
+        async with self._create_lock:
             if cache_key not in self._ocr_cache:
                 self._ocr_cache[cache_key] = await asyncio.to_thread(
                     self._create_ocr,
@@ -132,7 +168,7 @@ class OCRService:
                     settings.OCR_VERSION,
                 )
 
-        return self._ocr_cache[cache_key]
+            return self._ocr_cache[cache_key]
 
     def _create_ocr(
         self,
@@ -158,17 +194,24 @@ class OCRService:
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+
+                # 일부 버전에서는 지원, 일부 버전에서는 TypeError가 날 수 있음.
+                # TypeError 발생 시 아래 2.x 호환 파라미터로 재시도.
+                enable_mkldnn=settings.OCR_ENABLE_MKLDNN,
+                cpu_threads=settings.OCR_CPU_THREADS,
             )
         except (TypeError, ValueError):
             logger.info(
                 "PaddleOCR 3.x 파라미터 초기화에 실패하여 2.x 호환 파라미터로 재시도합니다."
             )
 
-        return PaddleOCR(
-            use_angle_cls=True,
-            lang=language,
-            ocr_version=ocr_version,
-        )
+            return PaddleOCR(
+                use_angle_cls=True,
+                lang=language,
+                ocr_version=ocr_version,
+                enable_mkldnn=settings.OCR_ENABLE_MKLDNN,
+                cpu_threads=settings.OCR_CPU_THREADS,
+            )
 
     def _extract_text_from_path(self, ocr: Any, image_path: str) -> str:
         try:
@@ -180,14 +223,12 @@ class OCRService:
             texts = self._collect_texts(result)
         except Exception as exc:
             logger.exception("PaddleOCR 처리에 실패했습니다.")
-
             raise HTTPException(
                 status_code=500,
                 detail="OCR 처리 중 오류가 발생했습니다.",
             ) from exc
 
         normalized_texts = [text.strip() for text in texts if text.strip()]
-
         return "\n".join(dict.fromkeys(normalized_texts))
 
     def _collect_texts(self, value: Any) -> list[str]:
@@ -202,17 +243,11 @@ class OCRService:
         if isinstance(value, dict):
             for key in ("rec_texts", "texts"):
                 nested_value = value.get(key)
-
                 if isinstance(nested_value, list):
-                    texts.extend(
-                        str(item)
-                        for item in nested_value
-                        if item is not None
-                    )
+                    texts.extend(str(item) for item in nested_value if item is not None)
 
             for key in ("text", "label"):
                 nested_value = value.get(key)
-
                 if isinstance(nested_value, str):
                     texts.append(nested_value)
 
@@ -239,7 +274,6 @@ class OCRService:
 
         if hasattr(value, "json"):
             json_attr = getattr(value, "json")
-
             try:
                 json_value = json_attr() if callable(json_attr) else json_attr
             except TypeError:
