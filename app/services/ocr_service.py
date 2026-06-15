@@ -194,6 +194,9 @@ class OCRService:
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+                text_recognition_batch_size=settings.OCR_TEXT_RECOGNITION_BATCH_SIZE,
+                text_det_limit_side_len=settings.OCR_TEXT_DET_LIMIT_SIDE_LEN,
+                text_det_limit_type=settings.OCR_TEXT_DET_LIMIT_TYPE,
 
                 # 일부 버전에서는 지원, 일부 버전에서는 TypeError가 날 수 있음.
                 # TypeError 발생 시 아래 2.x 호환 파라미터로 재시도.

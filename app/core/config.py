@@ -20,14 +20,18 @@ class Settings(BaseSettings):
     OCR_VERSION: str = "PP-OCRv3"
     OCR_WARM_UP: bool = True
 
-    OCR_MAX_IMAGE_WIDTH: int = 1400
-    OCR_MAX_IMAGE_HEIGHT: int = 2200
+    OCR_MAX_IMAGE_WIDTH: int = 900
+    OCR_MAX_IMAGE_HEIGHT: int = 1400
     OCR_MAX_IMAGE_PIXELS: int = 2_000_000
     OCR_IMAGE_QUALITY: int = 85
     OCR_MAX_FILE_SIZE: int = 5 * 1024 * 1024
 
-    OCR_ENABLE_MKLDNN: bool = False
-    OCR_CPU_THREADS: int = 1
+    OCR_ENABLE_MKLDNN: bool = True
+    OCR_CPU_THREADS: int = 2
+
+    OCR_TEXT_RECOGNITION_BATCH_SIZE: int = 6
+    OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 960
+    OCR_TEXT_DET_LIMIT_TYPE: str = "max"
 
     OCR_ALLOWED_CONTENT_TYPES: set[str] = {
         "image/jpeg",

@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Paddle / OpenMP / BLAS 계열 스레드 폭주 방지
 # GitHub Actions에서 주입하는 앱 환경변수와 별개로,
 # 컨테이너 런타임 안정성을 위해 이미지 기본값으로 둠
-ENV OMP_NUM_THREADS=1
-ENV MKL_NUM_THREADS=1
-ENV OPENBLAS_NUM_THREADS=1
-ENV NUMEXPR_NUM_THREADS=1
-ENV FLAGS_use_mkldnn=0
+ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=2
+ENV OPENBLAS_NUM_THREADS=2
+ENV NUMEXPR_NUM_THREADS=2
+ENV FLAGS_use_mkldnn=1
 
 COPY requirements.txt .
 
