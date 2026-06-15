@@ -7,8 +7,16 @@ from typing import Any
 from fastapi import HTTPException, UploadFile
 
 from app.core.config import settings
+from app.core.prompts import (
+    build_receipt_text_analysis_prompt,
+    build_receipt_vision_prompt,
+)
 from app.core.receipt_parser import extract_receipt_candidates
-from app.schemas.receipt import ReceiptAnalysisOptions, ReceiptAnalysisResponse
+from app.schemas.receipt import (
+    ReceiptAnalysisMode,
+    ReceiptAnalysisOptions,
+    ReceiptAnalysisResponse,
+)
 from app.services.gemini_service import GeminiService
 from app.services.ocr_service import OCRService
 
@@ -118,104 +126,135 @@ class ReceiptAnalysisService:
         file: UploadFile,
         options: ReceiptAnalysisOptions | None = None,
     ) -> ReceiptAnalysisResponse:
-        total_start = time.perf_counter()
-
         analysis_options = options or ReceiptAnalysisOptions()
-        ocr_language = analysis_options.ocr_language or settings.OCR_LANGUAGE
+        analysis_mode = self._resolve_analysis_mode(analysis_options)
 
-        ocr_start = time.perf_counter()
+        if analysis_mode == ReceiptAnalysisMode.VISION_ONLY:
+            return await self._analyze_with_vision_only(file, analysis_options)
 
-        raw_text = await self.ocr_service.extract_text_from_upload(
-            file=file,
-            ocr_language=ocr_language,
+        if analysis_mode == ReceiptAnalysisMode.VISION_FIRST:
+            return await self._analyze_with_vision_first(file, analysis_options)
+
+        if analysis_mode == ReceiptAnalysisMode.OCR_ONLY:
+            return await self._analyze_with_ocr_only(file, analysis_options)
+
+        return await self._analyze_with_ocr_and_ai(file, analysis_options)
+    
+    def _resolve_analysis_mode(
+        self,
+        options: ReceiptAnalysisOptions,
+    ) -> ReceiptAnalysisMode:
+        mode_value = options.analysis_mode or getattr(
+            settings,
+            "RECEIPT_ANALYSIS_MODE",
+            ReceiptAnalysisMode.OCR_WITH_AI.value,
         )
 
-        ocr_elapsed = time.perf_counter() - ocr_start
+        if isinstance(mode_value, ReceiptAnalysisMode):
+            return mode_value
 
-        if not raw_text.strip():
-            raise HTTPException(
-                status_code=422,
-                detail="영수증에서 텍스트를 추출하지 못했습니다.",
+        try:
+            return ReceiptAnalysisMode(str(mode_value).strip().upper())
+        except ValueError:
+            logger.warning(
+                "지원하지 않는 영수증 분석 모드입니다. OCR_WITH_AI로 처리합니다. mode=%s",
+                mode_value,
             )
+            return ReceiptAnalysisMode.OCR_WITH_AI
 
-        parse_start = time.perf_counter()
-        candidates = extract_receipt_candidates(raw_text)
-        parse_elapsed = time.perf_counter() - parse_start
+    async def _analyze_with_vision_only(
+        self,
+        file: UploadFile,
+        options: ReceiptAnalysisOptions,
+    ) -> ReceiptAnalysisResponse:
+        total_start = time.perf_counter()
+
+        image_bytes = await file.read()
+        mime_type = file.content_type or "image/jpeg"
+
+        ai_start = time.perf_counter()
+
+        ai_result = await self._analyze_image_with_ai(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            options=options,
+        )
+
+        ai_elapsed = time.perf_counter() - ai_start
+        total_elapsed = time.perf_counter() - total_start
+
+        logger.info(
+            "Receipt analysis completed with VISION_ONLY. total=%.2fs, ai=%.2fs",
+            total_elapsed,
+            ai_elapsed,
+        )
+
+        return self._build_response(
+            result=ai_result,
+            raw_text=None,
+            used_ai=True,
+            candidates={},
+            ocr_engine="gemini_vision",
+        )
+    
+    async def _analyze_with_vision_first(
+        self,
+        file: UploadFile,
+        options: ReceiptAnalysisOptions,
+    ) -> ReceiptAnalysisResponse:
+        total_start = time.perf_counter()
+
+        image_bytes = await file.read()
+        mime_type = file.content_type or "image/jpeg"
 
         try:
             ai_start = time.perf_counter()
 
-            ai_result = await self._analyze_with_ai(
-                raw_text=raw_text,
-                candidates=candidates,
-                options=analysis_options,
+            ai_result = await self._analyze_image_with_ai(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                options=options,
             )
 
             ai_elapsed = time.perf_counter() - ai_start
-            total_elapsed = time.perf_counter() - total_start
 
-            logger.info(
-                "Receipt analysis completed. total=%.2fs, ocr=%.2fs, parse=%.2fs, ai=%.2fs",
-                total_elapsed,
-                ocr_elapsed,
-                parse_elapsed,
-                ai_elapsed,
-            )
-
-            return self._build_response(
+            response = self._build_response(
                 result=ai_result,
-                raw_text=raw_text,
+                raw_text=None,
                 used_ai=True,
-                candidates=candidates,
+                candidates={},
+                ocr_engine="gemini_vision",
             )
-        except Exception as exc:
-            total_elapsed = time.perf_counter() - total_start
+
+            threshold = getattr(settings, "GEMINI_VISION_CONFIDENCE_THRESHOLD", 0.75)
+
+            if (response.confidence or 0) >= threshold:
+                total_elapsed = time.perf_counter() - total_start
+
+                logger.info(
+                    "Receipt analysis completed with VISION_FIRST. total=%.2fs, ai=%.2fs, confidence=%.2f",
+                    total_elapsed,
+                    ai_elapsed,
+                    response.confidence or 0,
+                )
+
+                return response
 
             logger.warning(
-                "영수증 AI 구조화에 실패하여 룰 기반 후보값으로 응답합니다: %s",
+                "Gemini Vision confidence is low. fallback to OCR_WITH_AI. confidence=%s",
+                response.confidence,
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "Gemini Vision 분석 실패. OCR_WITH_AI로 fallback 합니다: %s",
                 exc,
             )
 
-            logger.info(
-                "Receipt analysis completed with fallback. total=%.2fs, ocr=%.2fs, parse=%.2fs",
-                total_elapsed,
-                ocr_elapsed,
-                parse_elapsed,
-            )
+        # file.read()를 이미 했기 때문에 다시 OCR에서 읽을 수 있도록 seek 필요
+        await file.seek(0)
 
-            return self._build_rule_based_response(raw_text, candidates)
-
-    async def _analyze_with_ai(
-        self,
-        raw_text: str,
-        candidates: dict[str, Any],
-        options: ReceiptAnalysisOptions,
-    ) -> dict[str, Any]:
-        compact_raw_text = self._compact_raw_text_for_ai(
-            raw_text=raw_text,
-            options=options,
-        )
-
-        payload = json.dumps(
-            {
-                "rawText": compact_raw_text,
-                "candidates": candidates,
-                "currencyCode": options.currency_code,
-                "ocrLanguage": options.ocr_language or settings.OCR_LANGUAGE,
-            },
-            ensure_ascii=False,
-        )
-
-        result = await self.gemini_service.call(
-            type_name="RECEIPT_ANALYSIS",
-            data=payload,
-            schema=_RECEIPT_ANALYSIS_SCHEMA,
-        )
-
-        if not isinstance(result, dict):
-            raise ValueError("Gemini 응답이 객체 형식이 아닙니다.")
-
-        return result
+        return await self._analyze_with_ocr_and_ai(file, options)
     
     def _compact_raw_text_for_ai(
         self,
@@ -282,6 +321,139 @@ class ReceiptAnalysisService:
 
         return "\n".join(dict.fromkeys(compact_lines))
 
+    async def _analyze_with_ocr_only(
+        self,
+        file: UploadFile,
+        options: ReceiptAnalysisOptions,
+    ) -> ReceiptAnalysisResponse:
+        total_start = time.perf_counter()
+
+        ocr_language = options.ocr_language or settings.OCR_LANGUAGE
+
+        ocr_start = time.perf_counter()
+
+        raw_text = await self.ocr_service.extract_text_from_upload(
+            file=file,
+            ocr_language=ocr_language,
+        )
+
+        ocr_elapsed = time.perf_counter() - ocr_start
+
+        if not raw_text.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="영수증에서 텍스트를 추출하지 못했습니다.",
+            )
+
+        parse_start = time.perf_counter()
+        candidates = extract_receipt_candidates(raw_text)
+        parse_elapsed = time.perf_counter() - parse_start
+
+        total_elapsed = time.perf_counter() - total_start
+
+        logger.info(
+            "Receipt analysis completed with OCR_ONLY. total=%.2fs, ocr=%.2fs, parse=%.2fs",
+            total_elapsed,
+            ocr_elapsed,
+            parse_elapsed,
+        )
+
+        return self._build_rule_based_response(raw_text, candidates)
+
+    async def _analyze_with_ocr_and_ai(
+        self,
+        file: UploadFile,
+        options: ReceiptAnalysisOptions,
+    ) -> ReceiptAnalysisResponse:
+        total_start = time.perf_counter()
+
+        ocr_language = options.ocr_language or settings.OCR_LANGUAGE
+
+        ocr_start = time.perf_counter()
+
+        raw_text = await self.ocr_service.extract_text_from_upload(
+            file=file,
+            ocr_language=ocr_language,
+        )
+
+        ocr_elapsed = time.perf_counter() - ocr_start
+
+        if not raw_text.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="영수증에서 텍스트를 추출하지 못했습니다.",
+            )
+
+        parse_start = time.perf_counter()
+        candidates = extract_receipt_candidates(raw_text)
+        parse_elapsed = time.perf_counter() - parse_start
+
+        try:
+            ai_start = time.perf_counter()
+
+            ai_result = await self._analyze_with_ai(
+                raw_text=raw_text,
+                candidates=candidates,
+                options=options,
+            )
+
+            ai_elapsed = time.perf_counter() - ai_start
+            total_elapsed = time.perf_counter() - total_start
+
+            logger.info(
+                "Receipt analysis completed with OCR_WITH_AI. total=%.2fs, ocr=%.2fs, parse=%.2fs, ai=%.2fs",
+                total_elapsed,
+                ocr_elapsed,
+                parse_elapsed,
+                ai_elapsed,
+            )
+
+            return self._build_response(
+                result=ai_result,
+                raw_text=raw_text,
+                used_ai=True,
+                candidates=candidates,
+                ocr_engine="paddleocr",
+            )
+
+        except Exception as exc:
+            total_elapsed = time.perf_counter() - total_start
+
+            logger.warning(
+                "영수증 AI 구조화에 실패하여 룰 기반 후보값으로 응답합니다: %s",
+                exc,
+            )
+
+            logger.info(
+                "Receipt analysis completed with OCR fallback. total=%.2fs, ocr=%.2fs, parse=%.2fs",
+                total_elapsed,
+                ocr_elapsed,
+                parse_elapsed,
+            )
+
+            return self._build_rule_based_response(raw_text, candidates)
+    
+    async def _analyze_image_with_ai(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        options: ReceiptAnalysisOptions,
+    ) -> dict[str, Any]:
+        prompt = build_receipt_vision_prompt(options)
+
+        result = await self.gemini_service.call_with_image(
+            type_name="RECEIPT_ANALYSIS",
+            prompt=prompt,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            schema=_RECEIPT_ANALYSIS_SCHEMA,
+        )
+
+        if not isinstance(result, dict):
+            raise ValueError("Gemini Vision 응답이 객체 형식이 아닙니다.")
+
+        return result
+
     def _looks_like_date_line(self, line: str) -> bool:
         return re.search(
             r"(20\d{2})[./\-年]?\d{1,2}[./\-月]?\d{1,2}",
@@ -299,7 +471,34 @@ class ReceiptAnalysisService:
             return True
 
         return False
+    
+    async def _analyze_with_ai(
+        self,
+        raw_text: str,
+        candidates: dict[str, Any],
+        options: ReceiptAnalysisOptions,
+    ) -> dict[str, Any]:
+        compact_raw_text = self._compact_raw_text_for_ai(
+            raw_text=raw_text,
+            options=options,
+        )
 
+        payload = build_receipt_text_analysis_prompt(
+            raw_text=compact_raw_text,
+            candidates=candidates,
+            options=options,
+        )
+
+        result = await self.gemini_service.call(
+            type_name="RECEIPT_ANALYSIS",
+            data=payload,
+            schema=_RECEIPT_ANALYSIS_SCHEMA,
+        )
+
+        if not isinstance(result, dict):
+            raise ValueError("Gemini 응답이 객체 형식이 아닙니다.")
+
+        return result
 
     def _looks_like_item_line(
         self,
@@ -331,9 +530,10 @@ class ReceiptAnalysisService:
     def _build_response(
         self,
         result: dict[str, Any],
-        raw_text: str,
+        raw_text: str | None,
         used_ai: bool,
         candidates: dict[str, Any] | None = None,
+        ocr_engine: str = "paddleocr",
     ) -> ReceiptAnalysisResponse:
         title = self._to_optional_str(result.get("title"))
         store_name = self._to_optional_str(result.get("store_name"))
@@ -352,7 +552,7 @@ class ReceiptAnalysisService:
             transaction_date=transaction_date,
             category_name=category_name,
             memo=memo,
-            raw_text=raw_text,
+            raw_text=raw_text or "",
             candidates=candidates or {},
         )
 
@@ -365,7 +565,7 @@ class ReceiptAnalysisService:
             memo=memo,
             confidence=confidence,
             raw_text=raw_text,
-            ocr_engine="paddleocr",
+            ocr_engine=ocr_engine,
             used_ai=used_ai,
         )
     
@@ -402,8 +602,8 @@ class ReceiptAnalysisService:
         if not has_category:
             confidence = min(confidence, 0.85)
 
-        # OCR 원문이 많이 깨졌으면 0.9 이상을 막는다.
-        if self._looks_noisy_ocr_text(raw_text):
+        # OCR 원문이 많이 깨졌으면 0.85 이상을 막는다.
+        if raw_text and self._looks_noisy_ocr_text(raw_text):
             confidence = min(confidence, 0.85)
 
         # memo가 없으면 너무 높은 confidence를 막는다.

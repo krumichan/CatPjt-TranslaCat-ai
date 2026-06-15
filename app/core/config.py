@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 960
     OCR_TEXT_DET_LIMIT_TYPE: str = "max"
 
+    RECEIPT_ANALYSIS_MODE: str = "OCR_WITH_AI"
+    GEMINI_VISION_CONFIDENCE_THRESHOLD: float = 0.75
+
     OCR_ALLOWED_CONTENT_TYPES: set[str] = {
         "image/jpeg",
         "image/png",

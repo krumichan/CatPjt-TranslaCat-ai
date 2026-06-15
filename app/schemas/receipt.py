@@ -1,4 +1,13 @@
+from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+class ReceiptAnalysisMode(str, Enum):
+    OCR_WITH_AI = "OCR_WITH_AI"
+    VISION_ONLY = "VISION_ONLY"
+    VISION_FIRST = "VISION_FIRST"
+    OCR_ONLY = "OCR_ONLY"
 
 
 class ReceiptAnalysisResponse(BaseModel):
@@ -21,6 +30,10 @@ class ReceiptAnalysisOptions(BaseModel):
     ocr_language: str | None = Field(
         None,
         description="OCR 언어 코드. 예: japan, korean, en",
+    )
+    analysis_mode: ReceiptAnalysisMode | None = Field(
+        None,
+        description="영수증 분석 방식",
     )
     stop_keywords: list[str] | None = Field(
         None,

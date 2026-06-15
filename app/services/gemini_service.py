@@ -56,6 +56,35 @@ class GeminiService:
         except Exception as e:
             logger.error(f"Gemini API Call Error: {e}")
             raise e
+    
+    async def call_with_image(
+        self,
+        type_name: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        schema: dict | None = None,
+    ):
+        try:
+            config = self.get_cached_config(type_name, schema)
+
+            response = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=[
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=mime_type,
+                    ),
+                    prompt,
+                ],
+                config=config,
+            )
+
+            return response.parsed if schema else response.text
+
+        except Exception as exc:
+            logger.error("Gemini Vision API Call Error: %s", exc)
+            raise
         
     async def translate_batch(self, texts: List[str], type_name: str) -> List[str]:
         """

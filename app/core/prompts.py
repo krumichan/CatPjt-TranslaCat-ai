@@ -1,3 +1,9 @@
+import json
+
+from app.core.config import settings
+from app.schemas.receipt import ReceiptAnalysisOptions
+
+
 PROMPT_MAP = {
     "RANK": """
         # Role
@@ -133,3 +139,36 @@ PROMPT_MAP = {
         - Treat お預り, お釣り, 釣銭, 現金, クレジット as payment/change clues, not purchase total, unless it is the only plausible amount.
     """,
 }
+
+def build_receipt_text_analysis_prompt(
+    raw_text: str,
+    candidates: dict,
+    options: ReceiptAnalysisOptions,
+) -> str:
+    return json.dumps(
+        {
+            "rawText": raw_text,
+            "candidates": candidates,
+            "currencyCode": options.currency_code,
+            "ocrLanguage": options.ocr_language or settings.OCR_LANGUAGE,
+        },
+        ensure_ascii=False,
+    )
+
+def build_receipt_vision_prompt(
+    options: ReceiptAnalysisOptions,
+) -> str:
+    return json.dumps(
+        {
+            "instruction": (
+                "이 이미지는 영수증입니다. "
+                "점포명, 총액, 거래일, 거래명, 카테고리, 메모 후보를 추출하세요. "
+                "반드시 response_schema 형식의 JSON으로만 응답하세요. "
+                "총액은 合計, 税込合計, 総合計, お買上計, TOTAL, 결제금액에 해당하는 최종 금액을 우선하세요. "
+                "카드번호, 승인번호, 등록번호, 전화번호는 금액으로 선택하지 마세요."
+            ),
+            "currencyCode": options.currency_code,
+            "ocrLanguage": options.ocr_language or settings.OCR_LANGUAGE,
+        },
+        ensure_ascii=False,
+    )
