@@ -6,52 +6,37 @@ from typing import List, Optional
 from google import genai
 from google.genai import types
 from fastapi import HTTPException
+
 from app.core.config import settings
-from app.core.prompts import PROMPT_MAP
-from app.core.constants import DEFAULT_GENERATION_CONFIG, DEFAULT_SAFETY_SETTINGS
-from app.core.utils import chunk_list
+from app.core.prompts import build_chat_translation_prompt
+from app.core.gemini.gemini_config_manager import GeminiConfigManager
+from app.core.utils.chat_translation_utils import normalize_chat_translation_result
+from app.core.utils.utils import chunk_list
 
 logger = logging.getLogger(__name__)
 
 class GeminiService:
     def __init__(self):
-        # 💡 클라이언트는 한 번만 생성하여 재사용
         self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
         self.model_name = settings.GEMINI_MODEL_NAME
-        self._config_cache = {}
+        self.config_manager = GeminiConfigManager()
         self.semaphore = asyncio.Semaphore(20)
         self.batch_size = 20
-
-    def get_rule(self, type_name: str) -> str:
-        rule = PROMPT_MAP.get(type_name)
-        if not rule:
-            raise HTTPException(status_code=400, detail=f"Invalid type: {type_name}")
-        return rule
-
-    def get_cached_config(self, type_name: str, schema: Optional[dict] = None):
-        """설정 객체 캐싱 (CPU 부하 감소)"""
-        cache_key = f"{type_name}_{hash(str(schema)) if schema else 'none'}"
-        if cache_key not in self._config_cache:
-            rule = self.get_rule(type_name)
-            self._config_cache[cache_key] = types.GenerateContentConfig(
-                system_instruction=rule,
-                response_mime_type="application/json" if schema else "text/plain",
-                response_schema=schema,
-                safety_settings=DEFAULT_SAFETY_SETTINGS,
-                **DEFAULT_GENERATION_CONFIG
-            )
-        return self._config_cache[cache_key]
 
     async def call(self, type_name: str, data: str, schema: Optional[dict] = None):
         """Gemini 호출 핵심 엔진"""
         try:
-            config = self.get_cached_config(type_name, schema)
+            config = self.config_manager.get_cached_config(
+                type_name=type_name,
+                schema=schema,
+            )
+
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=data,
-                config=config
+                config=config,
             )
-            #  schema가 있으면 .parsed(SDK 자동 파싱), 없으면 .text 반환
+
             return response.parsed if schema else response.text
         except Exception as e:
             logger.error(f"Gemini API Call Error: {e}")
@@ -66,7 +51,10 @@ class GeminiService:
         schema: dict | None = None,
     ):
         try:
-            config = self.get_cached_config(type_name, schema)
+            config = self.config_manager.get_cached_config(
+                type_name=type_name,
+                schema=schema,
+            )
 
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
@@ -110,6 +98,42 @@ class GeminiService:
         
         # 2차원 리스트 평탄화
         return [item for sublist in final_results for item in sublist]
+    
+    async def translate_chat_message(
+        self,
+        text: str,
+        target_language_code: str,
+        source_language_code: str | None = None,
+    ) -> str:
+        prompt = build_chat_translation_prompt(
+            text=text,
+            target_language_code=target_language_code,
+            source_language_code=source_language_code,
+        )
+
+        response = await self.client.aio.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=self.config_manager.get_chat_translation_fast_config(),
+        )
+
+        result = response.text
+
+        if not isinstance(result, str) or not result.strip():
+            raise HTTPException(
+                status_code=502,
+                detail="채팅 메시지 번역 결과가 비어 있습니다.",
+            )
+
+        normalized_result = normalize_chat_translation_result(result)
+
+        if not normalized_result:
+            raise HTTPException(
+                status_code=502,
+                detail="채팅 메시지 번역 결과가 비어 있습니다.",
+            )
+
+        return normalized_result
 
     async def _call_chunk(self, type_name: str, chunk: List[str]) -> List[str]:
         """리스트 단위 번역 (JSON 모드)"""
