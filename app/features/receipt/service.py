@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException, UploadFile
 
+from app.ai.ports import TextGenerationProvider
 from app.core.config import settings
 from app.features.receipt.parser import extract_receipt_candidates
 from app.features.receipt.prompts import (
@@ -86,9 +87,13 @@ _RECEIPT_ANALYSIS_SCHEMA: dict[str, Any] = {
 
 
 class ReceiptAnalysisService:
-    def __init__(self, ocr_service: OCRService, gemini_service) -> None:
+    def __init__(
+        self,
+        ocr_service: OCRService,
+        ai_provider: TextGenerationProvider,
+    ) -> None:
         self.ocr_service = ocr_service
-        self.gemini_service = gemini_service
+        self.ai_provider = ai_provider
 
     async def analyze(
         self,
@@ -338,7 +343,7 @@ class ReceiptAnalysisService:
         options: ReceiptAnalysisOptions,
     ) -> dict[str, Any]:
         prompt = build_receipt_vision_prompt(options)
-        result = await self.gemini_service.call_with_image(
+        result = await self.ai_provider.call_with_image(
             type_name="RECEIPT_ANALYSIS",
             prompt=prompt,
             image_bytes=image_bytes,
@@ -366,7 +371,7 @@ class ReceiptAnalysisService:
             candidates=candidates,
             options=options,
         )
-        result = await self.gemini_service.call(
+        result = await self.ai_provider.call(
             type_name="RECEIPT_ANALYSIS",
             data=payload,
             schema=_RECEIPT_ANALYSIS_SCHEMA,

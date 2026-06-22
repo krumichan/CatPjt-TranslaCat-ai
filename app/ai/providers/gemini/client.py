@@ -1,14 +1,11 @@
-import asyncio
-import json
 import logging
-from typing import Any, List
+from typing import Any
 
 from fastapi import HTTPException
 from google import genai
 from google.genai import types
 
 from app.ai.providers.gemini.config_manager import GeminiConfigManager
-from app.common.collection_utils import chunk_list
 from app.core.config import settings
 from app.features.chat_translation.normalizer import normalize_chat_translation_result
 from app.features.chat_translation.prompts import build_chat_translation_prompt
@@ -21,8 +18,6 @@ class GeminiService:
         self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
         self.model_name = settings.GEMINI_MODEL_NAME
         self.config_manager = GeminiConfigManager()
-        self.semaphore = asyncio.Semaphore(20)
-        self.batch_size = 20
 
     async def call(
         self,

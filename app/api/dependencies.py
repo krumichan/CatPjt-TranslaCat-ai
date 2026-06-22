@@ -20,7 +20,7 @@ _chat_translation_service = ChatTranslationService(
 
 _receipt_analysis_service = ReceiptAnalysisService(
     ocr_service=_ocr_service,
-    gemini_service=_ai_provider,
+    ai_provider=_ai_provider,
 )
 
 
