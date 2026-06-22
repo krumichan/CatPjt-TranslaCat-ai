@@ -1,6 +1,5 @@
 from google.genai import types
 
-# Gemini 모델 설정 기본값
 DEFAULT_GENERATION_CONFIG = {
     "temperature": 0.0,
     "top_p": 0.95,
@@ -8,7 +7,6 @@ DEFAULT_GENERATION_CONFIG = {
     "max_output_tokens": 65536,
 }
 
-# 안전 설정 (모든 카테고리에 대해 차단 없음 설정)
 DEFAULT_SAFETY_SETTINGS = [
     types.SafetySetting(
         category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -28,5 +26,4 @@ DEFAULT_SAFETY_SETTINGS = [
     ),
 ]
 
-# 배치 처리 관련 설정
 DEFAULT_CHUNK_SIZE = 5

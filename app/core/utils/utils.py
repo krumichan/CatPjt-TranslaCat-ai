@@ -1,3 +1,1 @@
-def chunk_list(lst, n):
-    for i in range(0, len(lst), n):
-        yield lst[i:i + n]
+from app.common.collection_utils import chunk_list

@@ -22,6 +22,7 @@ class ReceiptAnalysisResponse(BaseModel):
     ocr_engine: str = Field("paddleocr", description="사용한 OCR 엔진")
     used_ai: bool = Field(False, description="AI 구조화 사용 여부")
 
+
 class ReceiptAnalysisOptions(BaseModel):
     currency_code: str | None = Field(
         None,

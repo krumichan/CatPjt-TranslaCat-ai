@@ -17,12 +17,7 @@ logger = logging.getLogger(__name__)
 class OCRService:
     def __init__(self) -> None:
         self._ocr_cache: dict[tuple[str, str], Any] = {}
-
-        # OCR 인스턴스 생성 보호용
         self._create_lock = asyncio.Lock()
-
-        # PaddleOCR predict 동시 실행 방지용
-        # 같은 OCR 인스턴스를 여러 요청이 동시에 사용하면 Paddle 내부 메모리 오류/SIGSEGV가 날 수 있음
         self._predict_lock = asyncio.Lock()
 
     async def warm_up(self) -> None:
@@ -34,7 +29,6 @@ class OCRService:
         ocr_language: str | None = None,
     ) -> str:
         self._validate_file(file)
-
         contents = await file.read()
 
         if len(contents) > settings.OCR_MAX_FILE_SIZE:
@@ -50,9 +44,6 @@ class OCRService:
             language = (ocr_language or settings.OCR_LANGUAGE).strip()
             ocr = await self._get_ocr(language)
 
-            # 중요:
-            # PaddleOCR/PaddlePaddle 추론 객체는 멀티 요청에서 동시에 predict()를 돌리면
-            # Tensor memory/dimension 오류나 SIGSEGV가 발생할 수 있으므로 직렬화한다.
             async with self._predict_lock:
                 return await asyncio.to_thread(
                     self._extract_text_from_path,
@@ -96,14 +87,9 @@ class OCRService:
             if image.mode not in ("RGB", "L"):
                 image = image.convert("RGB")
 
-            width, height = image.size
-
-            # width만 제한하면 세로로 긴 영수증에서 여전히 큰 이미지가 들어갈 수 있음.
-            # width / height / 총 픽셀 수를 모두 제한한다.
             image = self._resize_image_safely(image)
 
             output = io.BytesIO()
-
             if image.mode == "L":
                 image = image.convert("RGB")
 
@@ -116,15 +102,11 @@ class OCRService:
 
             return output.getvalue(), ".jpg"
         except Exception:
-            logger.warning(
-                "이미지 전처리에 실패하여 원본 파일로 OCR을 진행합니다.",
-                exc_info=True,
-            )
+            logger.warning("이미지 전처리에 실패하여 원본 파일로 OCR을 진행합니다.", exc_info=True)
             return contents, suffix
 
     def _resize_image_safely(self, image: Image.Image) -> Image.Image:
         width, height = image.size
-
         max_width = settings.OCR_MAX_IMAGE_WIDTH
         max_height = settings.OCR_MAX_IMAGE_HEIGHT
         max_pixels = settings.OCR_MAX_IMAGE_PIXELS
@@ -141,7 +123,6 @@ class OCRService:
         if ratio < 1.0:
             new_width = max(1, int(width * ratio))
             new_height = max(1, int(height * ratio))
-
             logger.info(
                 "OCR 이미지 리사이즈: %sx%s -> %sx%s",
                 width,
@@ -149,7 +130,6 @@ class OCRService:
                 new_width,
                 new_height,
             )
-
             return image.resize((new_width, new_height), Image.LANCZOS)
 
         return image
@@ -168,13 +148,9 @@ class OCRService:
                     settings.OCR_VERSION,
                 )
 
-            return self._ocr_cache[cache_key]
+        return self._ocr_cache[cache_key]
 
-    def _create_ocr(
-        self,
-        language: str,
-        ocr_version: str,
-    ) -> Any:
+    def _create_ocr(self, language: str, ocr_version: str) -> Any:
         os.environ.setdefault(
             "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK",
             str(settings.PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK),
@@ -183,9 +159,7 @@ class OCRService:
         try:
             from paddleocr import PaddleOCR
         except ImportError as exc:
-            raise RuntimeError(
-                "PaddleOCR가 설치되어 있지 않습니다. requirements.txt를 확인해주세요."
-            ) from exc
+            raise RuntimeError("PaddleOCR가 설치되어 있지 않습니다. requirements.txt를 확인해주세요.") from exc
 
         try:
             return PaddleOCR(
@@ -197,17 +171,11 @@ class OCRService:
                 text_recognition_batch_size=settings.OCR_TEXT_RECOGNITION_BATCH_SIZE,
                 text_det_limit_side_len=settings.OCR_TEXT_DET_LIMIT_SIDE_LEN,
                 text_det_limit_type=settings.OCR_TEXT_DET_LIMIT_TYPE,
-
-                # 일부 버전에서는 지원, 일부 버전에서는 TypeError가 날 수 있음.
-                # TypeError 발생 시 아래 2.x 호환 파라미터로 재시도.
                 enable_mkldnn=settings.OCR_ENABLE_MKLDNN,
                 cpu_threads=settings.OCR_CPU_THREADS,
             )
         except (TypeError, ValueError):
-            logger.info(
-                "PaddleOCR 3.x 파라미터 초기화에 실패하여 2.x 호환 파라미터로 재시도합니다."
-            )
-
+            logger.info("PaddleOCR 3.x 파라미터 초기화에 실패하여 2.x 호환 파라미터로 재시도합니다.")
             return PaddleOCR(
                 use_angle_cls=True,
                 lang=language,
@@ -261,7 +229,6 @@ class OCRService:
             return texts
 
         if isinstance(value, (list, tuple)):
-            # PaddleOCR 2.x: [box, (text, score)] 구조 대응
             if (
                 len(value) >= 2
                 and isinstance(value[1], (list, tuple))

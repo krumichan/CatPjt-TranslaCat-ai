@@ -14,11 +14,7 @@ def setup_logging() -> None:
         str(settings.PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK),
     )
 
-    warnings.filterwarnings(
-        "ignore",
-        message="No ccache found.*",
-    )
-
+    warnings.filterwarnings("ignore", message="No ccache found.*")
     warnings.filterwarnings(
         "ignore",
         message="urllib3 .* or chardet .* doesn't match a supported version.*",
@@ -50,51 +46,21 @@ def setup_logging() -> None:
                 "handlers": ["console"],
                 "propagate": False,
             },
-            "uvicorn": {
-                "level": settings.UVICORN_LOG_LEVEL.upper(),
-            },
-            "uvicorn.error": {
-                "level": settings.UVICORN_LOG_LEVEL.upper(),
-            },
-            "uvicorn.access": {
-                "level": settings.UVICORN_LOG_LEVEL.upper(),
-            },
-            "PIL": {
-                "level": third_party_level,
-            },
-            "PIL.TiffImagePlugin": {
-                "level": third_party_level,
-            },
-            "python_multipart": {
-                "level": third_party_level,
-            },
-            "multipart": {
-                "level": third_party_level,
-            },
-            "filelock": {
-                "level": third_party_level,
-            },
-            "httpcore": {
-                "level": third_party_level,
-            },
-            "httpx": {
-                "level": third_party_level,
-            },
-            "urllib3": {
-                "level": third_party_level,
-            },
-            "google_genai": {
-                "level": third_party_level,
-            },
-            "google_genai.models": {
-                "level": third_party_level,
-            },
-            "paddle": {
-                "level": third_party_level,
-            },
-            "paddlex": {
-                "level": third_party_level,
-            },
+            "uvicorn": {"level": settings.UVICORN_LOG_LEVEL.upper()},
+            "uvicorn.error": {"level": settings.UVICORN_LOG_LEVEL.upper()},
+            "uvicorn.access": {"level": settings.UVICORN_LOG_LEVEL.upper()},
+            "PIL": {"level": third_party_level},
+            "PIL.TiffImagePlugin": {"level": third_party_level},
+            "python_multipart": {"level": third_party_level},
+            "multipart": {"level": third_party_level},
+            "filelock": {"level": third_party_level},
+            "httpcore": {"level": third_party_level},
+            "httpx": {"level": third_party_level},
+            "urllib3": {"level": third_party_level},
+            "google_genai": {"level": third_party_level},
+            "google_genai.models": {"level": third_party_level},
+            "paddle": {"level": third_party_level},
+            "paddlex": {"level": third_party_level},
         },
     }
 

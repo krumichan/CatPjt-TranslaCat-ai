@@ -5,6 +5,9 @@ class Settings(BaseSettings):
     # Server
     SERVER_API_KEY: str = ""
 
+    # AI Provider
+    AI_TEXT_PROVIDER: str = "gemini"
+
     # Google / Gemini
     GOOGLE_API_KEY: str = ""
     GEMINI_MODEL_NAME: str = "gemini-2.5-flash"
@@ -19,20 +22,16 @@ class Settings(BaseSettings):
     OCR_LANGUAGE: str = "japan"
     OCR_VERSION: str = "PP-OCRv3"
     OCR_WARM_UP: bool = True
-
     OCR_MAX_IMAGE_WIDTH: int = 900
     OCR_MAX_IMAGE_HEIGHT: int = 1400
     OCR_MAX_IMAGE_PIXELS: int = 2_000_000
     OCR_IMAGE_QUALITY: int = 85
     OCR_MAX_FILE_SIZE: int = 5 * 1024 * 1024
-
     OCR_ENABLE_MKLDNN: bool = True
     OCR_CPU_THREADS: int = 2
-
     OCR_TEXT_RECOGNITION_BATCH_SIZE: int = 6
     OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 960
     OCR_TEXT_DET_LIMIT_TYPE: str = "max"
-
     RECEIPT_ANALYSIS_MODE: str = "OCR_WITH_AI"
     GEMINI_VISION_CONFIDENCE_THRESHOLD: float = 0.75
 
@@ -41,7 +40,6 @@ class Settings(BaseSettings):
         "image/png",
         "image/webp",
     }
-
     OCR_ALLOWED_EXTENSIONS: set[str] = {
         ".jpg",
         ".jpeg",
