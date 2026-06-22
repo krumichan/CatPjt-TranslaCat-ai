@@ -2,7 +2,10 @@ from fastapi import APIRouter, Depends
 
 from app.api.dependencies import get_translation_service
 from app.features.translation.service import TranslationService
-from app.schemas.translation import BatchTranslationRequest, SingleTranslationRequest
+from app.schemas.translation import (
+    BatchTranslationRequest,
+    SingleTranslationRequest,
+)
 
 router = APIRouter(
     prefix="/translate",
@@ -20,7 +23,9 @@ async def translate_single(
         type_name=request.type,
     )
 
-    return {"translated": translated_text}
+    return {
+        "translated": translated_text,
+    }
 
 
 @router.post("/batch")
@@ -33,4 +38,6 @@ async def translate_batch(
         type_name=request.type,
     )
 
-    return {"translated": results}
+    return {
+        "translated": results,
+    }

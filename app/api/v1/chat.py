@@ -21,4 +21,6 @@ async def translate_chat_message(
         source_language_code=request.source_language_code,
     )
 
-    return ChatTranslationResponse(translated_text=translated_text)
+    return ChatTranslationResponse(
+        translated_text=translated_text
+    )
