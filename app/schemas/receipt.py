@@ -25,26 +25,26 @@ class ReceiptAnalysisResponse(BaseModel):
 
 class ReceiptAnalysisOptions(BaseModel):
     currency_code: str | None = Field(
-        None,
+        default=None,
         description="가계부 기준 통화 코드. 예: JPY, KRW, USD",
     )
     ocr_language: str | None = Field(
-        None,
+        default=None,
         description="OCR 언어 코드. 예: japan, korean, en",
     )
     analysis_mode: ReceiptAnalysisMode | None = Field(
-        None,
+        default=None,
         description="영수증 분석 방식",
     )
     stop_keywords: list[str] | None = Field(
-        None,
+        default=None,
         description="AI 분석용 OCR 텍스트 압축 시 이후 내용을 잘라낼 키워드 목록",
     )
     important_keywords: list[str] | None = Field(
-        None,
+        default=None,
         description="AI 분석용 OCR 텍스트 압축 시 유지할 중요 키워드 목록",
     )
     exclude_item_keywords: list[str] | None = Field(
-        None,
+        default=None,
         description="상품명 후보에서 제외할 광고/안내문 키워드 목록",
     )
