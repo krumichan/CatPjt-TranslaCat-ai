@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     GEMINI_MODEL_NAME: str = "gemini-2.5-flash"
 
+    # AI Chat Member Reply
+    AI_CHAT_CONTEXT_DEFAULT_MAX_MESSAGES: int = 30
+    AI_CHAT_CONTEXT_HARD_MAX_MESSAGES: int = 100
+    AI_CHAT_CONTEXT_DEFAULT_MAX_CHARACTERS: int = 12_000
+    AI_CHAT_CONTEXT_HARD_MAX_CHARACTERS: int = 50_000
+    AI_CHAT_REPLY_MAX_CHARACTERS: int = 800
+    AI_CHAT_REPLY_HARD_MAX_CHARACTERS: int = 4_000
+    AI_CHAT_REPLY_TIMEOUT_SECONDS: float = 20.0
+
     # Logging
     LOG_LEVEL: str = "INFO"
     APP_LOG_LEVEL: str = "DEBUG"

@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_chat_translation_service
+from app.api.dependencies import (
+    get_chat_ai_reply_service,
+    get_chat_translation_service,
+)
+from app.features.chat_ai_reply.service import ChatAiReplyService
 from app.features.chat_translation.service import ChatTranslationService
 from app.schemas.chat import ChatTranslationRequest, ChatTranslationResponse
+from app.schemas.chat_ai import ChatAiReplyRequest, ChatAiReplyResponse
 
 router = APIRouter(
     prefix="/chat",
@@ -24,3 +29,11 @@ async def translate_chat_message(
     return ChatTranslationResponse(
         translated_text=translated_text
     )
+
+
+@router.post("/ai/reply", response_model=ChatAiReplyResponse)
+async def generate_chat_ai_reply(
+    request: ChatAiReplyRequest,
+    service: ChatAiReplyService = Depends(get_chat_ai_reply_service),
+) -> ChatAiReplyResponse:
+    return await service.generate_reply(request)
