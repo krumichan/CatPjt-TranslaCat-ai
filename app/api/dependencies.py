@@ -1,6 +1,7 @@
 from app.ai.provider_factory import create_text_generation_provider
 from app.features.chat_ai_reply.service import ChatAiReplyService
 from app.features.chat_translation.service import ChatTranslationService
+from app.features.language_learning.writing.service import LanguageLearningWritingService
 from app.features.receipt.service import ReceiptAnalysisService
 from app.features.translation.service import TranslationService
 from app.services.ocr_service import OCRService
@@ -20,6 +21,10 @@ _chat_translation_service = ChatTranslationService(
 )
 
 _chat_ai_reply_service = ChatAiReplyService(
+    provider=_ai_provider,
+)
+
+_language_learning_writing_service = LanguageLearningWritingService(
     provider=_ai_provider,
 )
 
@@ -43,6 +48,10 @@ def get_chat_translation_service() -> ChatTranslationService:
 
 def get_chat_ai_reply_service() -> ChatAiReplyService:
     return _chat_ai_reply_service
+
+
+def get_language_learning_writing_service() -> LanguageLearningWritingService:
+    return _language_learning_writing_service
 
 
 def get_stt_service() -> STTService:

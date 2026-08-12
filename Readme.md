@@ -16,6 +16,7 @@ Spring Boot Backend から分離された構成を採用し、AI モデル依存
 - レシート内容の取引候補値抽出
 - 内部向け API Key 認証
 - Gemini を利用した構造化処理
+- Language Learning Adaptive Daily Writing の問題生成・評価・Level Test
 - faster-whisper を利用した STT 処理
 - PaddleOCR を利用した画像 OCR 処理
 
@@ -136,7 +137,29 @@ Output:
 - WhisperModel を利用して文字起こし
 - 処理後に一時ファイルを削除
 
-### 4-4. レシート分析
+### 4-4. Language Learning - Adaptive Daily Writing
+
+Phase 1 の Language Learning 向けに、Daily Writing 問題生成、Writing 評価、初回・再測定 Level Test の問題生成を提供します。
+
+Endpoints:
+
+```text
+POST /api/v1/language-learning/writing/daily/generate
+POST /api/v1/language-learning/writing/evaluate
+POST /api/v1/language-learning/writing/level-test/question
+```
+
+主な方針:
+
+- Backend が Daily Set Snapshot、難易度配分、選定済み Keyword、Learning Profile を渡す
+- Keyword は Source (`SYSTEM` / `CUSTOM`) と Type (`TOPIC` / `VOCABULARY`) を分離する
+- Writing 評価は `MEANING / GRAMMAR / VOCABULARY / NATURALNESS / EXPRESSION` の5軸を 0～100 で返す
+- `OVERALL` は AI モデルへ直接生成させず、Versioned Scoring Policy で決定論的に算出する
+- 評価結果に Evaluation Rubric Version / Scoring Policy Version / Prompt Version を含める
+- 説明は Origin Language と Learning Language の2言語で返し、模範回答は2～3個返す
+- AI Server は長期 Learning Profile を保存せず、Profile Signal を Backend へ返す
+
+### 4-5. レシート分析
 
 アップロードされたレシート画像を OCR で読み取り、家計簿の取引候補値へ構造化します。
 
@@ -295,6 +318,9 @@ X-API-KEY: <your-server-api-key>
 | POST | `/api/v1/translate/batch` | バッチ翻訳 |
 | POST | `/api/v1/stt/transcribe` | 音声文字起こし |
 | POST | `/api/v1/account-book/receipts/analyze` | レシート OCR / 取引候補分析 |
+| POST | `/api/v1/language-learning/writing/daily/generate` | Daily Writing 問題生成 |
+| POST | `/api/v1/language-learning/writing/evaluate` | Writing 評価 |
+| POST | `/api/v1/language-learning/writing/level-test/question` | Level Test 次問題生成 |
 
 ---
 

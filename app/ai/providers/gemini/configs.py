@@ -43,3 +43,35 @@ def build_chat_ai_reply_config(
         safety_settings=DEFAULT_SAFETY_SETTINGS,
     )
 
+
+
+def build_language_learning_generation_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0.7,
+        top_p=0.9,
+        top_k=40,
+        max_output_tokens=8192,
+        response_mime_type="application/json",
+        response_schema=schema,
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+    )
+
+
+def build_language_learning_evaluation_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0.1,
+        top_p=0.9,
+        top_k=20,
+        max_output_tokens=8192,
+        response_mime_type="application/json",
+        response_schema=schema,
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+    )
