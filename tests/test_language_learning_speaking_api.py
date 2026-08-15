@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.schemas.language_learning_speaking import (
     AssistantAudio,
     AssistantTurn,
+    AssistanceResponse,
     ConversationGenerationResponse,
     ConversationResult,
     EvaluationEligibility,
@@ -144,6 +145,19 @@ class FakeConversationService:
         )
 
 
+class FakeAssistanceService:
+    async def generate(self, request):
+        return AssistanceResponse(
+            requestId=request.request_id,
+            sessionId=request.session_id,
+            turnIndex=request.turn_index,
+            type=request.assistance_type,
+            content="予定を表す表現を使ってみましょう。",
+            usage=SpeakingUsage(),
+            idempotentReplay=False,
+        )
+
+
 class FakeTtsService:
     async def synthesize(self, request):
         return TtsResponse(
@@ -205,6 +219,7 @@ class LanguageLearningSpeakingApiTest(unittest.TestCase):
         fake_dependencies = types.ModuleType("app.api.dependencies")
         cls.turn_service = FakeTurnService()
         cls.conversation_service = FakeConversationService()
+        cls.assistance_service = FakeAssistanceService()
         cls.tts_service = FakeTtsService()
         cls.evaluation_service = FakeEvaluationService()
         cls.audio_store = FakeAudioStore()
@@ -214,6 +229,9 @@ class LanguageLearningSpeakingApiTest(unittest.TestCase):
         )
         fake_dependencies.get_language_learning_speaking_conversation_service = (
             lambda: cls.conversation_service
+        )
+        fake_dependencies.get_language_learning_speaking_assistance_service = (
+            lambda: cls.assistance_service
         )
         fake_dependencies.get_language_learning_speaking_tts_service = (
             lambda: cls.tts_service
@@ -322,6 +340,28 @@ class LanguageLearningSpeakingApiTest(unittest.TestCase):
         self.assertEqual(body["status"], "READY")
         self.assertEqual(body["assistant"]["text"], "それは大変でしたね。")
         self.assertEqual(body["assistant"]["audio"]["audioReference"], "tts-turn")
+
+    def test_assistance_returns_generated_content(self):
+        response = self.client.post(
+            "/api/v1/language-learning/speaking/assistance",
+            json={
+                "requestId": "assist-api-1",
+                "idempotencyKey": "assist-api-idem-1",
+                "sessionId": "session-1",
+                "turnIndex": 2,
+                "assistanceType": "HINT",
+                "originLanguage": "ko",
+                "learningLanguage": "ja",
+                "topic": "주말 계획",
+                "targetLevel": "A2",
+                "assistantText": "週末は何をする予定ですか？",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["type"], "HINT")
+        self.assertEqual(body["content"], "予定を表す表現を使ってみましょう。")
+        self.assertFalse(body["idempotentReplay"])
 
     def test_tts_can_be_called_independently(self):
         response = self.client.post(
