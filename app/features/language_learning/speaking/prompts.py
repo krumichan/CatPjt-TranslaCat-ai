@@ -8,6 +8,7 @@ from app.features.language_learning.speaking.policy import (
     resolve_assistance_level,
 )
 from app.schemas.language_learning_speaking import (
+    AssistanceRequest,
     ConversationGenerationRequest,
     SpeakingEvaluationRequest,
 )
@@ -137,5 +138,48 @@ def build_evaluation_prompt(request: SpeakingEvaluationRequest) -> str:
     return (
         "Evaluate this completed speaking session using the required eight metrics.\n"
         "Do not calculate the final overall score; the server applies the versioned scoring policy.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+SPEAKING_ASSISTANCE_SYSTEM_PROMPT = """
+You are TranslaCat's language speaking assistance generator.
+Return exactly one requested assistance item and do not advance the conversation.
+
+Rules by assistanceType:
+- HINT: write one concise hint primarily in originLanguage. Do not reveal a complete answer.
+  You may include 1-3 useful learningLanguage words or short phrases.
+- TRANSLATION: translate assistantText into originLanguage faithfully. Do not add commentary.
+- SAMPLE_ANSWER: write one natural learner answer in learningLanguage, usually 1-2 sentences.
+  Match the learner level and topic. Do not include explanations.
+
+Do not change the question, do not simulate a new assistant turn, and return only the requested structured schema.
+""".strip()
+
+
+def build_assistance_prompt(request: AssistanceRequest) -> str:
+    history = request.conversation_history[-8:]
+    payload = {
+        "requestId": request.request_id,
+        "sessionId": request.session_id,
+        "turnIndex": request.turn_index,
+        "assistanceType": request.assistance_type.value,
+        "originLanguage": request.origin_language,
+        "learningLanguage": request.learning_language,
+        "topic": request.topic,
+        "targetLevel": request.target_level,
+        "assistantText": request.assistant_text,
+        "conversationHistory": [
+            message.model_dump(mode="json", by_alias=True) for message in history
+        ],
+        "selectedKeywords": [
+            keyword.model_dump(mode="json", by_alias=True)
+            for keyword in request.selected_keywords
+        ],
+        "sessionSummary": request.session_summary,
+    }
+    return (
+        SPEAKING_ASSISTANCE_SYSTEM_PROMPT
+        + "\n\nGenerate the requested assistance.\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )

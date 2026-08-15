@@ -2,6 +2,7 @@ from app.ai.provider_factory import create_text_generation_provider
 from app.core.config import settings
 from app.features.chat_ai_reply.service import ChatAiReplyService
 from app.features.chat_translation.service import ChatTranslationService
+from app.features.language_learning.speaking.assistance_service import SpeakingAssistanceService
 from app.features.language_learning.speaking.audio_processor import SpeakingAudioProcessor
 from app.features.language_learning.speaking.audio_store import TemporaryTtsAudioStore
 from app.features.language_learning.speaking.conversation_service import SpeakingConversationService
@@ -46,6 +47,7 @@ _speaking_audio_store = TemporaryTtsAudioStore(
 _speaking_stt_provider = FasterWhisperSpeakingSttProvider()
 _speaking_stt_service = SpeakingSttService(_speaking_stt_provider)
 _speaking_conversation_service = SpeakingConversationService(_ai_provider)
+_speaking_assistance_service = SpeakingAssistanceService(_ai_provider)
 _speaking_tts_service = SpeakingTtsService(
     provider=_ai_provider,
     audio_store=_speaking_audio_store,
@@ -90,6 +92,10 @@ def get_language_learning_speaking_turn_service() -> SpeakingTurnService:
 
 def get_language_learning_speaking_conversation_service() -> SpeakingConversationService:
     return _speaking_conversation_service
+
+
+def get_language_learning_speaking_assistance_service() -> SpeakingAssistanceService:
+    return _speaking_assistance_service
 
 
 def get_language_learning_speaking_tts_service() -> SpeakingTtsService:

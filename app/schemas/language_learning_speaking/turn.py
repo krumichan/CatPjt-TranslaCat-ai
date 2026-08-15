@@ -7,6 +7,7 @@ from pydantic import Field, model_validator
 from app.schemas.language_learning import LearningProfileSummary, SelectedKeyword
 from app.schemas.language_learning_speaking.common import (
     AssistanceLevel,
+    AssistanceType,
     AssistanceUsage,
     CamelCaseModel,
     ConversationMessage,
@@ -221,6 +222,43 @@ class ConversationGenerationResponse(CamelCaseModel):
     assistant_text: str
     conversation: ConversationResult
     usage: SpeakingUsage
+
+
+class AssistanceRequest(CamelCaseModel):
+    request_id: str = Field(..., min_length=1, max_length=100)
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+    session_id: str = Field(..., min_length=1, max_length=100)
+    turn_index: int = Field(..., ge=1, le=20)
+    assistance_type: AssistanceType
+    origin_language: str = Field(..., min_length=2, max_length=20)
+    learning_language: str = Field(..., min_length=2, max_length=20)
+    topic: str = Field(..., min_length=1, max_length=500)
+    target_level: str | None = Field(default=None, max_length=50)
+    assistant_text: str = Field(..., min_length=1, max_length=4000)
+    conversation_history: list[ConversationMessage] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    selected_keywords: list[SelectedKeyword] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    session_summary: str | None = Field(default=None, max_length=4000)
+
+
+class AssistancePayload(CamelCaseModel):
+    type: AssistanceType
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class AssistanceResponse(CamelCaseModel):
+    request_id: str
+    session_id: str
+    turn_index: int
+    type: AssistanceType
+    content: str
+    usage: SpeakingUsage
+    idempotent_replay: bool = False
 
 
 class TtsRequest(CamelCaseModel):

@@ -5,12 +5,14 @@ from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from app.api.dependencies import (
+    get_language_learning_speaking_assistance_service,
     get_language_learning_speaking_audio_store,
     get_language_learning_speaking_conversation_service,
     get_language_learning_speaking_evaluation_service,
     get_language_learning_speaking_tts_service,
     get_language_learning_speaking_turn_service,
 )
+from app.features.language_learning.speaking.assistance_service import SpeakingAssistanceService
 from app.features.language_learning.speaking.audio_store import TemporaryTtsAudioStore
 from app.features.language_learning.speaking.conversation_service import SpeakingConversationService
 from app.features.language_learning.speaking.errors import SpeakingStageException
@@ -18,6 +20,8 @@ from app.features.language_learning.speaking.evaluation_service import SpeakingE
 from app.features.language_learning.speaking.tts_service import SpeakingTtsService
 from app.features.language_learning.speaking.turn_service import SpeakingTurnService
 from app.schemas.language_learning_speaking import (
+    AssistanceRequest,
+    AssistanceResponse,
     ConversationGenerationRequest,
     ConversationGenerationResponse,
     SessionStartRequest,
@@ -90,6 +94,20 @@ async def generate_speaking_response(
         get_language_learning_speaking_conversation_service
     ),
 ) -> ConversationGenerationResponse:
+    try:
+        return await service.generate(request)
+    except SpeakingStageException as exc:
+        _raise_speaking_error(exc)
+        raise AssertionError("unreachable")
+
+
+@router.post("/assistance", response_model=AssistanceResponse)
+async def generate_speaking_assistance(
+    request: AssistanceRequest,
+    service: SpeakingAssistanceService = Depends(
+        get_language_learning_speaking_assistance_service
+    ),
+) -> AssistanceResponse:
     try:
         return await service.generate(request)
     except SpeakingStageException as exc:

@@ -5,6 +5,7 @@ import unittest
 import wave
 
 from app.ai.ports import SpeechSynthesisResult, StructuredGenerationResult
+from app.features.language_learning.speaking.assistance_service import SpeakingAssistanceService
 from app.features.language_learning.speaking.audio_processor import SpeakingAudioProcessor
 from app.features.language_learning.speaking.audio_store import TemporaryTtsAudioStore
 from app.features.language_learning.speaking.benchmark import SpeakingEvaluationBenchmarkService
@@ -24,6 +25,7 @@ from app.features.language_learning.speaking.stt_service import (
 from app.features.language_learning.speaking.tts_service import SpeakingTtsService
 from app.schemas.language_learning_speaking import (
     AssistanceLevel,
+    AssistanceRequest,
     AssistanceType,
     AssistanceUsage,
     BenchmarkSample,
@@ -154,6 +156,25 @@ def conversation_request(**overrides):
     data.update(overrides)
     return ConversationGenerationRequest.model_validate(data)
 
+
+
+def assistance_request(assistance_type="HINT"):
+    return AssistanceRequest.model_validate(
+        {
+            "requestId": "assist-1",
+            "idempotencyKey": "assist-idem-1",
+            "sessionId": "session-1",
+            "turnIndex": 2,
+            "assistanceType": assistance_type,
+            "originLanguage": "ko",
+            "learningLanguage": "ja",
+            "topic": "주말 계획",
+            "targetLevel": "A2",
+            "assistantText": "週末は何をする予定ですか？",
+            "conversationHistory": [],
+            "selectedKeywords": [],
+        }
+    )
 
 def evaluation_turn(index: int, *, excluded=False, audio=True, confidence=0.9):
     return {
@@ -1331,3 +1352,50 @@ class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpeakingAssistanceServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_generates_hint_payload(self):
+        provider = FakeStructuredProvider(
+            results=[{"type": "HINT", "content": "予定を表す表現を使ってみましょう。"}]
+        )
+        service = SpeakingAssistanceService(
+            provider,
+            timeout_seconds=1,
+            automatic_retries=0,
+        )
+
+        response = await service.generate(assistance_request())
+
+        self.assertEqual(response.type, AssistanceType.HINT)
+        self.assertEqual(response.content, "予定を表す表現を使ってみましょう。")
+        self.assertFalse(response.idempotent_replay)
+        self.assertEqual(len(provider.calls), 1)
+
+    async def test_same_idempotency_key_reuses_assistance(self):
+        provider = FakeStructuredProvider(
+            results=[{"type": "TRANSLATION", "content": "주말에는 무엇을 할 예정인가요?"}]
+        )
+        service = SpeakingAssistanceService(
+            provider,
+            timeout_seconds=1,
+            automatic_retries=0,
+        )
+        request = assistance_request("TRANSLATION")
+
+        first = await service.generate(request)
+        second = await service.generate(request)
+
+        self.assertFalse(first.idempotent_replay)
+        self.assertTrue(second.idempotent_replay)
+        self.assertEqual(len(provider.calls), 1)
+
+    async def test_rejects_non_generated_assistance(self):
+        service = SpeakingAssistanceService(
+            FakeStructuredProvider(),
+            timeout_seconds=1,
+            automatic_retries=0,
+        )
+
+        with self.assertRaises(SpeakingStageException):
+            await service.generate(assistance_request("REPLAY"))
