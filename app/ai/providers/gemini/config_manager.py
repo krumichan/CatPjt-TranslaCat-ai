@@ -46,12 +46,16 @@ class GeminiConfigManager:
             elif type_name in {
                 "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
                 "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION",
+                "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
             } and schema is not None:
                 self._config_cache[cache_key] = build_language_learning_generation_config(
                     rule=rule,
                     schema=schema,
                 )
-            elif type_name == "LANGUAGE_LEARNING_WRITING_EVALUATION" and schema is not None:
+            elif type_name in {
+                "LANGUAGE_LEARNING_WRITING_EVALUATION",
+                "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
+            } and schema is not None:
                 self._config_cache[cache_key] = build_language_learning_evaluation_config(
                     rule=rule,
                     schema=schema,

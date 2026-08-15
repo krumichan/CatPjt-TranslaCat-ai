@@ -1,4 +1,23 @@
+from dataclasses import dataclass
 from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class StructuredGenerationResult:
+    data: Any
+    input_tokens: int = 0
+    output_tokens: int = 0
+    provider: str = "unknown"
+    model: str = "unknown"
+
+
+@dataclass(frozen=True)
+class SpeechSynthesisResult:
+    audio_bytes: bytes
+    content_type: str
+    provider: str
+    model: str
+    duration_seconds: float | None = None
 
 
 class TextGenerationProvider(Protocol):
@@ -18,6 +37,28 @@ class TextGenerationProvider(Protocol):
         mime_type: str,
         schema: dict | None = None,
     ) -> Any:
+        ...
+
+
+class StructuredTextGenerationProvider(Protocol):
+    async def call_with_metadata(
+        self,
+        type_name: str,
+        data: str,
+        schema: dict | None = None,
+    ) -> StructuredGenerationResult:
+        ...
+
+
+class SpeechSynthesisProvider(Protocol):
+    async def synthesize_speech(
+        self,
+        *,
+        text: str,
+        voice: str,
+        language: str,
+        speed: str,
+    ) -> SpeechSynthesisResult:
         ...
 
 
