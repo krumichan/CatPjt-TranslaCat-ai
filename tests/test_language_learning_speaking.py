@@ -13,9 +13,15 @@ from app.features.language_learning.speaking.conversation_service import Speakin
 from app.features.language_learning.speaking.errors import SpeakingStageException
 from app.features.language_learning.speaking.evaluation_service import SpeakingEvaluationService
 from app.features.language_learning.speaking.policy import (
+    SPEAKING_CONVERSATION_PROMPT_VERSION,
     calculate_evaluation_eligibility,
     calculate_speaking_overall,
     resolve_assistance_level,
+)
+from app.features.language_learning.speaking.prompts import (
+    SPEAKING_ASSISTANCE_SYSTEM_PROMPT,
+    SPEAKING_CONVERSATION_SYSTEM_PROMPT,
+    build_conversation_prompt,
 )
 from app.features.language_learning.speaking.stt_service import (
     SpeakingSttService,
@@ -243,6 +249,64 @@ def metric_payload(metric_type, score=80, state="EVALUATED", turn_id="turn-1"):
         ],
         "notEvaluableReason": None if state == "EVALUATED" else "근거 부족",
     }
+
+
+class SpeakingKeywordPromptPolicyTest(unittest.TestCase):
+    def test_system_prompt_defines_topic_and_vocabulary_roles(self):
+        self.assertIn(
+            "TOPIC defines the broad conversation context",
+            SPEAKING_CONVERSATION_SYSTEM_PROMPT,
+        )
+        self.assertIn(
+            "VOCABULARY defines a specific learning focus",
+            SPEAKING_CONVERSATION_SYSTEM_PROMPT,
+        )
+        self.assertIn(
+            "SYSTEM and CUSTOM have equal priority",
+            SPEAKING_CONVERSATION_SYSTEM_PROMPT,
+        )
+        self.assertIn(
+            "empty selectedKeywords list adds no keyword constraint",
+            SPEAKING_CONVERSATION_SYSTEM_PROMPT,
+        )
+        self.assertIn(
+            "TOPIC supplies broad context",
+            SPEAKING_ASSISTANCE_SYSTEM_PROMPT,
+        )
+        self.assertEqual(
+            SPEAKING_CONVERSATION_PROMPT_VERSION,
+            "speaking-conversation-v2",
+        )
+
+    def test_conversation_payload_keeps_both_keyword_types_flat(self):
+        prompt = build_conversation_prompt(
+            conversation_request(
+                selectedKeywords=[
+                    {
+                        "key": "shopping",
+                        "text": "Shopping",
+                        "source": "SYSTEM",
+                        "type": "TOPIC",
+                    },
+                    {
+                        "key": "price",
+                        "text": "price",
+                        "source": "CUSTOM",
+                        "type": "VOCABULARY",
+                    },
+                ]
+            )
+        )
+
+        self.assertIn('"key":"shopping"', prompt)
+        self.assertIn('"type":"TOPIC"', prompt)
+        self.assertIn('"key":"price"', prompt)
+        self.assertIn('"type":"VOCABULARY"', prompt)
+
+    def test_empty_keyword_selection_remains_valid(self):
+        prompt = build_conversation_prompt(conversation_request())
+
+        self.assertIn('"selectedKeywords":[]', prompt)
 
 
 def evaluation_payload(confidence=0.9, pronunciation_state="EVALUATED"):

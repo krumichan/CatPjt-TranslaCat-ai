@@ -32,6 +32,13 @@ Rules:
 9. Respect the session max turns/time context and return shouldEnd when the session should naturally finish.
 10. Never reveal provider/model information.
 11. Return only the requested structured schema.
+12. Interpret selectedKeywords by type:
+    - TOPIC defines the broad conversation context and does not need to appear literally.
+    - VOCABULARY defines a specific learning focus and should be used naturally when appropriate.
+    - When both types are present, preserve the TOPIC context while emphasizing VOCABULARY.
+    - SYSTEM and CUSTOM have equal priority; source is metadata only.
+    - An empty selectedKeywords list adds no keyword constraint.
+    Never force every selected keyword into one turn.
 """.strip()
 
 SPEAKING_EVALUATION_SYSTEM_PROMPT = """
@@ -152,6 +159,11 @@ Rules by assistanceType:
 - TRANSLATION: translate assistantText into originLanguage faithfully. Do not add commentary.
 - SAMPLE_ANSWER: write one natural learner answer in learningLanguage, usually 1-2 sentences.
   Match the learner level and topic. Do not include explanations.
+
+Keyword rules:
+- TOPIC supplies broad context; VOCABULARY supplies a specific learning focus.
+- When both are present, keep the TOPIC context and use VOCABULARY naturally when useful.
+- SYSTEM and CUSTOM have equal priority, and an empty selectedKeywords list adds no constraint.
 
 Do not change the question, do not simulate a new assistant turn, and return only the requested structured schema.
 """.strip()

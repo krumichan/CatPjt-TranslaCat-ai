@@ -16,7 +16,7 @@ from app.schemas.language_learning_speaking import (
 SPEAKING_SCORING_POLICY_VERSION = "speaking-scoring-policy-v1"
 SPEAKING_EVALUATION_VERSION = "speaking-evaluation-v1"
 SPEAKING_EVALUATION_PROMPT_VERSION = "speaking-evaluation-prompt-v1"
-SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation-v1"
+SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation-v2"
 SPEAKING_TTS_VERSION = "speaking-tts-v1"
 AUDIO_NORMALIZATION_VERSION = "speaking-audio-normalization-v1"
 STT_HINT_VERSION = "speaking-stt-hint-v1"
