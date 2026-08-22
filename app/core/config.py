@@ -1,3 +1,4 @@
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,10 @@ class Settings(BaseSettings):
 
     # AI Provider
     AI_TEXT_PROVIDER: str = "gemini"
+    AI_STT_MAX_AUDIO_FILE_BYTES: int = Field(
+        default=25 * 1024 * 1024,
+        ge=1024,
+    )
 
     # Google / Gemini
     GOOGLE_API_KEY: str = ""
@@ -47,6 +52,63 @@ class Settings(BaseSettings):
     AI_SPEAKING_EVALUATION_CONFIDENCE_THRESHOLD: float = 0.70
     AI_SPEAKING_TTS_AUDIO_TTL_SECONDS: int = 3600
     GEMINI_TTS_MODEL_NAME: str = "gemini-2.5-flash-preview-tts"
+
+    # Voice Translation V2 / Internal Streaming Pipeline
+    AI_VOICE_ENABLED: bool = True
+    AI_VOICE_STT_MODEL_NAME: str = "base"
+    AI_VOICE_STT_MODEL_REVISION: str | None = None
+    AI_VOICE_STT_DEVICE: str = "cpu"
+    AI_VOICE_STT_COMPUTE_TYPE: str = "int8"
+    AI_VOICE_STT_CPU_THREADS: int = Field(default=2, ge=1, le=64)
+    AI_VOICE_STT_NUM_WORKERS: int = Field(default=1, ge=1, le=16)
+    AI_VOICE_STT_MAX_CONCURRENCY: int = Field(default=1, ge=1, le=16)
+    AI_VOICE_STT_QUEUE_CAPACITY: int = Field(default=8, ge=2, le=1024)
+    AI_VOICE_MAX_ACTIVE_STREAMS: int = Field(default=8, ge=1, le=1024)
+    AI_VOICE_STT_PARTIAL_TIMEOUT_SECONDS: float = Field(default=3.0, gt=0)
+    AI_VOICE_STT_FINAL_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0)
+    AI_VOICE_STT_RUN_WARM_UP_INFERENCE: bool = True
+    AI_VOICE_PARTIAL_INTERVAL_MS: int = Field(default=600, ge=400, le=800)
+    AI_VOICE_MIN_FRAME_DURATION_MS: int = Field(default=20, ge=20, le=200)
+    AI_VOICE_MAX_FRAME_DURATION_MS: int = Field(default=200, ge=20, le=200)
+    AI_VOICE_MAX_BUFFERED_AUDIO_MS: int = Field(default=3000, ge=500, le=30_000)
+    AI_VOICE_VAD_RMS_THRESHOLD: float = Field(default=0.012, ge=0, le=1)
+    AI_VOICE_VAD_SILERO_GUARD_ENABLED: bool = True
+    AI_VOICE_VAD_SILERO_THRESHOLD: float = Field(default=0.50, ge=0, le=1)
+    AI_VOICE_VAD_SILERO_MIN_SPEECH_MS: int = Field(default=100, ge=32, le=250)
+    AI_VOICE_VAD_SILERO_TIMEOUT_SECONDS: float = Field(default=1.0, gt=0)
+    AI_VOICE_VAD_START_EVIDENCE_MS: int = Field(default=40, ge=20, le=250)
+    AI_VOICE_VAD_PRE_ROLL_MS: int = Field(default=100, ge=0, le=500)
+    AI_VOICE_VAD_POST_ROLL_MS: int = Field(default=100, ge=0, le=500)
+    AI_VOICE_FORCE_SPLIT_OVERLAP_MS: int = Field(default=100, ge=0, le=500)
+    AI_VOICE_STT_NO_SPEECH_PROBABILITY_THRESHOLD: float = Field(
+        default=0.80,
+        ge=0,
+        le=1,
+    )
+    AI_VOICE_LANGUAGE_MIN_CONFIDENCE: float = Field(default=0.50, ge=0, le=1)
+    AI_VOICE_TRANSLATION_MODEL_NAME: str = "gemini-2.5-flash"
+    AI_VOICE_TRANSLATION_TIMEOUT_SECONDS: float = Field(default=3.0, gt=0)
+    AI_VOICE_TRANSLATION_MAX_RETRIES: int = Field(default=1, ge=0, le=3)
+    AI_VOICE_TRANSLATION_MAX_CONCURRENCY: int = Field(default=4, ge=1, le=64)
+    AI_VOICE_TRANSLATION_MAX_OUTPUT_TOKENS: int = Field(
+        default=1024,
+        ge=64,
+        le=4096,
+    )
+    AI_VOICE_TRANSLATION_IDEMPOTENCY_TTL_SECONDS: int = Field(
+        default=600,
+        ge=1,
+    )
+    AI_VOICE_TRANSLATION_IDEMPOTENCY_MAX_ENTRIES: int = Field(
+        default=1000,
+        ge=1,
+    )
+    AI_VOICE_PROMPT_VERSION: str = "voice-v2"
+    AI_VOICE_VAD_VERSION: str = "energy-silero-v1"
+    AI_VOICE_SCHEMA_VERSION: str = "voice-stream-v2"
+    AI_VOICE_BACKPRESSURE_RETRY_AFTER_MS: int = Field(default=100, ge=0)
+    AI_VOICE_STREAM_OPEN_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
+    AI_VOICE_SHUTDOWN_GRACE_SECONDS: float = Field(default=5.0, gt=0)
 
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -91,6 +153,14 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_voice_frame_range(self) -> "Settings":
+        if self.AI_VOICE_MIN_FRAME_DURATION_MS > self.AI_VOICE_MAX_FRAME_DURATION_MS:
+            raise ValueError(
+                "AI_VOICE_MIN_FRAME_DURATION_MS must not exceed the maximum"
+            )
+        return self
 
 
 settings = Settings()

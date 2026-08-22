@@ -12,6 +12,7 @@ Spring Boot Backend から分離された構成を採用し、AI モデル依存
 - 単文翻訳
 - 複数文のバッチ翻訳
 - 音声ファイルの文字起こし
+- Voice Translation V2 のリアルタイム Streaming STT・言語検出・翻訳
 - レシート画像 OCR
 - レシート内容の取引候補値抽出
 - 内部向け API Key 認証
@@ -133,11 +134,63 @@ Output:
 
 内部処理の特徴:
 
-- 受信したファイルを一時領域へ保存
-- WhisperModel を利用して文字起こし
-- 処理後に一時ファイルを削除
+- Voice / Speaking / Legacy STT が同一の warm Faster-Whisper Runtime を共有
+- UploadFile は上限付きで読み取り、Legacy STT Service 自身は一時ファイルを作成しない
+- 同期推論は Event Loop 外の bounded worker で実行
+- Legacy `text` 応答契約は Migration 期間中そのまま維持
 
-### 4-4. Language Learning - Adaptive Daily Writing
+### 4-4. Voice Translation V2 / 실시간 음성 번역 V2
+
+Spring Boot Voice Gateway 전용 Channel별 WebSocket Stream을 받아 VAD, 발화 분할,
+부분·최종 STT, ko/ja/en 언어 감지와 Lock, 번역, 일본어 읽기 Token을 한 Pipeline에서 처리한다.
+Frontend는 AI Server에 직접 연결하지 않는다.
+
+Spring Boot Voice Gateway 専用の Channel 別 WebSocket Stream を受け取り、VAD、発話分割、
+Partial / Final STT、ko/ja/en 言語検出・Lock、翻訳、日本語 Reading Token を一つの Pipeline で処理する。
+Frontend から AI Server へ直接接続しない。
+
+Endpoints:
+
+```text
+WS   /internal/v1/voice/streams
+POST /internal/v1/voice/translation/retry
+GET  /internal/v1/voice/readiness
+```
+
+주요 정책 / 主な方針:
+
+- Control/Event는 JSON Text Frame, Audio는 `PCM_S16LE / 16kHz / mono` Binary Frame
+- 허용 Frame은 20~200ms, 권장값은 100ms
+- AI Server가 300ms Endpointing과 250ms~10초 발화 경계를 확정
+- 발화 중에는 원문 `TRANSCRIPT_PARTIAL`만 반환하고 번역하지 않음
+- 발화 종료 후 `TRANSCRIPT_FINAL`을 먼저 반환한 다음 1회 번역
+- 동일 언어는 Provider 호출 없이 번역 Skip
+- 일본어 Reading은 Raw HTML이 아닌 `{surface, reading}` Token List
+- `und` / No-speech는 Language Switch Count에서 제외
+- 재연결 시 BE가 `lastLockedLanguage` Hint를 전달할 수 있음
+- 초기 Lock `0.80`, 전환 `0.85 × 3회`
+- 3초 bounded 수신 Queue, Final 우선 STT Queue, Disconnect/Cancel/Shutdown Cleanup
+- Energy Endpointing 후 warm Silero VAD로 Speech Evidence를 재확인하여 Whisper Hallucination 억제
+- Audio·Partial·전체 Transcript·Translation을 저장하거나 Log로 남기지 않음
+
+Event 순서 / Event 順序:
+
+```text
+STREAM_READY
+→ SPEECH_STARTED
+→ TRANSCRIPT_PARTIAL (0..N)
+→ TRANSCRIPT_FINAL
+→ VOICE_PIPELINE_COMPLETED | VOICE_PIPELINE_FAILED | NO_SPEECH
+→ STREAM_CLOSED
+```
+
+Warm 상태 목표치는 First Partial P95 1.3초, AI speech-end → Completed P95 1.8초다.
+이는 보장값이 아니라 배포 장비·Provider Region을 기록한 Benchmark Go/No-Go 기준이다.
+
+Warm 状態の目標は First Partial P95 1.3秒、AI speech-end → Completed P95 1.8秒である。
+保証値ではなく、配布環境で測定する Go/No-Go 基準として扱う。
+
+### 4-5. Language Learning - Adaptive Daily Writing
 
 Phase 1 の Language Learning 向けに、Daily Writing 問題生成、Writing 評価、初回・再測定 Level Test の問題生成を提供します。
 
@@ -159,7 +212,7 @@ POST /api/v1/language-learning/writing/level-test/question
 - 説明は Origin Language と Learning Language の2言語で返し、模範回答は2～3個返す
 - AI Server は長期 Learning Profile を保存せず、Profile Signal を Backend へ返す
 
-### 4-5. レシート分析
+### 4-6. レシート分析
 
 アップロードされたレシート画像を OCR で読み取り、家計簿の取引候補値へ構造化します。
 
@@ -317,6 +370,9 @@ X-API-KEY: <your-server-api-key>
 | POST | `/api/v1/translate/single` | 単文翻訳 |
 | POST | `/api/v1/translate/batch` | バッチ翻訳 |
 | POST | `/api/v1/stt/transcribe` | 音声文字起こし |
+| WS | `/internal/v1/voice/streams` | BE 専用 Voice V2 Streaming Pipeline |
+| POST | `/internal/v1/voice/translation/retry` | Final 原文のみの翻訳再試行 |
+| GET | `/internal/v1/voice/readiness` | STT / VAD / Translation Readiness |
 | POST | `/api/v1/account-book/receipts/analyze` | レシート OCR / 取引候補分析 |
 | POST | `/api/v1/language-learning/writing/daily/generate` | Daily Writing 問題生成 |
 | POST | `/api/v1/language-learning/writing/evaluate` | Writing 評価 |
@@ -333,6 +389,22 @@ X-API-KEY: <your-server-api-key>
 | `SERVER_API_KEY` | 内部 API 認証用キー |
 | `GOOGLE_API_KEY` | Gemini 利用 API Key |
 | `GEMINI_MODEL_NAME` | 使用する Gemini モデル名 |
+| `AI_VOICE_ENABLED` | Voice V2 と起動時 warm-up の有効 / 無効 |
+| `AI_VOICE_STT_MODEL_NAME` | 共有 Faster-Whisper Model。既定値 `base` |
+| `AI_VOICE_STT_MODEL_REVISION` | STT Model Weight Revision Pin。未指定時は Model既定値 |
+| `AI_VOICE_STT_DEVICE` | `cpu` / `cuda` などの STT Device |
+| `AI_VOICE_STT_COMPUTE_TYPE` | `int8` / `float16` などの Compute Type |
+| `AI_VOICE_STT_CPU_THREADS` | STT Runtime の CPU Thread 数 |
+| `AI_VOICE_STT_NUM_WORKERS` | Faster-Whisper Worker 数 |
+| `AI_VOICE_STT_MAX_CONCURRENCY` | 同時 STT 推論上限 |
+| `AI_VOICE_STT_QUEUE_CAPACITY` | Final 優先 bounded STT Queue 上限 |
+| `AI_VOICE_MAX_ACTIVE_STREAMS` | Process 当たりの同時 Voice Stream 上限 |
+| `AI_VOICE_PARTIAL_INTERVAL_MS` | Rolling Partial STT 実行周期 |
+| `AI_VOICE_VAD_RMS_THRESHOLD` | Streaming Energy VAD Threshold |
+| `AI_VOICE_VAD_SILERO_GUARD_ENABLED` | Final STT 前 Silero Speech Evidence Guard |
+| `AI_VOICE_TRANSLATION_MODEL_NAME` | Voice 専用低遅延 Gemini Model |
+| `AI_VOICE_TRANSLATION_TIMEOUT_SECONDS` | 発話単位の翻訳 Timeout |
+| `AI_VOICE_TRANSLATION_MAX_CONCURRENCY` | 同時 Translation Provider 呼出上限 |
 | `LOG_LEVEL` | root logger のログレベル |
 | `APP_LOG_LEVEL` | app logger のログレベル |
 | `THIRD_PARTY_LOG_LEVEL` | PaddleOCR / httpx / PIL など外部ライブラリのログレベル |
@@ -352,6 +424,21 @@ SERVER_API_KEY=your-internal-api-key
 
 GOOGLE_API_KEY=your-google-api-key
 GEMINI_MODEL_NAME=gemini-2.5-flash
+
+AI_VOICE_ENABLED=true
+AI_VOICE_STT_MODEL_NAME=base
+AI_VOICE_STT_DEVICE=cpu
+AI_VOICE_STT_COMPUTE_TYPE=int8
+AI_VOICE_STT_CPU_THREADS=2
+AI_VOICE_STT_NUM_WORKERS=1
+AI_VOICE_STT_MAX_CONCURRENCY=1
+AI_VOICE_STT_QUEUE_CAPACITY=8
+AI_VOICE_MAX_ACTIVE_STREAMS=8
+AI_VOICE_PARTIAL_INTERVAL_MS=600
+AI_VOICE_VAD_SILERO_GUARD_ENABLED=true
+AI_VOICE_TRANSLATION_MODEL_NAME=gemini-2.5-flash
+AI_VOICE_TRANSLATION_TIMEOUT_SECONDS=3.0
+AI_VOICE_TRANSLATION_MAX_CONCURRENCY=4
 
 LOG_LEVEL=INFO
 APP_LOG_LEVEL=DEBUG
@@ -436,6 +523,34 @@ uvicorn app.main:app --reload
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+### 12-5. Test / Lint / Type Check
+
+```bash
+pip install -r requirements-test.txt
+pytest -q
+ruff check app scripts/benchmark_voice_v2.py tests/test_voice_translation.py tests/test_voice_translation_api.py
+pyright app/features/voice_translation app/features/speech_to_text app/schemas/voice_translation.py app/api/internal/voice.py
+```
+
+### 12-6. Voice V2 Benchmark
+
+입력 Fixture는 Header가 없는 `16kHz / mono / PCM_S16LE` Speech Audio여야 한다.
+API Key는 Process Argument에 노출하지 않고 환경변수로 전달한다.
+
+入力 Fixture は Header なしの `16kHz / mono / PCM_S16LE` Speech Audio とし、
+API Key は Process Argument ではなく環境変数で渡す。
+
+```bash
+export VOICE_BENCHMARK_API_KEY=your-internal-api-key
+python scripts/benchmark_voice_v2.py fixtures/ko-clean-01.pcm \
+  --target-language ja \
+  --iterations 30 \
+  --concurrency 1 \
+  --provider-region asia-northeast1
+```
+
+결과 JSON에는 원문·번역문 없이 P50/P95/P99, 장비, Model Version, Provider Region만 기록된다.
+
 ---
 
 ## 13. Swagger / OpenAPI
@@ -454,6 +569,8 @@ ReDoc:      http://localhost:8000/redoc
 ```text
 app
 ├─ api
+│  ├─ internal
+│  │  └─ voice.py
 │  ├─ dependencies.py
 │  └─ v1
 │     ├─ receipt.py
@@ -467,9 +584,21 @@ app
 │  ├─ prompts.py
 │  ├─ receipt_parser.py
 │  └─ utils.py
+├─ features
+│  ├─ speech_to_text
+│  │  └─ runtime.py
+│  └─ voice_translation
+│     ├─ audio.py
+│     ├─ language.py
+│     ├─ speech_detector.py
+│     ├─ stable_prefix.py
+│     ├─ stream.py
+│     ├─ stt.py
+│     └─ translation.py
 ├─ schemas
 │  ├─ receipt.py
-│  └─ translation.py
+│  ├─ translation.py
+│  └─ voice_translation.py
 ├─ services
 │  ├─ gemini_service.py
 │  ├─ ocr_service.py
@@ -485,7 +614,8 @@ app
 - `SERVER_API_KEY` が未設定だと、認証必須 API を正常に利用できません。
 - `GOOGLE_API_KEY` が未設定だと、Gemini を利用する機能は動作しません。
 - `GEMINI_MODEL_NAME` は利用可能なモデル名を設定してください。
-- `faster-whisper` の初期ロードにより、初回 STT 処理時は応答が遅くなる場合があります。
+- Voice が有効な場合、Faster-Whisper と Silero VAD は起動時に load / warm-up され、完了前は Readiness が開きません。
+- Production では scale-to-zero を使わず、`/internal/v1/voice/readiness` が `200` の Instance のみへ Traffic を送ります。
 - OCR モデルの初回ロードにも時間がかかるため、必要に応じて `OCR_WARM_UP=true` を設定します。
 - 開発中に `--reload` を使う場合、ファイル保存のたびに warm-up が走る可能性があります。
 - レシート画像は Frontend 側で圧縮し、Backend / AI Server のサイズ制限を超えないようにします。

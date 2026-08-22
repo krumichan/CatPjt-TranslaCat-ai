@@ -27,18 +27,25 @@ jobs:
             docker stop fastapi-app || true
             docker rm fastapi-app || true
 
-            docker run -d --name fastapi-app -p 8000:8000 translacat-ai
+            docker run -d \
+              --name fastapi-app \
+              --restart unless-stopped \
+              --env-file .env \
+              -v translacat-ai-model-cache:/root/.cache/huggingface \
+              -p 8000:8000 \
+              translacat-ai
 
-            echo "Waiting for server to start (Max 5 minutes)..."
+            echo "Waiting for AI readiness (Max 5 minutes)..."
             SUCCESS=false
             for i in {1..60}; do
-              if curl -s --head http://localhost:8000 | grep -E "200|405" > /dev/null; then
+              HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' fastapi-app 2>/dev/null || true)
+              if [ "$HEALTH_STATUS" = "healthy" ]; then
                 echo "Success!"
                 SUCCESS=true
                 break
               fi
 
-              echo "Attempt $i: Server not ready yet... waiting 5 seconds."
+              echo "Attempt $i: AI models are not ready yet... waiting 5 seconds."
               sleep 5
             done
 

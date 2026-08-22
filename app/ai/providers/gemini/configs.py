@@ -28,6 +28,23 @@ def build_fast_translation_config() -> types.GenerateContentConfig:
     )
 
 
+def build_voice_translation_config(
+    rule: str,
+    schema: dict,
+    *,
+    max_output_tokens: int,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0,
+        max_output_tokens=max_output_tokens,
+        response_mime_type="application/json",
+        response_schema=schema,
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
+
 def build_chat_ai_reply_config(
     rule: str,
     schema: dict,
@@ -42,7 +59,6 @@ def build_chat_ai_reply_config(
         response_schema=schema,
         safety_settings=DEFAULT_SAFETY_SETTINGS,
     )
-
 
 
 def build_language_learning_generation_config(

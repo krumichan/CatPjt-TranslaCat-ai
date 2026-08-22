@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import math
-import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 from app.core.config import settings
+from app.features.speech_to_text import FasterWhisperRuntime, InferencePriority
 from app.features.language_learning.speaking.audio_processor import NormalizedAudio
 from app.features.language_learning.speaking.errors import SpeakingStageException
 from app.features.language_learning.speaking.idempotency import InMemoryIdempotencyStore
 from app.features.language_learning.speaking.policy import STT_HINT_VERSION
-from app.features.language_learning.speaking.provider_error import map_provider_exception
+from app.features.language_learning.speaking.provider_error import (
+    map_provider_exception,
+)
 from app.features.language_learning.speaking.retry import run_with_stage_retry
 from app.schemas.language_learning_speaking import (
     SpeakingErrorCode,
@@ -53,8 +55,7 @@ class SpeakingSttProvider(Protocol):
         *,
         language: str,
         phrase_hints: list[str] | None = None,
-    ) -> SttProviderResult:
-        ...
+    ) -> SttProviderResult: ...
 
 
 class SpeakingSttService:
@@ -67,7 +68,9 @@ class SpeakingSttService:
         idempotency_store: InMemoryIdempotencyStore[SttResponse] | None = None,
     ) -> None:
         self.provider = provider
-        self.timeout_seconds = timeout_seconds or settings.AI_SPEAKING_STT_TIMEOUT_SECONDS
+        self.timeout_seconds = (
+            timeout_seconds or settings.AI_SPEAKING_STT_TIMEOUT_SECONDS
+        )
         self.automatic_retries = (
             settings.AI_SPEAKING_AUTOMATIC_RETRY_LIMIT
             if automatic_retries is None
@@ -227,21 +230,13 @@ class SpeakingSttService:
 
 
 class FasterWhisperSpeakingSttProvider:
-    def __init__(self) -> None:
-        self._model = None
-
-    def _get_model(self):
-        if self._model is None:
-            from faster_whisper import WhisperModel
-
-            self._model = WhisperModel(
-                settings.AI_SPEAKING_STT_MODEL_NAME,
-                device=settings.AI_SPEAKING_STT_DEVICE,
-                compute_type=settings.AI_SPEAKING_STT_COMPUTE_TYPE,
-                cpu_threads=1,
-                num_workers=1,
-            )
-        return self._model
+    def __init__(self, runtime: FasterWhisperRuntime | None = None) -> None:
+        self.runtime = runtime or FasterWhisperRuntime(
+            model_name=settings.AI_SPEAKING_STT_MODEL_NAME,
+            model_revision="",
+            device=settings.AI_SPEAKING_STT_DEVICE,
+            compute_type=settings.AI_SPEAKING_STT_COMPUTE_TYPE,
+        )
 
     async def transcribe(
         self,
@@ -250,43 +245,37 @@ class FasterWhisperSpeakingSttProvider:
         language: str,
         phrase_hints: list[str] | None = None,
     ) -> SttProviderResult:
-        def run() -> SttProviderResult:
-            model = self._get_model()
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_file.write(wav_bytes)
-                path = Path(temp_file.name)
-            try:
-                raw_segments, info = model.transcribe(
-                    str(path),
-                    beam_size=1,
-                    language=language,
-                    initial_prompt=(
-                        ", ".join(phrase_hints[:20]) if phrase_hints else None
-                    ),
-                    vad_filter=True,
-                    vad_parameters={"min_silence_duration_ms": 500},
-                )
-                segments = [
-                    SttProviderSegment(
-                        start_seconds=float(segment.start),
-                        end_seconds=float(segment.end),
-                        text=segment.text,
-                        avg_logprob=float(getattr(segment, "avg_logprob", -1.0)),
-                    )
-                    for segment in raw_segments
-                ]
-                return SttProviderResult(
-                    text="".join(segment.text for segment in segments).strip(),
-                    language=str(getattr(info, "language", language) or language),
-                    language_probability=float(
-                        getattr(info, "language_probability", 0.0) or 0.0
-                    ),
-                    segments=segments,
-                    provider="faster-whisper",
-                    model=settings.AI_SPEAKING_STT_MODEL_NAME,
-                    model_version=None,
-                )
-            finally:
-                path.unlink(missing_ok=True)
-
-        return await asyncio.to_thread(run)
+        if not self.runtime.ready:
+            await self.runtime.warm_up()
+        result = await self.runtime.transcribe(
+            io.BytesIO(wav_bytes),
+            options={
+                "beam_size": 1,
+                "language": language,
+                "initial_prompt": (
+                    ", ".join(phrase_hints[:20]) if phrase_hints else None
+                ),
+                "vad_filter": True,
+                "vad_parameters": {"min_silence_duration_ms": 500},
+                "condition_on_previous_text": False,
+            },
+            priority=InferencePriority.STANDARD,
+        )
+        segments = [
+            SttProviderSegment(
+                start_seconds=segment.start_seconds,
+                end_seconds=segment.end_seconds,
+                text=segment.text,
+                avg_logprob=segment.avg_logprob,
+            )
+            for segment in result.segments
+        ]
+        return SttProviderResult(
+            text=result.text,
+            language=result.language or language,
+            language_probability=result.language_probability or 0.0,
+            segments=segments,
+            provider=result.provider,
+            model=result.model,
+            model_version=result.model_version,
+        )

@@ -1,56 +1,47 @@
+import io
 import logging
-import os
-import shutil
-import tempfile
-import uuid
 
-from faster_whisper import WhisperModel
+from app.core.config import settings
+from app.features.speech_to_text import FasterWhisperRuntime, InferencePriority
 
 logger = logging.getLogger(__name__)
 
 
+class EmptyAudioFile(ValueError):
+    pass
+
+
+class AudioFileTooLarge(ValueError):
+    pass
+
+
 class STTService:
-    def __init__(self) -> None:
-        self.model = WhisperModel(
-            "tiny",
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=1,
-            num_workers=1,
-        )
+    """Compatibility adapter for the legacy multipart STT endpoint."""
+
+    def __init__(self, runtime: FasterWhisperRuntime | None = None) -> None:
+        self.runtime = runtime or FasterWhisperRuntime()
 
     async def transcribe_file(self, upload_file) -> str:
-        temp_file_path = self._save_temp_file(upload_file)
-
+        audio_bytes = await upload_file.read(settings.AI_STT_MAX_AUDIO_FILE_BYTES + 1)
+        if not audio_bytes:
+            raise EmptyAudioFile("업로드된 Audio File이 비어 있습니다.")
+        if len(audio_bytes) > settings.AI_STT_MAX_AUDIO_FILE_BYTES:
+            raise AudioFileTooLarge("업로드된 Audio File이 허용 크기를 초과했습니다.")
+        if not self.runtime.ready:
+            await self.runtime.warm_up()
         try:
-            return await self._do_transcribe(temp_file_path)
-        finally:
-            self._cleanup_temp_file(temp_file_path)
-
-    def _save_temp_file(self, upload_file) -> str:
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{upload_file.filename}")
-
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(upload_file.file, buffer)
-
-        return file_path
-
-    async def _do_transcribe(self, audio_path: str, lang: str = "ja") -> str:
-        try:
-            segments, _ = self.model.transcribe(
-                audio_path,
-                beam_size=1,
-                language=lang,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 500},
+            result = await self.runtime.transcribe(
+                io.BytesIO(audio_bytes),
+                options={
+                    "beam_size": 1,
+                    "language": None,
+                    "vad_filter": True,
+                    "vad_parameters": {"min_silence_duration_ms": 500},
+                    "condition_on_previous_text": False,
+                },
+                priority=InferencePriority.STANDARD,
             )
-
-            return "".join(segment.text for segment in segments).strip()
-        except Exception as exc:
-            logger.error("STT 분석 실패: %s", exc)
+            return result.text
+        except Exception:
+            logger.error("Legacy STT processing failed")
             raise
-
-    def _cleanup_temp_file(self, path: str) -> None:
-        if os.path.exists(path):
-            os.remove(path)

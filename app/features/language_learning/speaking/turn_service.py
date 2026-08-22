@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import time
-
 from app.features.language_learning.speaking.audio_processor import SpeakingAudioProcessor
 from app.features.language_learning.speaking.conversation_service import SpeakingConversationService
 from app.features.language_learning.speaking.errors import SpeakingStageException
@@ -11,7 +9,6 @@ from app.features.language_learning.speaking.tts_service import SpeakingTtsServi
 from app.schemas.language_learning_speaking import (
     AssistantTurn,
     ConversationGenerationRequest,
-    ConversationResult,
     ConversationStartMode,
     SessionStartRequest,
     SessionStartResponse,

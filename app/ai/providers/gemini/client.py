@@ -8,20 +8,48 @@ from fastapi import HTTPException
 from google import genai
 from google.genai import types
 
-from app.ai.ports import SpeechSynthesisResult, StructuredGenerationResult
+from app.ai.ports import (
+    SpeechSynthesisResult,
+    StructuredGenerationResult,
+    VoiceReadingGenerationToken,
+    VoiceTranslationGenerationResult,
+)
 from app.ai.providers.gemini.config_manager import GeminiConfigManager
 from app.core.config import settings
 from app.features.chat_translation.normalizer import normalize_chat_translation_result
 from app.features.chat_translation.prompts import build_chat_translation_prompt
+from app.features.voice_translation.prompts import build_voice_translation_prompt
+from app.schemas.voice_translation import VoiceTranslationProviderPayload
 
 logger = logging.getLogger(__name__)
 
 
 class GeminiService:
     def __init__(self) -> None:
-        self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        self._client = None
         self.model_name = settings.GEMINI_MODEL_NAME
         self.config_manager = GeminiConfigManager()
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        return self._client
+
+    @property
+    def ready(self) -> bool:
+        return bool(settings.GOOGLE_API_KEY.strip())
+
+    async def warm_up(self) -> None:
+        if self.ready:
+            _ = self.client
+
+    async def shutdown(self) -> None:
+        if self._client is None:
+            return
+        await self._client.aio.aclose()
+        self._client.close()
+        self._client = None
 
     async def call(
         self,
@@ -217,3 +245,44 @@ class GeminiService:
             )
 
         return normalized_result
+
+    async def translate_voice_utterance(
+        self,
+        *,
+        source_text: str,
+        source_language: str,
+        target_language: str,
+    ) -> VoiceTranslationGenerationResult:
+        prompt = build_voice_translation_prompt(
+            source_text=source_text,
+            source_language=source_language,
+            target_language=target_language,
+        )
+        schema = VoiceTranslationProviderPayload.model_json_schema(by_alias=True)
+
+        try:
+            response = await self.client.aio.models.generate_content(
+                model=settings.AI_VOICE_TRANSLATION_MODEL_NAME,
+                contents=prompt,
+                config=self.config_manager.get_voice_translation_config(schema),
+            )
+            payload = VoiceTranslationProviderPayload.model_validate(response.parsed)
+            usage = getattr(response, "usage_metadata", None)
+            return VoiceTranslationGenerationResult(
+                translated_text=payload.translated_text,
+                source_reading_tokens=[
+                    VoiceReadingGenerationToken(
+                        surface=token.surface,
+                        reading=token.reading,
+                    )
+                    for token in payload.source_reading_tokens
+                ],
+                input_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+                output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+                provider="gemini",
+                model=settings.AI_VOICE_TRANSLATION_MODEL_NAME,
+            )
+        except Exception:
+            # Voice content and provider raw responses must never enter logs.
+            logger.warning("Voice translation provider call failed")
+            raise

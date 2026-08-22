@@ -7,7 +7,9 @@ from app.ai.providers.gemini.configs import (
     build_fast_translation_config,
     build_language_learning_evaluation_config,
     build_language_learning_generation_config,
+    build_voice_translation_config,
 )
+from app.core.config import settings
 
 
 class GeminiConfigManager:
@@ -43,22 +45,34 @@ class GeminiConfigManager:
                     rule=rule,
                     schema=schema,
                 )
-            elif type_name in {
-                "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
-                "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION",
-                "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
-            } and schema is not None:
-                self._config_cache[cache_key] = build_language_learning_generation_config(
-                    rule=rule,
-                    schema=schema,
+            elif (
+                type_name
+                in {
+                    "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
+                    "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION",
+                    "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
+                }
+                and schema is not None
+            ):
+                self._config_cache[cache_key] = (
+                    build_language_learning_generation_config(
+                        rule=rule,
+                        schema=schema,
+                    )
                 )
-            elif type_name in {
-                "LANGUAGE_LEARNING_WRITING_EVALUATION",
-                "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
-            } and schema is not None:
-                self._config_cache[cache_key] = build_language_learning_evaluation_config(
-                    rule=rule,
-                    schema=schema,
+            elif (
+                type_name
+                in {
+                    "LANGUAGE_LEARNING_WRITING_EVALUATION",
+                    "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
+                }
+                and schema is not None
+            ):
+                self._config_cache[cache_key] = (
+                    build_language_learning_evaluation_config(
+                        rule=rule,
+                        schema=schema,
+                    )
                 )
             else:
                 self._config_cache[cache_key] = build_default_gemini_config(
@@ -74,6 +88,16 @@ class GeminiConfigManager:
         if cache_key not in self._config_cache:
             self._config_cache[cache_key] = build_fast_translation_config()
 
+        return self._config_cache[cache_key]
+
+    def get_voice_translation_config(self, schema: dict):
+        cache_key = self._build_cache_key("VOICE_TRANSLATION_FAST", schema)
+        if cache_key not in self._config_cache:
+            self._config_cache[cache_key] = build_voice_translation_config(
+                rule=self.get_rule("VOICE_TRANSLATION"),
+                schema=schema,
+                max_output_tokens=settings.AI_VOICE_TRANSLATION_MAX_OUTPUT_TOKENS,
+            )
         return self._config_cache[cache_key]
 
     def _build_cache_key(

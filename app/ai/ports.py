@@ -20,14 +20,29 @@ class SpeechSynthesisResult:
     duration_seconds: float | None = None
 
 
+@dataclass(frozen=True)
+class VoiceReadingGenerationToken:
+    surface: str
+    reading: str
+
+
+@dataclass(frozen=True)
+class VoiceTranslationGenerationResult:
+    translated_text: str
+    source_reading_tokens: list[VoiceReadingGenerationToken]
+    input_tokens: int = 0
+    output_tokens: int = 0
+    provider: str = "unknown"
+    model: str = "unknown"
+
+
 class TextGenerationProvider(Protocol):
     async def call(
         self,
         type_name: str,
         data: str,
         schema: dict | None = None,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
     async def call_with_image(
         self,
@@ -36,8 +51,7 @@ class TextGenerationProvider(Protocol):
         image_bytes: bytes,
         mime_type: str,
         schema: dict | None = None,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
 
 class StructuredTextGenerationProvider(Protocol):
@@ -46,8 +60,7 @@ class StructuredTextGenerationProvider(Protocol):
         type_name: str,
         data: str,
         schema: dict | None = None,
-    ) -> StructuredGenerationResult:
-        ...
+    ) -> StructuredGenerationResult: ...
 
 
 class SpeechSynthesisProvider(Protocol):
@@ -58,8 +71,7 @@ class SpeechSynthesisProvider(Protocol):
         voice: str,
         language: str,
         speed: str,
-    ) -> SpeechSynthesisResult:
-        ...
+    ) -> SpeechSynthesisResult: ...
 
 
 class ChatTranslationProvider(Protocol):
@@ -68,5 +80,14 @@ class ChatTranslationProvider(Protocol):
         text: str,
         target_language_code: str,
         source_language_code: str | None = None,
-    ) -> str:
-        ...
+    ) -> str: ...
+
+
+class VoiceTranslationProvider(Protocol):
+    async def translate_voice_utterance(
+        self,
+        *,
+        source_text: str,
+        source_language: str,
+        target_language: str,
+    ) -> VoiceTranslationGenerationResult: ...
