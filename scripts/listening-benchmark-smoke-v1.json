@@ -1,0 +1,470 @@
+{
+  "_meta": {
+    "purpose": "BENCHMARK_SCRIPT_SMOKE_TEST_ONLY",
+    "qualityEvidence": false,
+    "warningKo": "합성 점수입니다. AI #7 Human Golden Dataset 완료 증빙으로 사용하지 마세요.",
+    "expectedResult": "passed=true, process exit code 0",
+    "coverage": "ko/ja/en × DICTATION/INTERPRETATION/REPEAT_AFTER_AUDIO × EASY/MY_LEVEL/CHALLENGE"
+  },
+  "samples": [
+    {
+      "sampleId": "smoke-ko-dictation-easy",
+      "language": "ko",
+      "difficulty": "EASY",
+      "taskType": "DICTATION",
+      "aiScore": 69,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 65
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 73
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-dictation-my_level",
+      "language": "ko",
+      "difficulty": "MY_LEVEL",
+      "taskType": "DICTATION",
+      "aiScore": 76,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 72
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 80
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-dictation-challenge",
+      "language": "ko",
+      "difficulty": "CHALLENGE",
+      "taskType": "DICTATION",
+      "aiScore": 83,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 79
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 87
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-interpretation-easy",
+      "language": "ko",
+      "difficulty": "EASY",
+      "taskType": "INTERPRETATION",
+      "aiScore": 90,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 86
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 94
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-interpretation-my_level",
+      "language": "ko",
+      "difficulty": "MY_LEVEL",
+      "taskType": "INTERPRETATION",
+      "aiScore": 67,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 63
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 71
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-interpretation-challenge",
+      "language": "ko",
+      "difficulty": "CHALLENGE",
+      "taskType": "INTERPRETATION",
+      "aiScore": 74,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 70
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 78
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-repeat_after_audio-easy",
+      "language": "ko",
+      "difficulty": "EASY",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 81,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 77
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 85
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-repeat_after_audio-my_level",
+      "language": "ko",
+      "difficulty": "MY_LEVEL",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 88,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 84
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 92
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ko-repeat_after_audio-challenge",
+      "language": "ko",
+      "difficulty": "CHALLENGE",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 65,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 61
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 69
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-dictation-easy",
+      "language": "ja",
+      "difficulty": "EASY",
+      "taskType": "DICTATION",
+      "aiScore": 72,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 68
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 76
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-dictation-my_level",
+      "language": "ja",
+      "difficulty": "MY_LEVEL",
+      "taskType": "DICTATION",
+      "aiScore": 79,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 75
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 83
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-dictation-challenge",
+      "language": "ja",
+      "difficulty": "CHALLENGE",
+      "taskType": "DICTATION",
+      "aiScore": 86,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 82
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 90
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-interpretation-easy",
+      "language": "ja",
+      "difficulty": "EASY",
+      "taskType": "INTERPRETATION",
+      "aiScore": 63,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 59
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 67
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-interpretation-my_level",
+      "language": "ja",
+      "difficulty": "MY_LEVEL",
+      "taskType": "INTERPRETATION",
+      "aiScore": 70,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 66
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 74
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-interpretation-challenge",
+      "language": "ja",
+      "difficulty": "CHALLENGE",
+      "taskType": "INTERPRETATION",
+      "aiScore": 77,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 73
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 81
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-repeat_after_audio-easy",
+      "language": "ja",
+      "difficulty": "EASY",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 84,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 80
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 88
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-repeat_after_audio-my_level",
+      "language": "ja",
+      "difficulty": "MY_LEVEL",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 91,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 87
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 95
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-ja-repeat_after_audio-challenge",
+      "language": "ja",
+      "difficulty": "CHALLENGE",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 68,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 64
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 72
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-dictation-easy",
+      "language": "en",
+      "difficulty": "EASY",
+      "taskType": "DICTATION",
+      "aiScore": 75,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 71
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 79
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-dictation-my_level",
+      "language": "en",
+      "difficulty": "MY_LEVEL",
+      "taskType": "DICTATION",
+      "aiScore": 82,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 78
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 86
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-dictation-challenge",
+      "language": "en",
+      "difficulty": "CHALLENGE",
+      "taskType": "DICTATION",
+      "aiScore": 89,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 85
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 93
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-interpretation-easy",
+      "language": "en",
+      "difficulty": "EASY",
+      "taskType": "INTERPRETATION",
+      "aiScore": 66,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 62
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 70
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-interpretation-my_level",
+      "language": "en",
+      "difficulty": "MY_LEVEL",
+      "taskType": "INTERPRETATION",
+      "aiScore": 73,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 69
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 77
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-interpretation-challenge",
+      "language": "en",
+      "difficulty": "CHALLENGE",
+      "taskType": "INTERPRETATION",
+      "aiScore": 80,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 76
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 84
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-repeat_after_audio-easy",
+      "language": "en",
+      "difficulty": "EASY",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 87,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 83
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 91
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-repeat_after_audio-my_level",
+      "language": "en",
+      "difficulty": "MY_LEVEL",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 64,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 60
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 68
+        }
+      ]
+    },
+    {
+      "sampleId": "smoke-en-repeat_after_audio-challenge",
+      "language": "en",
+      "difficulty": "CHALLENGE",
+      "taskType": "REPEAT_AFTER_AUDIO",
+      "aiScore": 71,
+      "humanScores": [
+        {
+          "evaluatorId": "synthetic-rater-a",
+          "score": 67
+        },
+        {
+          "evaluatorId": "synthetic-rater-b",
+          "score": 75
+        }
+      ]
+    }
+  ]
+}
