@@ -53,6 +53,30 @@ class Settings(BaseSettings):
     AI_SPEAKING_TTS_AUDIO_TTL_SECONDS: int = 3600
     GEMINI_TTS_MODEL_NAME: str = "gemini-2.5-flash-preview-tts"
 
+    # Language Learning / AI Listening
+    AI_LISTENING_STT_MODEL_NAME: str = "tiny"
+    AI_LISTENING_STT_DEVICE: str = "cpu"
+    AI_LISTENING_STT_COMPUTE_TYPE: str = "int8"
+    AI_LISTENING_GENERATION_TIMEOUT_SECONDS: float = 30.0
+    AI_LISTENING_TTS_TIMEOUT_SECONDS: float = 30.0
+    AI_LISTENING_STT_TIMEOUT_SECONDS: float = 30.0
+    AI_LISTENING_EVALUATION_TIMEOUT_SECONDS: float = 60.0
+    AI_LISTENING_EXPLANATION_TIMEOUT_SECONDS: float = 30.0
+    AI_LISTENING_AUTOMATIC_RETRY_LIMIT: int = Field(default=2, ge=0, le=2)
+    AI_LISTENING_MANUAL_RETRY_LIMIT: int = Field(default=1, ge=0, le=1)
+    AI_LISTENING_MIN_VALID_AUDIO_SECONDS: float = Field(default=0.5, gt=0)
+    AI_LISTENING_MAX_REPEAT_AUDIO_SECONDS: float = Field(default=60.0, gt=0, le=60)
+    AI_LISTENING_MAX_AUDIO_FILE_BYTES: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+    )
+    AI_LISTENING_EVALUATION_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.70,
+        ge=0,
+        le=1,
+    )
+    AI_LISTENING_TTS_AUDIO_TTL_SECONDS: int = Field(default=3600, ge=1)
+
     # Voice Translation V2 / Internal Streaming Pipeline
     AI_VOICE_ENABLED: bool = True
     AI_VOICE_STT_MODEL_NAME: str = "base"

@@ -5,6 +5,28 @@ from app.features.chat_translation.service import ChatTranslationService
 from app.features.language_learning.speaking.assistance_service import (
     SpeakingAssistanceService,
 )
+from app.features.language_learning.listening.audio_store import (
+    TemporaryListeningAudioStore,
+)
+from app.features.language_learning.listening.dictation_service import (
+    ListeningDictationService,
+)
+from app.features.language_learning.listening.explanation_service import (
+    ListeningExplanationService,
+)
+from app.features.language_learning.listening.generation_service import (
+    ListeningGenerationService,
+)
+from app.features.language_learning.listening.interpretation_service import (
+    ListeningInterpretationService,
+)
+from app.features.language_learning.listening.repeat_service import (
+    ListeningRepeatService,
+)
+from app.features.language_learning.listening.stt_provider import (
+    FasterWhisperListeningSttProvider,
+)
+from app.features.language_learning.listening.tts_service import ListeningTtsService
 from app.features.language_learning.speaking.audio_processor import (
     SpeakingAudioProcessor,
 )
@@ -55,6 +77,24 @@ _chat_ai_reply_service = ChatAiReplyService(
 _language_learning_writing_service = LanguageLearningWritingService(
     provider=_ai_provider,
 )
+
+_listening_audio_store = TemporaryListeningAudioStore(
+    ttl_seconds=settings.AI_LISTENING_TTS_AUDIO_TTL_SECONDS
+)
+_listening_audio_processor = SpeakingAudioProcessor()
+_listening_stt_provider = FasterWhisperListeningSttProvider(runtime=_speech_runtime)
+_listening_generation_service = ListeningGenerationService(_ai_provider)
+_listening_tts_service = ListeningTtsService(
+    provider=_ai_provider,
+    audio_store=_listening_audio_store,
+)
+_listening_dictation_service = ListeningDictationService()
+_listening_interpretation_service = ListeningInterpretationService(_ai_provider)
+_listening_repeat_service = ListeningRepeatService(
+    audio_processor=_listening_audio_processor,
+    stt_provider=_listening_stt_provider,
+)
+_listening_explanation_service = ListeningExplanationService(_ai_provider)
 
 _speaking_audio_processor = SpeakingAudioProcessor()
 _speaking_audio_store = TemporaryTtsAudioStore(
@@ -113,6 +153,38 @@ def get_chat_ai_reply_service() -> ChatAiReplyService:
 
 def get_language_learning_writing_service() -> LanguageLearningWritingService:
     return _language_learning_writing_service
+
+
+def get_language_learning_listening_generation_service() -> ListeningGenerationService:
+    return _listening_generation_service
+
+
+def get_language_learning_listening_tts_service() -> ListeningTtsService:
+    return _listening_tts_service
+
+
+def get_language_learning_listening_audio_store() -> TemporaryListeningAudioStore:
+    return _listening_audio_store
+
+
+def get_language_learning_listening_dictation_service() -> ListeningDictationService:
+    return _listening_dictation_service
+
+
+def get_language_learning_listening_interpretation_service() -> (
+    ListeningInterpretationService
+):
+    return _listening_interpretation_service
+
+
+def get_language_learning_listening_repeat_service() -> ListeningRepeatService:
+    return _listening_repeat_service
+
+
+def get_language_learning_listening_explanation_service() -> (
+    ListeningExplanationService
+):
+    return _listening_explanation_service
 
 
 def get_language_learning_speaking_turn_service() -> SpeakingTurnService:

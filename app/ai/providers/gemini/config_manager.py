@@ -51,6 +51,8 @@ class GeminiConfigManager:
                     "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
                     "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION",
                     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
+                    "LANGUAGE_LEARNING_LISTENING_GENERATION",
+                    "LANGUAGE_LEARNING_LISTENING_EXPLANATION",
                 }
                 and schema is not None
             ):
@@ -65,6 +67,7 @@ class GeminiConfigManager:
                 in {
                     "LANGUAGE_LEARNING_WRITING_EVALUATION",
                     "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
+                    "LANGUAGE_LEARNING_LISTENING_INTERPRETATION",
                 }
                 and schema is not None
             ):
