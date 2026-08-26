@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
@@ -45,6 +47,9 @@ from app.schemas.language_learning_listening import (
     RecommendationExplanationResponse,
     RepeatEvaluationContext,
 )
+
+logger = logging.getLogger(__name__)
+
 
 router = APIRouter(
     prefix="/language-learning/listening",
@@ -97,11 +102,28 @@ async def get_listening_audio(
         get_language_learning_listening_audio_store
     ),
 ):
+    logger.info(
+        "Listening audio download requested. audio_reference=%s",
+        audio_reference,
+    )
     stored = store.get(audio_reference)
     if stored is None:
+        logger.warning(
+            "Listening audio download miss. audio_reference=%s",
+            audio_reference,
+        )
         raise HTTPException(
             status_code=404, detail="Listening TTS Audio를 찾을 수 없습니다."
         )
+    logger.info(
+        "Listening audio download hit. audio_reference=%s bytes=%d "
+        "content_type=%s duration_seconds=%.3f checksum=%s",
+        audio_reference,
+        stored.path.stat().st_size,
+        stored.content_type,
+        stored.duration_seconds,
+        stored.checksum[:12],
+    )
     return FileResponse(
         stored.path,
         media_type=stored.content_type,

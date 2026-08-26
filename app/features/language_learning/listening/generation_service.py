@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import logging
 import time
 from difflib import SequenceMatcher
 
@@ -37,6 +39,22 @@ from app.schemas.language_learning_listening import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+_PROVIDER_PAYLOAD_LOG_LIMIT = 4000
+
+
+def _provider_payload_preview(data: object) -> str:
+    """Return a bounded JSON-ish preview without logging the request prompt."""
+    try:
+        rendered = json.dumps(data, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        rendered = repr(data)
+    if len(rendered) <= _PROVIDER_PAYLOAD_LOG_LIMIT:
+        return rendered
+    return f"{rendered[:_PROVIDER_PAYLOAD_LOG_LIMIT]}...<truncated>"
+
+
 class ListeningGenerationService:
     TYPE_NAME = "LANGUAGE_LEARNING_LISTENING_GENERATION"
 
@@ -64,6 +82,19 @@ class ListeningGenerationService:
         self,
         request: ListeningSetGenerationRequest,
     ) -> ListeningSetGenerationResponse:
+        logger.info(
+            "Listening generation request received. request_id=%s origin=%s learning=%s "
+            "item_count=%d difficulty=%s manual_retry_attempt=%d policy_version=%s "
+            "model_config_version=%s",
+            request.request_id,
+            request.user_context.origin_language,
+            request.user_context.learning_language,
+            request.set_context.item_count,
+            request.set_context.difficulty.value,
+            request.manual_retry_attempt,
+            request.policy_version,
+            request.model_config_version,
+        )
         self._validate_manual_retry(request.manual_retry_attempt)
         key = "|".join(
             [
@@ -73,9 +104,15 @@ class ListeningGenerationService:
                 request.model_config_version,
             ]
         )
-        response, _ = await self.idempotency_store.execute(
+        response, cache_hit = await self.idempotency_store.execute(
             key,
             lambda: self._generate_once(request),
+        )
+        logger.info(
+            "Listening generation request completed. request_id=%s cache_hit=%s items=%d",
+            request.request_id,
+            cache_hit,
+            len(response.items),
         )
         return response.model_copy(deep=True, update={"request_id": request.request_id})
 
@@ -86,8 +123,22 @@ class ListeningGenerationService:
         prompt = build_generation_prompt(request)
         schema = ListeningGenerationPayload.model_json_schema()
         started = time.perf_counter()
+        provider_attempt = 0
 
         async def operation():
+            nonlocal provider_attempt
+            provider_attempt += 1
+            attempt_started = time.perf_counter()
+            provider_data: object | None = None
+            logger.info(
+                "Listening generation provider call started. request_id=%s attempt=%d/%d "
+                "timeout_seconds=%s schema_top_level_keys=%s",
+                request.request_id,
+                provider_attempt,
+                self.automatic_retries + 1,
+                self.timeout_seconds,
+                sorted(schema.keys()),
+            )
             try:
                 result = await asyncio.wait_for(
                     self.provider.call_with_metadata(
@@ -97,38 +148,119 @@ class ListeningGenerationService:
                     ),
                     timeout=self.timeout_seconds,
                 )
+                provider_data = result.data
+                provider_elapsed_ms = int(
+                    (time.perf_counter() - attempt_started) * 1000
+                )
+                logger.info(
+                    "Listening generation provider call completed. request_id=%s attempt=%d/%d "
+                    "latency_ms=%d provider=%s model=%s input_tokens=%d output_tokens=%d "
+                    "data_type=%s",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    provider_elapsed_ms,
+                    result.provider,
+                    result.model,
+                    result.input_tokens,
+                    result.output_tokens,
+                    type(result.data).__name__,
+                )
                 if not isinstance(result.data, dict):
                     raise ValueError("Listening generation response must be an object")
                 payload = ListeningGenerationPayload.model_validate(result.data)
                 items = self._finalize_items(request, payload)
+                logger.info(
+                    "Listening generation response validated. request_id=%s attempt=%d/%d items=%d",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    len(items),
+                )
                 return result, items
             except (TimeoutError, asyncio.TimeoutError) as exc:
+                logger.warning(
+                    "Listening generation provider timed out. request_id=%s attempt=%d/%d "
+                    "timeout_seconds=%s",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    self.timeout_seconds,
+                )
                 raise ListeningStageException(
                     ListeningErrorCode.PROVIDER_TIMEOUT,
                     ListeningStage.GENERATION,
                     "Listening 문항 생성 Provider 응답 시간이 초과되었습니다.",
                     True,
                 ) from exc
-            except ListeningStageException:
+            except ListeningStageException as exc:
+                logger.warning(
+                    "Listening generation stage validation failed. request_id=%s attempt=%d/%d "
+                    "code=%s stage=%s retryable=%s message=%s",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    exc.code.value,
+                    exc.stage.value,
+                    exc.retryable,
+                    exc.message,
+                )
                 raise
-            except (ValidationError, ValueError) as exc:
+            except ValidationError as exc:
+                logger.error(
+                    "Listening generation response schema validation failed. request_id=%s "
+                    "attempt=%d/%d validation_errors=%s provider_payload=%s",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    exc.errors(include_url=False, include_input=False),
+                    _provider_payload_preview(provider_data),
+                )
                 raise ListeningStageException(
                     ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
                     ListeningStage.GENERATION,
                     "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
-                    True,
+                    False,
+                ) from exc
+            except ValueError as exc:
+                logger.error(
+                    "Listening generation response business validation failed. request_id=%s "
+                    "attempt=%d/%d error=%s provider_payload=%s",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    exc,
+                    _provider_payload_preview(provider_data),
+                )
+                raise ListeningStageException(
+                    ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
+                    ListeningStage.GENERATION,
+                    "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
+                    False,
                 ) from exc
             except Exception as exc:
-                raise map_provider_exception(
+                mapped = map_provider_exception(
                     exc,
                     stage=ListeningStage.GENERATION,
                     fallback_code=ListeningErrorCode.GENERATION_FAILED,
                     fallback_message="Listening 문항 생성에 실패했습니다.",
-                ) from exc
+                )
+                logger.exception(
+                    "Listening generation provider call failed. request_id=%s attempt=%d/%d "
+                    "mapped_code=%s mapped_stage=%s retryable=%s",
+                    request.request_id,
+                    provider_attempt,
+                    self.automatic_retries + 1,
+                    mapped.code.value,
+                    mapped.stage.value,
+                    mapped.retryable,
+                )
+                raise mapped from exc
 
         result, items = await run_with_stage_retry(
             operation,
             max_retries=self.automatic_retries,
+            context=f"generation request_id={request.request_id}",
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return ListeningSetGenerationResponse(

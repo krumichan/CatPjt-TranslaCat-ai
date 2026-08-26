@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import math
 import time
 from typing import Protocol
@@ -63,6 +64,9 @@ from app.schemas.language_learning_listening import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class ListeningAudioProcessor(Protocol):
     def validate_and_normalize(
         self,
@@ -107,6 +111,16 @@ class ListeningRepeatService:
         file_name: str | None,
         content_type: str | None,
     ) -> ListeningEvaluationResponse:
+        logger.info(
+            "Listening repeat evaluation request received. request_id=%s item_id=%s "
+            "attempt_id=%s audio_bytes=%d content_type=%s learning=%s",
+            request.request_id,
+            request.item_id,
+            request.attempt_id,
+            len(audio_bytes),
+            content_type,
+            request.learning_language,
+        )
         self._validate_manual_retry(request.manual_retry_attempt)
         audio_hash = hashlib.sha256(audio_bytes).hexdigest()
         key = "|".join(
@@ -118,7 +132,7 @@ class ListeningRepeatService:
                 audio_hash,
             ]
         )
-        response, _ = await self.idempotency_store.execute(
+        response, cache_hit = await self.idempotency_store.execute(
             key,
             lambda: self._evaluate_once(
                 request,
@@ -126,6 +140,15 @@ class ListeningRepeatService:
                 file_name=file_name,
                 content_type=content_type,
             ),
+        )
+        logger.info(
+            "Listening repeat evaluation request completed. request_id=%s item_id=%s "
+            "attempt_id=%s cache_hit=%s overall_score=%s",
+            request.request_id,
+            request.item_id,
+            request.attempt_id,
+            cache_hit,
+            response.overall.score,
         )
         return response.model_copy(deep=True, update={"request_id": request.request_id})
 
@@ -377,9 +400,24 @@ class ListeningRepeatService:
         request: RepeatEvaluationContext,
         wav_bytes: bytes,
     ) -> SttProviderResult:
+        provider_attempt = 0
+
         async def operation() -> SttProviderResult:
+            nonlocal provider_attempt
+            provider_attempt += 1
+            started = time.perf_counter()
+            logger.info(
+                "Listening repeat STT call started. request_id=%s item_id=%s "
+                "attempt_id=%s provider_attempt=%d/%d wav_bytes=%d",
+                request.request_id,
+                request.item_id,
+                request.attempt_id,
+                provider_attempt,
+                self.automatic_retries + 1,
+                len(wav_bytes),
+            )
             try:
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     self.stt_provider.transcribe(
                         wav_bytes,
                         language=request.learning_language,
@@ -387,6 +425,21 @@ class ListeningRepeatService:
                     ),
                     timeout=self.timeout_seconds,
                 )
+                logger.info(
+                    "Listening repeat STT call completed. request_id=%s item_id=%s "
+                    "attempt_id=%s provider_attempt=%d latency_ms=%d provider=%s "
+                    "model=%s detected_language=%s transcript_chars=%d",
+                    request.request_id,
+                    request.item_id,
+                    request.attempt_id,
+                    provider_attempt,
+                    int((time.perf_counter() - started) * 1000),
+                    result.provider,
+                    result.model,
+                    result.language,
+                    len(result.text),
+                )
+                return result
             except (TimeoutError, asyncio.TimeoutError) as exc:
                 raise ListeningStageException(
                     ListeningErrorCode.PROVIDER_TIMEOUT,
@@ -407,6 +460,10 @@ class ListeningRepeatService:
         return await run_with_stage_retry(
             operation,
             max_retries=self.automatic_retries,
+            context=(
+                f"repeat-stt request_id={request.request_id} "
+                f"item_id={request.item_id} attempt_id={request.attempt_id}"
+            ),
         )
 
     @staticmethod

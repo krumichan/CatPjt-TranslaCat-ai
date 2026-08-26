@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import time
 
 from app.ai.ports import SpeechSynthesisProvider
@@ -28,6 +29,9 @@ from app.schemas.language_learning_listening import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class ListeningTtsService:
     def __init__(
         self,
@@ -49,12 +53,32 @@ class ListeningTtsService:
         )
 
     async def synthesize(self, request: ListeningTtsRequest) -> ListeningTtsResponse:
+        logger.info(
+            "Listening TTS request received. request_id=%s item_id=%s language=%s "
+            "voice=%s source_chars=%d content_hash=%s manual_retry_attempt=%d",
+            request.request_id,
+            request.item_id,
+            request.learning_language,
+            request.voice.voice_key,
+            len(request.source_text),
+            request.content_hash[:12],
+            request.manual_retry_attempt,
+        )
         self._validate_request(request)
-        text_hash = hashlib.sha256(request.source_text.encode("utf-8")).hexdigest()
+        text_hash = request.content_hash
         cache_key = self._cache_key(request, text_hash)
         reference = self.audio_store.reference_for(cache_key)
         existing = self.audio_store.get(reference)
         if existing is not None:
+            logger.info(
+                "Listening TTS cache hit. request_id=%s item_id=%s "
+                "audio_reference=%s bytes=%d duration_seconds=%.3f",
+                request.request_id,
+                request.item_id,
+                existing.reference,
+                existing.path.stat().st_size,
+                existing.duration_seconds,
+            )
             return self._ready_response(
                 request,
                 existing,
@@ -64,10 +88,24 @@ class ListeningTtsService:
             )
 
         started = time.perf_counter()
+        provider_attempt = 0
 
         async def operation():
+            nonlocal provider_attempt
+            provider_attempt += 1
+            attempt_started = time.perf_counter()
+            logger.info(
+                "Listening TTS provider call started. request_id=%s item_id=%s "
+                "provider_attempt=%d/%d timeout_seconds=%s voice=%s",
+                request.request_id,
+                request.item_id,
+                provider_attempt,
+                min(self.automatic_retries, request.automatic_retry_limit) + 1,
+                self.timeout_seconds,
+                request.voice.voice_key,
+            )
             try:
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     self.provider.synthesize_speech(
                         text=request.source_text,
                         voice=request.voice.voice_key,
@@ -76,30 +114,87 @@ class ListeningTtsService:
                     ),
                     timeout=self.timeout_seconds,
                 )
+                logger.info(
+                    "Listening TTS provider call completed. request_id=%s item_id=%s "
+                    "provider_attempt=%d latency_ms=%d provider=%s model=%s "
+                    "bytes=%d content_type=%s duration_seconds=%s",
+                    request.request_id,
+                    request.item_id,
+                    provider_attempt,
+                    int((time.perf_counter() - attempt_started) * 1000),
+                    result.provider,
+                    result.model,
+                    len(result.audio_bytes),
+                    result.content_type,
+                    result.duration_seconds,
+                )
+                return result
             except (TimeoutError, asyncio.TimeoutError) as exc:
+                logger.warning(
+                    "Listening TTS provider timed out. request_id=%s item_id=%s "
+                    "provider_attempt=%d timeout_seconds=%s",
+                    request.request_id,
+                    request.item_id,
+                    provider_attempt,
+                    self.timeout_seconds,
+                )
                 raise ListeningStageException(
                     ListeningErrorCode.PROVIDER_TIMEOUT,
                     ListeningStage.TTS,
                     "Reference TTS Provider 응답 시간이 초과되었습니다.",
                     True,
                 ) from exc
-            except ListeningStageException:
+            except ListeningStageException as exc:
+                logger.warning(
+                    "Listening TTS stage failed. request_id=%s item_id=%s "
+                    "provider_attempt=%d code=%s stage=%s retryable=%s message=%s",
+                    request.request_id,
+                    request.item_id,
+                    provider_attempt,
+                    exc.code.value,
+                    exc.stage.value,
+                    exc.retryable,
+                    exc.message,
+                )
                 raise
             except Exception as exc:
-                raise map_provider_exception(
+                mapped = map_provider_exception(
                     exc,
                     stage=ListeningStage.TTS,
                     fallback_code=ListeningErrorCode.TTS_FAILED,
                     fallback_message="Reference TTS 생성에 실패했습니다.",
-                ) from exc
+                )
+                logger.exception(
+                    "Listening TTS provider call failed. request_id=%s item_id=%s "
+                    "provider_attempt=%d mapped_code=%s mapped_stage=%s retryable=%s",
+                    request.request_id,
+                    request.item_id,
+                    provider_attempt,
+                    mapped.code.value,
+                    mapped.stage.value,
+                    mapped.retryable,
+                )
+                raise mapped from exc
 
         try:
             result = await run_with_stage_retry(
                 operation,
                 max_retries=min(self.automatic_retries, request.automatic_retry_limit),
+                context=f"tts request_id={request.request_id} item_id={request.item_id}",
             )
         except ListeningStageException as exc:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            logger.error(
+                "Listening TTS request failed. request_id=%s item_id=%s code=%s "
+                "stage=%s retryable=%s latency_ms=%d message=%s",
+                request.request_id,
+                request.item_id,
+                exc.code.value,
+                exc.stage.value,
+                exc.retryable,
+                elapsed_ms,
+                exc.message,
+            )
             return ListeningTtsResponse(
                 request_id=request.request_id,
                 item_id=request.item_id,
@@ -125,6 +220,17 @@ class ListeningTtsService:
             duration_seconds=duration,
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "Listening TTS audio stored. request_id=%s item_id=%s audio_reference=%s "
+            "bytes=%d checksum=%s duration_seconds=%.3f latency_ms=%d",
+            request.request_id,
+            request.item_id,
+            stored.reference,
+            len(result.audio_bytes),
+            stored.checksum[:12],
+            stored.duration_seconds,
+            elapsed_ms,
+        )
         return self._ready_response(
             request,
             stored,

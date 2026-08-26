@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from difflib import SequenceMatcher
 
@@ -40,6 +41,9 @@ from app.schemas.language_learning_listening import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class ListeningDictationService:
     def __init__(
         self,
@@ -53,6 +57,16 @@ class ListeningDictationService:
         self,
         request: DictationEvaluationRequest,
     ) -> ListeningEvaluationResponse:
+        logger.info(
+            "Listening dictation evaluation request received. "
+            "request_id=%s item_id=%s attempt_id=%s learning=%s "
+            "answer_chars=%d",
+            request.request_id,
+            request.item_id,
+            request.attempt_id,
+            request.learning_language,
+            len(request.answer),
+        )
         key = "|".join(
             [
                 request.idempotency_key,
@@ -62,9 +76,18 @@ class ListeningDictationService:
                 request.model_config_version,
             ]
         )
-        response, _ = await self.idempotency_store.execute(
+        response, cache_hit = await self.idempotency_store.execute(
             key,
             lambda: self._evaluate_once(request),
+        )
+        logger.info(
+            "Listening dictation evaluation request completed. "
+            "request_id=%s item_id=%s attempt_id=%s cache_hit=%s overall_score=%s",
+            request.request_id,
+            request.item_id,
+            request.attempt_id,
+            cache_hit,
+            response.overall.score,
         )
         return response.model_copy(deep=True, update={"request_id": request.request_id})
 
