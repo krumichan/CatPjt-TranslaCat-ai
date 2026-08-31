@@ -5,6 +5,12 @@ from datetime import date
 from pydantic import Field, model_validator
 
 from app.schemas.language_learning import SelectedKeyword
+from app.schemas.language_learning_quality import (
+    DiversityContext,
+    DiversityMetadata,
+    DiversitySummary,
+    LanguageComplexityContext,
+)
 from app.schemas.language_learning_listening.common import (
     CamelCaseModel,
     ListeningDifficulty,
@@ -66,6 +72,9 @@ class ListeningSetGenerationRequest(CamelCaseModel):
         default="listening-model-config-v1", min_length=1, max_length=100
     )
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)
+    language_complexity: LanguageComplexityContext | None = None
+    diversity_context: DiversityContext = Field(default_factory=DiversityContext)
+    content_diversity_policy_version: str | None = Field(default=None, max_length=100)
 
 
 class GeneratedListeningItemPayload(CamelCaseModel):
@@ -76,6 +85,8 @@ class GeneratedListeningItemPayload(CamelCaseModel):
     target_keywords: list[str] = Field(default_factory=list, max_length=20)
     estimated_audio_seconds: float = Field(..., ge=1, le=60)
     safety: SafetyResult
+    language_complexity_band: int | None = Field(default=None, ge=1, le=5)
+    diversity_metadata: DiversityMetadata | None = None
 
 
 class ListeningGenerationPayload(CamelCaseModel):
@@ -93,6 +104,8 @@ class ListeningItem(CamelCaseModel):
     content_hash: str
     similarity_key: str
     safety: SafetyResult
+    language_complexity_band: int | None = Field(default=None, ge=1, le=5)
+    diversity_metadata: DiversityMetadata | None = None
 
 
 class ListeningSetGenerationResponse(CamelCaseModel):
@@ -102,6 +115,9 @@ class ListeningSetGenerationResponse(CamelCaseModel):
     model_config_version: str
     items: list[ListeningItem]
     usage: ListeningUsage
+    content_diversity_policy_version: str | None = None
+    language_complexity_policy_version: str | None = None
+    diversity_summary: DiversitySummary | None = None
 
 
 class ListeningVoiceSnapshot(CamelCaseModel):

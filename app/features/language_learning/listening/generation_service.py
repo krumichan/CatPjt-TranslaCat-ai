@@ -21,6 +21,16 @@ from app.features.language_learning.listening.policy import (
     DIFFICULTY_DURATION_RANGES,
     LISTENING_GENERATION_PROMPT_VERSION,
     LISTENING_GENERATION_VERSION,
+    LISTENING_GENERATION_V35_PROMPT_VERSION,
+    LISTENING_GENERATION_V35_VERSION,
+)
+from app.features.language_learning.quality import (
+    CONTENT_DIVERSITY_POLICY_VERSION,
+    LANGUAGE_COMPLEXITY_POLICY_VERSION,
+    DiversityCandidate,
+    DiversityValidator,
+    DiversityValidationStats,
+    resolve_listening_complexity_band,
 )
 from app.features.language_learning.listening.prompts import build_generation_prompt
 from app.features.language_learning.listening.provider_error import (
@@ -36,6 +46,12 @@ from app.schemas.language_learning_listening import (
     ListeningStage,
     ListeningUsage,
     StageUsage,
+)
+from app.schemas.language_learning_quality import (
+    DiversityContext,
+    DiversityHistoryEntry,
+    DiversitySummary,
+    GenerationSourceType,
 )
 
 
@@ -96,17 +112,25 @@ class ListeningGenerationService:
             request.model_config_version,
         )
         self._validate_manual_retry(request.manual_retry_attempt)
+        phase35 = (
+            request.content_diversity_policy_version
+            == CONTENT_DIVERSITY_POLICY_VERSION
+        )
+        generation_version = (
+            LISTENING_GENERATION_V35_VERSION if phase35 else LISTENING_GENERATION_VERSION
+        )
         key = "|".join(
             [
                 request.idempotency_key,
-                LISTENING_GENERATION_VERSION,
+                generation_version,
                 request.policy_version,
                 request.model_config_version,
+                request.content_diversity_policy_version or "legacy",
             ]
         )
         response, cache_hit = await self.idempotency_store.execute(
             key,
-            lambda: self._generate_once(request),
+            lambda: self._generate_v35(request) if phase35 else self._generate_once(request),
         )
         logger.info(
             "Listening generation request completed. request_id=%s cache_hit=%s items=%d",
@@ -115,6 +139,288 @@ class ListeningGenerationService:
             len(response.items),
         )
         return response.model_copy(deep=True, update={"request_id": request.request_id})
+
+    async def _generate_v35(
+        self,
+        request: ListeningSetGenerationRequest,
+    ) -> ListeningSetGenerationResponse:
+        expected_count = request.set_context.item_count
+        effective_context = self._effective_diversity_context(request)
+        accepted_items: list[ListeningItem] = []
+        accepted_diversity: list[DiversityCandidate] = []
+        all_candidates = []
+        stats = DiversityValidationStats()
+        total_latency_ms = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        last_provider = None
+        last_model = None
+
+        for provider_attempt in range(3):
+            missing = expected_count - len(accepted_items)
+            if missing <= 0:
+                break
+            pool_size = max(missing, min(missing * 2, 40))
+            current_session = list(effective_context.current_session)
+            current_session.extend(
+                DiversityHistoryEntry(
+                    source_type=GenerationSourceType.LISTENING,
+                    content=item.source_text,
+                    content_hash=item.content_hash,
+                    scenario_category=(
+                        item.diversity_metadata.scenario_category
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    communicative_intent=(
+                        item.diversity_metadata.communicative_intent
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    task_archetype=(
+                        item.diversity_metadata.task_archetype
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    grammar_focus_codes=(
+                        item.diversity_metadata.grammar_focus_codes
+                        if item.diversity_metadata
+                        else []
+                    ),
+                    semantic_summary=(
+                        item.diversity_metadata.semantic_summary
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    age_days=0,
+                )
+                for item in accepted_items
+            )
+            candidate_request = request.model_copy(
+                deep=True,
+                update={
+                    "set_context": request.set_context.model_copy(
+                        deep=True,
+                        update={"item_count": pool_size},
+                    ),
+                    "diversity_context": effective_context.model_copy(
+                        deep=True,
+                        update={"current_session": current_session},
+                    ),
+                },
+            )
+            prompt = build_generation_prompt(candidate_request)
+            schema = ListeningGenerationPayload.model_json_schema()
+            started = time.perf_counter()
+            try:
+                result = await asyncio.wait_for(
+                    self.provider.call_with_metadata(
+                        type_name=self.TYPE_NAME,
+                        data=prompt,
+                        schema=schema,
+                    ),
+                    timeout=self.timeout_seconds,
+                )
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                if provider_attempt < 2:
+                    continue
+                raise ListeningStageException(
+                    ListeningErrorCode.PROVIDER_TIMEOUT,
+                    ListeningStage.GENERATION,
+                    "Listening 문항 생성 Provider 응답 시간이 초과되었습니다.",
+                    True,
+                ) from exc
+            except ListeningStageException:
+                raise
+            except Exception as exc:
+                mapped = map_provider_exception(
+                    exc,
+                    stage=ListeningStage.GENERATION,
+                    fallback_code=ListeningErrorCode.GENERATION_FAILED,
+                    fallback_message="Listening 문항 생성에 실패했습니다.",
+                )
+                if mapped.retryable and provider_attempt < 2:
+                    continue
+                raise mapped from exc
+
+            total_latency_ms += int((time.perf_counter() - started) * 1000)
+            total_input_tokens += result.input_tokens
+            total_output_tokens += result.output_tokens
+            last_provider = result.provider
+            last_model = result.model
+            if not isinstance(result.data, dict):
+                raise ListeningStageException(
+                    ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
+                    ListeningStage.GENERATION,
+                    "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
+                    False,
+                )
+            try:
+                payload = ListeningGenerationPayload.model_validate(result.data)
+            except ValidationError as exc:
+                logger.error(
+                    "Phase 3.5 Listening generation schema validation failed. request_id=%s errors=%s",
+                    request.request_id,
+                    exc.errors(include_url=False, include_input=False),
+                )
+                raise ListeningStageException(
+                    ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
+                    ListeningStage.GENERATION,
+                    "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
+                    False,
+                ) from exc
+
+            validator = DiversityValidator(effective_context)
+            for candidate in payload.items:
+                all_candidates.append(candidate)
+                finalized = self._phase35_candidate(request, candidate)
+                if finalized is None:
+                    continue
+                assert candidate.diversity_metadata is not None
+                decision = validator.validate(
+                    DiversityCandidate(finalized.source_text, candidate.diversity_metadata),
+                    accepted_diversity,
+                )
+                stats.record(decision)
+                if not decision.accepted:
+                    continue
+                metadata = decision.metadata.model_copy(
+                    update={
+                        "content_hash": finalized.content_hash,
+                        "similarity_key": finalized.similarity_key,
+                    }
+                )
+                finalized = finalized.model_copy(update={"diversity_metadata": metadata})
+                accepted_items.append(finalized)
+                accepted_diversity.append(DiversityCandidate(finalized.source_text, metadata))
+                if len(accepted_items) >= expected_count:
+                    break
+
+        fallback_used = False
+        if len(accepted_items) < expected_count:
+            fallback_used = True
+            validator = DiversityValidator(effective_context, relaxed_history=True)
+            for candidate in all_candidates:
+                finalized = self._phase35_candidate(request, candidate)
+                if finalized is None or candidate.diversity_metadata is None:
+                    continue
+                if any(item.content_hash == finalized.content_hash for item in accepted_items):
+                    continue
+                decision = validator.validate(
+                    DiversityCandidate(finalized.source_text, candidate.diversity_metadata),
+                    accepted_diversity,
+                )
+                if not decision.accepted:
+                    continue
+                metadata = decision.metadata.model_copy(
+                    update={
+                        "content_hash": finalized.content_hash,
+                        "similarity_key": finalized.similarity_key,
+                    }
+                )
+                accepted_items.append(finalized.model_copy(update={"diversity_metadata": metadata}))
+                accepted_diversity.append(DiversityCandidate(finalized.source_text, metadata))
+                if len(accepted_items) >= expected_count:
+                    break
+
+        if len(accepted_items) < expected_count:
+            raise ListeningStageException(
+                ListeningErrorCode.CONTENT_DIVERSITY_EXHAUSTED,
+                ListeningStage.GENERATION,
+                "Listening 중복 방지 기준을 만족하는 문항이 부족합니다.",
+                False,
+            )
+
+        finalized_items = [
+            item.model_copy(update={"item_index": index})
+            for index, item in enumerate(accepted_items[:expected_count], start=1)
+        ]
+        return ListeningSetGenerationResponse(
+            request_id=request.request_id,
+            generation_version=LISTENING_GENERATION_V35_VERSION,
+            policy_version=request.policy_version,
+            model_config_version=request.model_config_version,
+            items=finalized_items,
+            usage=ListeningUsage(
+                generation=StageUsage(
+                    latency_ms=total_latency_ms,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    provider=last_provider,
+                    model=last_model,
+                    prompt_version=LISTENING_GENERATION_V35_PROMPT_VERSION,
+                )
+            ),
+            content_diversity_policy_version=CONTENT_DIVERSITY_POLICY_VERSION,
+            language_complexity_policy_version=LANGUAGE_COMPLEXITY_POLICY_VERSION,
+            diversity_summary=DiversitySummary(
+                policy_version=CONTENT_DIVERSITY_POLICY_VERSION,
+                candidate_count=stats.candidate_count,
+                accepted_count=len(finalized_items),
+                rejected_exact=stats.rejected_exact,
+                rejected_similarity=stats.rejected_similarity,
+                rejected_structural=stats.rejected_structural,
+                rejected_background_knowledge=stats.rejected_background_knowledge,
+                fallback_used=fallback_used,
+            ),
+        )
+
+    def _phase35_candidate(
+        self,
+        request: ListeningSetGenerationRequest,
+        item,
+    ) -> ListeningItem | None:
+        if item.diversity_metadata is None or item.language_complexity_band is None:
+            return None
+        expected_band = resolve_listening_complexity_band(
+            request.set_context.difficulty.value,
+            request.language_complexity,
+        )
+        if item.language_complexity_band != expected_band or not item.safety.passed:
+            return None
+        minimum, maximum = self._duration_range(request)
+        if not minimum <= item.estimated_audio_seconds <= maximum:
+            return None
+        normalized = normalize_text(item.source_text, request.user_context.learning_language)
+        content_hash = hashlib.sha256(normalized.text.encode("utf-8")).hexdigest()
+        key = similarity_key(item.source_text, request.user_context.learning_language)
+        return ListeningItem(
+            item_index=item.item_index,
+            source_text=item.source_text,
+            normalized_source_text=normalized.text,
+            reference_meanings=item.reference_meanings,
+            key_meaning_units=item.key_meaning_units,
+            target_keywords=item.target_keywords,
+            estimated_audio_seconds=item.estimated_audio_seconds,
+            content_hash=content_hash,
+            similarity_key=hashlib.sha256(key.encode("utf-8")).hexdigest(),
+            safety=item.safety,
+            language_complexity_band=item.language_complexity_band,
+            diversity_metadata=item.diversity_metadata,
+        )
+
+    @staticmethod
+    def _effective_diversity_context(
+        request: ListeningSetGenerationRequest,
+    ) -> DiversityContext:
+        exact = list(request.diversity_context.exact_content_hashes_90d)
+        exact.extend(request.constraints.recent_content_hashes)
+        same_feature = list(request.diversity_context.same_feature_recent)
+        same_feature.extend(
+            DiversityHistoryEntry(
+                source_type=GenerationSourceType.LISTENING,
+                content=summary,
+            )
+            for summary in request.constraints.recent_similarity_summaries
+            if summary.strip()
+        )
+        return request.diversity_context.model_copy(
+            deep=True,
+            update={
+                "exact_content_hashes_90d": list(dict.fromkeys(exact))[:200],
+                "same_feature_recent": same_feature[:80],
+            },
+        )
 
     async def _generate_once(
         self,

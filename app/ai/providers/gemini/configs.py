@@ -134,6 +134,72 @@ def build_language_learning_generation_config(
     )
 
 
+def build_language_learning_vocab_design_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0.4,
+        top_p=0.8,
+        top_k=30,
+        max_output_tokens=2048,
+        response_mime_type="application/json",
+        response_schema=sanitize_gemini_response_schema(schema),
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+    )
+
+
+def build_language_learning_vocab_repair_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0.2,
+        top_p=0.6,
+        top_k=20,
+        max_output_tokens=4096,
+        response_mime_type="application/json",
+        response_schema=sanitize_gemini_response_schema(schema),
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+    )
+
+
+def build_language_learning_choice_verification_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0,
+        top_p=0.2,
+        top_k=10,
+        max_output_tokens=256,
+        response_mime_type="application/json",
+        response_schema=sanitize_gemini_response_schema(schema),
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
+
+
+def build_language_learning_task_verification_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0,
+        top_p=0.2,
+        top_k=10,
+        max_output_tokens=512,
+        response_mime_type="application/json",
+        response_schema=sanitize_gemini_response_schema(schema),
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
 def build_language_learning_evaluation_config(
     rule: str,
     schema: dict,

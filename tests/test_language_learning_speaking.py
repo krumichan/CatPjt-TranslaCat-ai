@@ -24,10 +24,12 @@ from app.features.language_learning.speaking.prompts import (
     build_conversation_prompt,
 )
 from app.features.language_learning.speaking.stt_service import (
+    FasterWhisperSpeakingSttProvider,
     SpeakingSttService,
     SttProviderResult,
     SttProviderSegment,
 )
+from app.features.speech_to_text import WhisperRuntimeResult, WhisperRuntimeSegment
 from app.features.language_learning.speaking.tts_service import SpeakingTtsService
 from app.schemas.language_learning_speaking import (
     AssistanceLevel,
@@ -523,6 +525,56 @@ class SpeakingSttServiceTest(unittest.IsolatedAsyncioTestCase):
             normalized_audio=normalized,
         )
         self.assertEqual(provider.calls, 3)
+
+    async def test_faster_whisper_provider_retries_without_vad_when_vad_removes_all_text(self):
+        class FakeRuntime:
+            ready = True
+
+            def __init__(self) -> None:
+                self.options = []
+
+            async def transcribe(self, audio, *, options, priority):
+                del audio, priority
+                self.options.append(options)
+                if len(self.options) == 1:
+                    return WhisperRuntimeResult(
+                        text="",
+                        language="ja",
+                        language_probability=0.99,
+                        duration_seconds=2.7,
+                        segments=[],
+                        provider="faster-whisper",
+                        model="base",
+                        model_version="test",
+                    )
+                return WhisperRuntimeResult(
+                    text="私は毎日水を飲みます。",
+                    language="ja",
+                    language_probability=0.99,
+                    duration_seconds=2.7,
+                    segments=[
+                        WhisperRuntimeSegment(
+                            start_seconds=0.1,
+                            end_seconds=2.5,
+                            text="私は毎日水を飲みます。",
+                            avg_logprob=-0.1,
+                            no_speech_probability=0.01,
+                        )
+                    ],
+                    provider="faster-whisper",
+                    model="base",
+                    model_version="test",
+                )
+
+        runtime = FakeRuntime()
+        provider = FasterWhisperSpeakingSttProvider(runtime=runtime)
+        result = await provider.transcribe(make_wav(2.7), language="ja")
+
+        self.assertEqual("私は毎日水を飲みます。", result.text)
+        self.assertEqual(2, len(runtime.options))
+        self.assertTrue(runtime.options[0]["vad_filter"])
+        self.assertFalse(runtime.options[1]["vad_filter"])
+        self.assertNotIn("vad_parameters", runtime.options[1])
 
     async def test_stt_passes_phrase_hints_to_provider(self):
         provider = FakeSttProvider()

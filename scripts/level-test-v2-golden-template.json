@@ -1,0 +1,736 @@
+{
+  "_meta": {
+    "purpose": "PHASE35_LEVEL_TEST_V2_HUMAN_GOLDEN_TEMPLATE",
+    "qualityEvidence": "AFTER_REAL_SCORES_ARE_FILLED",
+    "sampleCount": 40,
+    "instructionsKo": [
+      "aiScore의 null을 고정 Model/Prompt/Policy Version으로 실행한 실제 AI 점수로 교체하세요.",
+      "서로 다른 실제 평가자 2명이 AI 점수를 보지 않고 채점한 결과로 humanScores의 null을 교체하세요.",
+      "동일 평가자의 evaluatorId를 Dataset 전체에서 일관되게 사용하세요.",
+      "모든 null을 교체한 뒤 scripts/run_level_test_v2_evaluation_benchmark.py를 실행하세요."
+    ],
+    "passRule": "AI와 Human 평균의 차이가 ±10점 이내인 비율이 전체 및 모든 domain/item/language Segment에서 70% 이상"
+  },
+  "samples": [
+    {
+      "sampleId": "p35-level-001",
+      "domain": "WRITING",
+      "itemType": "WRITING_GUIDED_SENTENCE",
+      "language": "ja",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-002",
+      "domain": "WRITING",
+      "itemType": "WRITING_SCENARIO_RESPONSE",
+      "language": "en",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-003",
+      "domain": "WRITING",
+      "itemType": "WRITING_SHORT_PARAGRAPH",
+      "language": "ko",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-004",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DICTATION",
+      "language": "ja",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-005",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_INTERPRETATION",
+      "language": "en",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-006",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "language": "ko",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-007",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_GUIDED_RESPONSE",
+      "language": "ja",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-008",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_SHORT_RESPONSE",
+      "language": "en",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-009",
+      "domain": "WRITING",
+      "itemType": "WRITING_GUIDED_SENTENCE",
+      "language": "ko",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-010",
+      "domain": "WRITING",
+      "itemType": "WRITING_SCENARIO_RESPONSE",
+      "language": "ja",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-011",
+      "domain": "WRITING",
+      "itemType": "WRITING_SHORT_PARAGRAPH",
+      "language": "en",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-012",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DICTATION",
+      "language": "ko",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-013",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_INTERPRETATION",
+      "language": "ja",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-014",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "language": "en",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-015",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_GUIDED_RESPONSE",
+      "language": "ko",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-016",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_SHORT_RESPONSE",
+      "language": "ja",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-017",
+      "domain": "WRITING",
+      "itemType": "WRITING_GUIDED_SENTENCE",
+      "language": "en",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-018",
+      "domain": "WRITING",
+      "itemType": "WRITING_SCENARIO_RESPONSE",
+      "language": "ko",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-019",
+      "domain": "WRITING",
+      "itemType": "WRITING_SHORT_PARAGRAPH",
+      "language": "ja",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-020",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DICTATION",
+      "language": "en",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-021",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_INTERPRETATION",
+      "language": "ko",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-022",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "language": "ja",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-023",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_GUIDED_RESPONSE",
+      "language": "en",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-024",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_SHORT_RESPONSE",
+      "language": "ko",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-025",
+      "domain": "WRITING",
+      "itemType": "WRITING_GUIDED_SENTENCE",
+      "language": "ja",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-026",
+      "domain": "WRITING",
+      "itemType": "WRITING_SCENARIO_RESPONSE",
+      "language": "en",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-027",
+      "domain": "WRITING",
+      "itemType": "WRITING_SHORT_PARAGRAPH",
+      "language": "ko",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-028",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DICTATION",
+      "language": "ja",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-029",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_INTERPRETATION",
+      "language": "en",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-030",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "language": "ko",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-031",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_GUIDED_RESPONSE",
+      "language": "ja",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-032",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_SHORT_RESPONSE",
+      "language": "en",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-033",
+      "domain": "WRITING",
+      "itemType": "WRITING_GUIDED_SENTENCE",
+      "language": "ko",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-034",
+      "domain": "WRITING",
+      "itemType": "WRITING_SCENARIO_RESPONSE",
+      "language": "ja",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-035",
+      "domain": "WRITING",
+      "itemType": "WRITING_SHORT_PARAGRAPH",
+      "language": "en",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-036",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DICTATION",
+      "language": "ko",
+      "complexityBand": 1,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-037",
+      "domain": "LISTENING",
+      "itemType": "LISTENING_INTERPRETATION",
+      "language": "ja",
+      "complexityBand": 2,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-038",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "language": "en",
+      "complexityBand": 3,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-039",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_GUIDED_RESPONSE",
+      "language": "ko",
+      "complexityBand": 4,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    },
+    {
+      "sampleId": "p35-level-040",
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_SHORT_RESPONSE",
+      "language": "ja",
+      "complexityBand": 5,
+      "aiScore": null,
+      "humanScores": [
+        {
+          "evaluatorId": "rater-1",
+          "score": null
+        },
+        {
+          "evaluatorId": "rater-2",
+          "score": null
+        }
+      ]
+    }
+  ]
+}

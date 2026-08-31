@@ -9,6 +9,7 @@ from app.schemas.language_learning import (
 )
 
 DAILY_WRITING_GENERATION_PROMPT_VERSION = "daily-writing-generation-v1"
+DAILY_WRITING_GENERATION_V35_PROMPT_VERSION = "writing-generation-diversity-v2"
 WRITING_EVALUATION_PROMPT_VERSION = "writing-evaluation-v1"
 LEVEL_TEST_QUESTION_PROMPT_VERSION = "writing-level-test-question-v1"
 
@@ -29,7 +30,9 @@ Do NOT reveal a translation answer or model answer in this response.
 # Difficulty
 - REVIEW: reinforce learned content, prior mistakes, or easier expressions.
 - NORMAL: stay close to the learner's current Base Level and Learning Profile.
-- CHALLENGE: use slightly more advanced grammar, vocabulary, sentence length, or expression.
+- CHALLENGE: increase LANGUAGE complexity through grammar, vocabulary, clause structure, register,
+  hedging, indirectness, and discourse connection. Never increase difficulty by requiring specialist
+  background knowledge, abstract social debate, trivia, calculations, or philosophical reasoning.
 - Obey the requested REVIEW/NORMAL/CHALLENGE counts exactly.
 
 # Keywords
@@ -38,6 +41,15 @@ Do NOT reveal a translation answer or model answer in this response.
 - SYSTEM and CUSTOM are equal in priority; source is metadata only.
 - Do not force every selected keyword into every sentence.
 - Avoid excessive semantic/grammar-pattern duplication within one Daily Set.
+- A keyword is a learning signal/material, not a question template. The same keyword may appear across
+  items only when scenario, communicative intent, task archetype, and grammar focus are meaningfully different.
+
+# Phase 3.5 diversity metadata
+When contentDiversityPolicyVersion is language-learning-diversity-v1, every item MUST also return:
+- languageComplexityBand (1..5) matching the item difficulty and request languageComplexity.
+- diversityMetadata with scenarioCategory, communicativeIntent, taskArchetype, grammarFocusCodes,
+  lexicalFocusCodes, semanticSummary, and requiresBackgroundKnowledge=false.
+- Do not reproduce or closely paraphrase diversityContext entries.
 
 # Personalization balance
 Use the supplied data as signals, not rigid quotas. Aim roughly for:
@@ -67,6 +79,15 @@ You are the Writing Evaluation engine for TranslaCat Language Learning.
 # Evaluation principles
 Evaluate the learner's answer semantically, not by exact string matching.
 A natural alternative answer must not be marked wrong merely because it differs from a reference phrasing.
+For LEVEL_TEST guided tasks, judge whether the learner expressed the facts/intents requested by the prompt.
+Do NOT score whether a proposed business solution, strategy, opinion, or real-world decision is objectively good,
+creative, feasible, or expert-level. Content quality matters only insofar as the requested communicative task was expressed.
+When context=LEVEL_TEST and taskType=WRITING_TRANSLATION, MEANING means semantic preservation of
+translationSourceText in the learner's learningLanguage answer. Do not reward added ideas and do not require
+one fixed reference wording.
+When context=LEVEL_TEST and taskType is a guided writing task, use providedFacts, requiredIntents, and
+responseConstraints as the task-fulfillment contract. Accept natural paraphrases and different organization.
+Do not penalize the learner for failing to invent information that is not supplied by the task.
 
 Score ONLY the following five raw metrics from 0 to 100:
 - MEANING: accuracy of intended meaning / requested task fulfillment.

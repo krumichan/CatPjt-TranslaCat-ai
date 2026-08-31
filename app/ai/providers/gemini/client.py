@@ -1,7 +1,11 @@
+import asyncio
 import base64
 import io
 import logging
+import re
+import time
 import wave
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException
@@ -24,7 +28,17 @@ from app.schemas.voice_translation import VoiceTranslationProviderPayload
 logger = logging.getLogger(__name__)
 
 
+class GeminiTtsQuotaCooldownError(RuntimeError):
+    def __init__(self, retry_after_seconds: float) -> None:
+        self.retry_after_seconds = max(0.0, retry_after_seconds)
+        super().__init__(
+            f"Gemini TTS quota cooldown is active; retry after {self.retry_after_seconds:.1f}s"
+        )
+
+
 class GeminiService:
+    _tts_quota_cooldown_until: float = 0.0
+
     def __init__(self) -> None:
         self._client = None
         self.model_name = settings.GEMINI_MODEL_NAME
@@ -115,49 +129,163 @@ class GeminiService:
             language=language,
             speed=speed,
         )
+        self._raise_if_tts_quota_cooldown_active()
 
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=settings.GEMINI_TTS_MODEL_NAME,
-                contents=instruction,
-                config=types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name=voice,
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=settings.GEMINI_TTS_MODEL_NAME,
+                    contents=instruction,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["AUDIO"],
+                        speech_config=types.SpeechConfig(
+                            voice_config=types.VoiceConfig(
+                                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                    voice_name=voice,
+                                )
                             )
-                        )
+                        ),
                     ),
-                ),
+                )
+                pcm = self._extract_tts_pcm(response)
+                wav_bytes = self._pcm_to_wav(pcm)
+                return SpeechSynthesisResult(
+                    audio_bytes=wav_bytes,
+                    content_type="audio/wav",
+                    provider="gemini",
+                    model=settings.GEMINI_TTS_MODEL_NAME,
+                    duration_seconds=len(pcm) / (24_000 * 2),
+                )
+            except ValueError as exc:
+                if not self._is_retryable_empty_tts_response(exc) or attempt >= max_attempts:
+                    logger.error("Gemini TTS API Call Error: %s", exc)
+                    raise
+                delay_seconds = 0.35 * attempt
+                logger.warning(
+                    "Gemini TTS returned no usable audio; retrying. attempt=%d/%d delay=%.2fs reason=%s",
+                    attempt,
+                    max_attempts,
+                    delay_seconds,
+                    exc,
+                )
+                await asyncio.sleep(delay_seconds)
+            except Exception as exc:
+                retry_delay = self._tts_quota_retry_delay_seconds(exc)
+                if retry_delay is not None:
+                    self._activate_tts_quota_cooldown(retry_delay)
+                    logger.warning(
+                        "Gemini TTS daily quota exhausted; provider cooldown activated. retryAfterSeconds=%.3f",
+                        retry_delay,
+                    )
+                else:
+                    logger.error("Gemini TTS API Call Error: %s", exc)
+                raise
+
+        raise RuntimeError("Gemini TTS retry loop exhausted unexpectedly")
+
+    @classmethod
+    def _raise_if_tts_quota_cooldown_active(cls) -> None:
+        remaining = cls._tts_quota_cooldown_until - time.monotonic()
+        if remaining > 0:
+            raise GeminiTtsQuotaCooldownError(remaining)
+
+    @classmethod
+    def _activate_tts_quota_cooldown(cls, retry_delay_seconds: float) -> None:
+        if retry_delay_seconds <= 0:
+            return
+        cls._tts_quota_cooldown_until = max(
+            cls._tts_quota_cooldown_until,
+            time.monotonic() + retry_delay_seconds,
+        )
+
+    @classmethod
+    def _tts_quota_retry_delay_seconds(cls, exc: Exception) -> float | None:
+        text = str(exc)
+        if "RESOURCE_EXHAUSTED" not in text and "quota" not in text.lower() and "429" not in text:
+            return None
+
+        for value in (
+            getattr(exc, "details", None),
+            getattr(exc, "body", None),
+            getattr(exc, "response_json", None),
+            getattr(exc, "args", None),
+        ):
+            delay = cls._find_retry_delay(value)
+            if delay is not None:
+                return delay
+        return cls._find_retry_delay(text)
+
+    @classmethod
+    def _find_retry_delay(cls, value: Any) -> float | None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                if str(key).lower().endswith("retrydelay"):
+                    parsed = cls._parse_retry_delay(nested)
+                    if parsed is not None:
+                        return parsed
+                found = cls._find_retry_delay(nested)
+                if found is not None:
+                    return found
+            return None
+        if isinstance(value, (list, tuple)):
+            for nested in value:
+                found = cls._find_retry_delay(nested)
+                if found is not None:
+                    return found
+            return None
+        if isinstance(value, str):
+            match = re.search(
+                r"[\"']retryDelay[\"']\s*:\s*[\"'](?P<delay>[0-9]+(?:\.[0-9]+)?s)[\"']",
+                value,
+                re.IGNORECASE,
             )
-            candidates = getattr(response, "candidates", None) or []
-            if not candidates:
-                raise ValueError("Gemini TTS response has no candidate")
-            content = getattr(candidates[0], "content", None)
-            parts = getattr(content, "parts", None) or []
-            if not parts:
-                raise ValueError("Gemini TTS response has no audio part")
-            inline_data = getattr(parts[0], "inline_data", None)
+            if match:
+                return cls._parse_retry_delay(match.group("delay"))
+        return None
+
+    @staticmethod
+    def _parse_retry_delay(value: Any) -> float | None:
+        if isinstance(value, (int, float)):
+            return float(value) if value > 0 else None
+        if not isinstance(value, str):
+            return None
+        match = re.fullmatch(r"(?P<seconds>[0-9]+(?:\.[0-9]+)?)s", value.strip())
+        if not match:
+            return None
+        seconds = float(match.group("seconds"))
+        return seconds if seconds > 0 else None
+
+    @staticmethod
+    def _extract_tts_pcm(response: Any) -> bytes:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            raise ValueError("Gemini TTS response has no candidate")
+        content = getattr(candidates[0], "content", None)
+        parts = getattr(content, "parts", None) or []
+        if not parts:
+            raise ValueError("Gemini TTS response has no audio part")
+
+        for part in parts:
+            inline_data = getattr(part, "inline_data", None)
             raw_audio = getattr(inline_data, "data", None)
             if not raw_audio:
-                raise ValueError("Gemini TTS audio output is empty")
-
+                continue
             if isinstance(raw_audio, str):
-                pcm = base64.b64decode(raw_audio)
+                decoded = base64.b64decode(raw_audio)
             else:
-                pcm = bytes(raw_audio)
-            wav_bytes = self._pcm_to_wav(pcm)
-            return SpeechSynthesisResult(
-                audio_bytes=wav_bytes,
-                content_type="audio/wav",
-                provider="gemini",
-                model=settings.GEMINI_TTS_MODEL_NAME,
-                duration_seconds=len(pcm) / (24_000 * 2),
-            )
-        except Exception as exc:
-            logger.error("Gemini TTS API Call Error: %s", exc)
-            raise
+                decoded = bytes(raw_audio)
+            if decoded:
+                return decoded
+        raise ValueError("Gemini TTS audio output is empty")
+
+    @staticmethod
+    def _is_retryable_empty_tts_response(exc: ValueError) -> bool:
+        return str(exc) in {
+            "Gemini TTS response has no candidate",
+            "Gemini TTS response has no audio part",
+            "Gemini TTS audio output is empty",
+        }
 
     @staticmethod
     def _build_tts_instruction(*, text: str, language: str, speed: str) -> str:

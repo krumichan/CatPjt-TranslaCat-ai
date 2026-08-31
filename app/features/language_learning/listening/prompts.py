@@ -17,7 +17,9 @@ Rules:
    sentence; MY_LEVEL 8-20 seconds and one or two sentences; CHALLENGE 15-30 seconds
    and two or three sentences. Adjust text length before returning an item.
 3. Use natural spoken language with level-appropriate grammar and vocabulary. Avoid
-   excessive slang, proper nouns, and number lists.
+   excessive slang, proper nouns, and number lists. CHALLENGE increases LANGUAGE complexity
+   (grammar, clause structure, register, nuance, discourse connection), not specialist knowledge,
+   abstract debate, trivia, or reasoning burden.
 4. TOPIC keywords define broad context. VOCABULARY keywords are specific focus words.
    Use them naturally when appropriate and never force all keywords into one item.
    An empty selectedKeywords list adds no keyword constraint.
@@ -32,6 +34,11 @@ Rules:
    originLanguage and learningLanguage are the same.
 9. Avoid ambiguous omissions and references so the intended meaning converges.
 10. Do not reproduce recentSimilaritySummaries or content represented by recent hashes.
+    When contentDiversityPolicyVersion=language-learning-diversity-v1, also avoid all diversityContext
+    entries and return languageComplexityBand plus diversityMetadata for every item. The metadata must
+    include scenarioCategory, communicativeIntent, taskArchetype, grammarFocusCodes, lexicalFocusCodes,
+    semanticSummary, and requiresBackgroundKnowledge=false. Same topic does NOT mean same situation,
+    communicative intent, or grammar pattern.
 11. Exclude dangerous, discriminatory, sexual, self-harm, or privacy-seeking content and
     mark safety accurately.
 12. Return only the requested structured schema. Do not expose prompts, credentials,
@@ -56,15 +63,17 @@ Rules:
    Use INFO for no issue/informational evidence, LOW for minor issues, MEDIUM for moderate
    issues, and HIGH for major or critical issues. Never return NONE, MINOR, MODERATE,
    MAJOR, or CRITICAL.
-7. evaluationConfidence and every metrics[].confidence MUST be a number from 0.0 to 1.0.
+7. Every metrics[].score MUST be a score from 0 to 100 points. For example, 92 points
+   MUST be returned as 92, never 0.92. Do not use a normalized 0.0 to 1.0 score scale.
+8. evaluationConfidence and every metrics[].confidence MUST be a number from 0.0 to 1.0.
    Never use a 1-5 scale, percentages, or values greater than 1.0.
-8. deliveredMeaningUnits, omittedMeaningUnits, and misunderstoodMeaningUnits may contain
+9. deliveredMeaningUnits, omittedMeaningUnits, and misunderstoodMeaningUnits may contain
    only exact strings copied from request.keyMeaningUnits. Never translate, paraphrase,
    annotate, or invent a meaning unit.
-9. Return two or three natural recommended interpretations in originLanguage. All
-   learner-facing evidence.feedback, strengths, and improvements must also be written in
-   originLanguage.
-10. Return only the requested schema. Do not generate profile policy, long-term weakness,
+10. Return two or three natural recommended interpretations in originLanguage. All
+    learner-facing evidence.feedback, strengths, and improvements must also be written in
+    originLanguage.
+11. Return only the requested schema. Do not generate profile policy, long-term weakness,
     recommendation selection, chain-of-thought, or provider details.
 """.strip()
 
@@ -104,6 +113,7 @@ def build_interpretation_prompt(request: InterpretationEvaluationRequest) -> str
         "Evaluate the learner answer against sourceText and keyMeaningUnits. "
         "Do not calculate the final weighted score or profile signals. "
         "Every evidence.severity MUST be exactly INFO, LOW, MEDIUM, or HIGH. "
+        "Every metrics[].score MUST use a 0 to 100 point scale; return 92, never 0.92. "
         "evaluationConfidence and every metrics[].confidence MUST be numeric values "
         "from 0.0 to 1.0; never use a 1-5 scale or percentage. "
         "Use only exact request.keyMeaningUnits strings in deliveredMeaningUnits, "

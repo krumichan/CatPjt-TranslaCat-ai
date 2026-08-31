@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -10,6 +11,14 @@ from pydantic import BaseModel, ValidationError
 
 from app.ai.ports import TextGenerationProvider
 from app.core.config import settings
+from app.features.language_learning.quality import (
+    CONTENT_DIVERSITY_POLICY_VERSION,
+    LANGUAGE_COMPLEXITY_POLICY_VERSION,
+    DiversityCandidate,
+    DiversityValidator,
+    DiversityValidationStats,
+    resolve_daily_complexity_band,
+)
 from app.features.language_learning.writing.policy import (
     EVALUATION_RUBRIC_VERSION,
     SCORING_POLICY_VERSION,
@@ -17,6 +26,7 @@ from app.features.language_learning.writing.policy import (
 )
 from app.features.language_learning.writing.prompts import (
     DAILY_WRITING_GENERATION_PROMPT_VERSION,
+    DAILY_WRITING_GENERATION_V35_PROMPT_VERSION,
     LEVEL_TEST_QUESTION_PROMPT_VERSION,
     WRITING_EVALUATION_PROMPT_VERSION,
     build_daily_writing_generation_prompt,
@@ -26,6 +36,7 @@ from app.features.language_learning.writing.prompts import (
 from app.schemas.language_learning import (
     AiWritingEvaluationPayload,
     DailyWritingGenerationRequest,
+    DifficultyDistribution,
     DailyWritingGenerationResponse,
     DailyWritingItem,
     LevelTestQuestionPayload,
@@ -34,6 +45,11 @@ from app.schemas.language_learning import (
     WritingEvaluationRequest,
     WritingEvaluationResponse,
     WritingEvaluationScores,
+)
+from app.schemas.language_learning_quality import (
+    DiversityHistoryEntry,
+    DiversitySummary,
+    GenerationSourceType,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +85,39 @@ _DAILY_WRITING_GENERATION_SCHEMA: dict[str, Any] = {
                         },
                     },
                     "focusReason": {"type": "STRING"},
+                    "languageComplexityBand": {"type": "INTEGER"},
+                    "diversityMetadata": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "scenarioCategory": {
+                                "type": "STRING",
+                                "enum": [
+                                    "DAILY_LIFE", "WORK", "TRAVEL", "SHOPPING",
+                                    "FOOD", "SERVICE", "LEARNING", "HOBBY",
+                                    "DIGITAL_LIFE", "SOCIAL", "SCHEDULE", "HEALTH_GENERAL"
+                                ],
+                            },
+                            "communicativeIntent": {
+                                "type": "STRING",
+                                "enum": [
+                                    "DESCRIBE", "REQUEST", "CONFIRM", "REPORT", "SUGGEST",
+                                    "DECLINE", "APOLOGIZE", "COMPARE", "EXPLAIN_REASON",
+                                    "ASK_INFORMATION", "GIVE_INSTRUCTION", "EXPRESS_PREFERENCE",
+                                    "SUMMARIZE"
+                                ],
+                            },
+                            "taskArchetype": {"type": "STRING"},
+                            "grammarFocusCodes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "lexicalFocusCodes": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "semanticSummary": {"type": "STRING"},
+                            "requiresBackgroundKnowledge": {"type": "BOOLEAN"},
+                        },
+                        "required": [
+                            "scenarioCategory", "communicativeIntent", "taskArchetype",
+                            "grammarFocusCodes", "lexicalFocusCodes", "semanticSummary",
+                            "requiresBackgroundKnowledge"
+                        ],
+                    },
                 },
                 "required": [
                     "order",
@@ -242,6 +291,12 @@ class LanguageLearningWritingService:
         self,
         request: DailyWritingGenerationRequest,
     ) -> DailyWritingGenerationResponse:
+        if (
+            request.content_diversity_policy_version
+            == CONTENT_DIVERSITY_POLICY_VERSION
+        ):
+            return await self._generate_daily_v35(request)
+
         prompt = build_daily_writing_generation_prompt(request)
 
         payload = await self._call_and_validate(
@@ -261,6 +316,281 @@ class LanguageLearningWritingService:
             prompt_version=DAILY_WRITING_GENERATION_PROMPT_VERSION,
             items=payload.items,
         )
+
+    async def _generate_daily_v35(
+        self,
+        request: DailyWritingGenerationRequest,
+    ) -> DailyWritingGenerationResponse:
+        remaining = {
+            "REVIEW": request.difficulty_distribution.review,
+            "NORMAL": request.difficulty_distribution.normal,
+            "CHALLENGE": request.difficulty_distribution.challenge,
+        }
+        accepted: list[DailyWritingItem] = []
+        accepted_diversity: list[DiversityCandidate] = []
+        all_candidates: list[DailyWritingItem] = []
+        stats = DiversityValidationStats()
+
+        for provider_attempt in range(3):
+            missing_total = sum(remaining.values())
+            if missing_total <= 0:
+                break
+            candidate_distribution = self._expanded_distribution(remaining)
+            current_history = list(request.diversity_context.current_session)
+            current_history.extend(
+                DiversityHistoryEntry(
+                    source_type=GenerationSourceType.WRITING,
+                    content=item.origin_text,
+                    content_hash=(
+                        item.diversity_metadata.content_hash
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    scenario_category=(
+                        item.diversity_metadata.scenario_category
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    communicative_intent=(
+                        item.diversity_metadata.communicative_intent
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    task_archetype=(
+                        item.diversity_metadata.task_archetype
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    grammar_focus_codes=(
+                        item.diversity_metadata.grammar_focus_codes
+                        if item.diversity_metadata
+                        else []
+                    ),
+                    semantic_summary=(
+                        item.diversity_metadata.semantic_summary
+                        if item.diversity_metadata
+                        else None
+                    ),
+                    age_days=0,
+                )
+                for item in accepted
+            )
+            candidate_request = request.model_copy(
+                deep=True,
+                update={
+                    "sentence_count": candidate_distribution.total,
+                    "difficulty_distribution": candidate_distribution,
+                    "diversity_context": request.diversity_context.model_copy(
+                        deep=True,
+                        update={"current_session": current_history},
+                    ),
+                },
+            )
+            payload = await self._call_daily_candidate_batch(
+                candidate_request,
+                provider_attempt=provider_attempt,
+            )
+            all_candidates.extend(payload.items)
+            validator = DiversityValidator(request.diversity_context)
+            for candidate in payload.items:
+                difficulty = candidate.difficulty.value
+                if remaining.get(difficulty, 0) <= 0:
+                    continue
+                if not self._valid_phase35_daily_candidate(request, candidate):
+                    continue
+                assert candidate.diversity_metadata is not None
+                decision = validator.validate(
+                    DiversityCandidate(candidate.origin_text, candidate.diversity_metadata),
+                    accepted_diversity,
+                )
+                stats.record(decision)
+                if not decision.accepted:
+                    continue
+                finalized = candidate.model_copy(
+                    deep=True,
+                    update={"diversity_metadata": decision.metadata},
+                )
+                accepted.append(finalized)
+                accepted_diversity.append(
+                    DiversityCandidate(finalized.origin_text, decision.metadata)
+                )
+                remaining[difficulty] -= 1
+
+        fallback_used = False
+        if sum(remaining.values()) > 0:
+            fallback_used = True
+            validator = DiversityValidator(
+                request.diversity_context,
+                relaxed_history=True,
+            )
+            for candidate in all_candidates:
+                difficulty = candidate.difficulty.value
+                if remaining.get(difficulty, 0) <= 0:
+                    continue
+                if not self._valid_phase35_daily_candidate(request, candidate):
+                    continue
+                assert candidate.diversity_metadata is not None
+                decision = validator.validate(
+                    DiversityCandidate(candidate.origin_text, candidate.diversity_metadata),
+                    accepted_diversity,
+                )
+                if not decision.accepted:
+                    continue
+                finalized = candidate.model_copy(
+                    deep=True,
+                    update={"diversity_metadata": decision.metadata},
+                )
+                accepted.append(finalized)
+                accepted_diversity.append(
+                    DiversityCandidate(finalized.origin_text, decision.metadata)
+                )
+                remaining[difficulty] -= 1
+                if sum(remaining.values()) <= 0:
+                    break
+
+        if sum(remaining.values()) > 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "CONTENT_DIVERSITY_EXHAUSTED",
+                    "retryable": False,
+                    "message": "Daily Writing 중복 방지 기준을 만족하는 문항이 부족합니다.",
+                },
+            )
+
+        ordered = [
+            item.model_copy(update={"order": index})
+            for index, item in enumerate(accepted[: request.sentence_count], start=1)
+        ]
+        self._validate_daily_items(request, ordered)
+        return DailyWritingGenerationResponse(
+            request_id=request.request_id,
+            prompt_version=DAILY_WRITING_GENERATION_V35_PROMPT_VERSION,
+            items=ordered,
+            content_diversity_policy_version=CONTENT_DIVERSITY_POLICY_VERSION,
+            language_complexity_policy_version=LANGUAGE_COMPLEXITY_POLICY_VERSION,
+            diversity_summary=DiversitySummary(
+                policy_version=CONTENT_DIVERSITY_POLICY_VERSION,
+                candidate_count=stats.candidate_count,
+                accepted_count=len(ordered),
+                rejected_exact=stats.rejected_exact,
+                rejected_similarity=stats.rejected_similarity,
+                rejected_structural=stats.rejected_structural,
+                rejected_background_knowledge=stats.rejected_background_knowledge,
+                fallback_used=fallback_used,
+            ),
+        )
+
+    async def _call_daily_candidate_batch(
+        self,
+        request: DailyWritingGenerationRequest,
+        *,
+        provider_attempt: int,
+    ) -> _DailyWritingPayload:
+        prompt = build_daily_writing_generation_prompt(request)
+        started = time.perf_counter()
+        try:
+            result = await asyncio.wait_for(
+                self.provider.call(
+                    type_name="LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
+                    data=prompt,
+                    schema=_DAILY_WRITING_GENERATION_SCHEMA,
+                ),
+                timeout=self.generation_timeout_seconds,
+            )
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="daily writing generation 시간이 초과되었습니다.",
+            ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            if status in {429, 500, 502, 503, 504} and provider_attempt < 2:
+                logger.warning(
+                    "Phase 3.5 daily writing transient provider failure. request_id=%s attempt=%d/3",
+                    request.request_id,
+                    provider_attempt + 1,
+                )
+                return _DailyWritingPayload(items=[])
+            raise HTTPException(
+                status_code=502,
+                detail="daily writing generation에 실패했습니다.",
+            ) from exc
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=502, detail="daily writing generation 응답 Schema가 유효하지 않습니다.")
+        try:
+            payload = _DailyWritingPayload.model_validate(result)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="daily writing generation 응답 Schema가 유효하지 않습니다.",
+            ) from exc
+        logger.info(
+            "Phase 3.5 daily writing candidate batch completed. request_id=%s attempt=%d/3 candidates=%d latency_ms=%d",
+            request.request_id,
+            provider_attempt + 1,
+            len(payload.items),
+            int((time.perf_counter() - started) * 1000),
+        )
+        return payload
+
+    @staticmethod
+    def _expanded_distribution(remaining: dict[str, int]) -> DifficultyDistribution:
+        counts = {
+            "REVIEW": max(0, remaining.get("REVIEW", 0)),
+            "NORMAL": max(0, remaining.get("NORMAL", 0)),
+            "CHALLENGE": max(0, remaining.get("CHALLENGE", 0)),
+        }
+        missing_total = sum(counts.values())
+        if missing_total <= 0:
+            return DifficultyDistribution(review=0, normal=0, challenge=0)
+
+        pool_total = min(missing_total * 2, 40)
+        extra_total = pool_total - missing_total
+        allocation = counts.copy()
+        if extra_total > 0:
+            raw_extra = {
+                key: extra_total * value / missing_total
+                for key, value in counts.items()
+            }
+            for key, raw in raw_extra.items():
+                allocation[key] += int(raw)
+            remainder = pool_total - sum(allocation.values())
+            for key in sorted(
+                counts,
+                key=lambda item: (
+                    raw_extra[item] - int(raw_extra[item]),
+                    counts[item],
+                ),
+                reverse=True,
+            ):
+                if remainder <= 0:
+                    break
+                if counts[key] <= 0:
+                    continue
+                allocation[key] += 1
+                remainder -= 1
+
+        return DifficultyDistribution(
+            review=allocation["REVIEW"],
+            normal=allocation["NORMAL"],
+            challenge=allocation["CHALLENGE"],
+        )
+
+    @staticmethod
+    def _valid_phase35_daily_candidate(
+        request: DailyWritingGenerationRequest,
+        item: DailyWritingItem,
+    ) -> bool:
+        if item.diversity_metadata is None or item.language_complexity_band is None:
+            return False
+        expected_band = resolve_daily_complexity_band(
+            item.difficulty.value,
+            request.language_complexity,
+        )
+        return item.language_complexity_band == expected_band
 
     async def evaluate(
         self,

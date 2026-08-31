@@ -8,6 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from app.core.config import settings
+from app.schemas.language_learning_quality import (
+    DiversityContext,
+    DiversityMetadata,
+    DiversitySummary,
+    LanguageComplexityContext,
+)
 
 
 class CamelCaseModel(BaseModel):
@@ -135,6 +141,9 @@ class DailyWritingGenerationRequest(CamelCaseModel):
     recently_learned_expressions: list[str] = Field(default_factory=list, max_length=50)
     generation_date: date
     snapshot_id: str | None = Field(default=None, max_length=100)
+    language_complexity: LanguageComplexityContext | None = None
+    diversity_context: DiversityContext = Field(default_factory=DiversityContext)
+    content_diversity_policy_version: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def validate_distribution(self) -> "DailyWritingGenerationRequest":
@@ -152,12 +161,17 @@ class DailyWritingItem(CamelCaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=20)
     focus_metrics: list[WritingMetric] = Field(default_factory=list, max_length=5)
     focus_reason: str = Field(..., min_length=1, max_length=1000)
+    language_complexity_band: int | None = Field(default=None, ge=1, le=5)
+    diversity_metadata: DiversityMetadata | None = None
 
 
 class DailyWritingGenerationResponse(CamelCaseModel):
     request_id: str
     prompt_version: str
     items: list[DailyWritingItem]
+    content_diversity_policy_version: str | None = None
+    language_complexity_policy_version: str | None = None
+    diversity_summary: DiversitySummary | None = None
 
 
 class BilingualMessage(CamelCaseModel):
@@ -194,6 +208,12 @@ class WritingEvaluationRequest(CamelCaseModel):
     keywords: list[SelectedKeyword] = Field(default_factory=list, max_length=20)
     focus_metrics: list[WritingMetric] = Field(default_factory=list, max_length=5)
     learning_profile_summary: LearningProfileSummary | None = None
+    # Optional structured Level Test task contract. Daily Writing leaves these empty.
+    task_type: str | None = Field(default=None, max_length=100)
+    translation_source_text: str | None = Field(default=None, max_length=4000)
+    provided_facts: list[str] = Field(default_factory=list, max_length=12)
+    required_intents: list[str] = Field(default_factory=list, max_length=12)
+    response_constraints: list[str] = Field(default_factory=list, max_length=12)
 
 
 class AiWritingEvaluationPayload(CamelCaseModel):

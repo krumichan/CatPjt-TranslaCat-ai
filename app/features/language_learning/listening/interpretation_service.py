@@ -73,10 +73,11 @@ def _canonicalize_confidence(value: object) -> tuple[object, bool]:
 
 def _canonicalize_provider_payload(
     data: dict[str, object],
-) -> tuple[dict[str, object], int, int]:
+) -> tuple[dict[str, object], int, int, int]:
     normalized = copy.deepcopy(data)
     normalized_severity_count = 0
     normalized_confidence_count = 0
+    normalized_score_count = 0
 
     confidence, changed = _canonicalize_confidence(
         normalized.get("evaluationConfidence")
@@ -87,7 +88,33 @@ def _canonicalize_provider_payload(
 
     metrics = normalized.get("metrics")
     if not isinstance(metrics, list):
-        return normalized, normalized_severity_count, normalized_confidence_count
+        return (
+            normalized,
+            normalized_severity_count,
+            normalized_confidence_count,
+            normalized_score_count,
+        )
+
+    metric_scores = [
+        metric.get("score")
+        for metric in metrics
+        if isinstance(metric, dict)
+    ]
+    normalized_score_scale = (
+        len(metric_scores) == len(metrics)
+        and bool(metric_scores)
+        and all(
+            not isinstance(score, bool)
+            and isinstance(score, (int, float))
+            and 0.0 <= float(score) <= 1.0
+            for score in metric_scores
+        )
+    )
+    if normalized_score_scale:
+        for metric in metrics:
+            assert isinstance(metric, dict)
+            metric["score"] = float(metric["score"]) * 100.0
+            normalized_score_count += 1
 
     for metric in metrics:
         if not isinstance(metric, dict):
@@ -115,7 +142,12 @@ def _canonicalize_provider_payload(
                 item["severity"] = canonical
                 normalized_severity_count += 1
 
-    return normalized, normalized_severity_count, normalized_confidence_count
+    return (
+        normalized,
+        normalized_severity_count,
+        normalized_confidence_count,
+        normalized_score_count,
+    )
 
 
 def _provider_payload_preview(data: object) -> str:
@@ -258,6 +290,7 @@ class ListeningInterpretationService:
                     provider_data,
                     normalized_severity_count,
                     normalized_confidence_count,
+                    normalized_score_count,
                 ) = _canonicalize_provider_payload(result.data)
                 if normalized_severity_count:
                     logger.info(
@@ -282,6 +315,18 @@ class ListeningInterpretationService:
                         provider_attempt,
                         self.automatic_retries + 1,
                         normalized_confidence_count,
+                    )
+                if normalized_score_count:
+                    logger.info(
+                        "Listening interpretation metric score scale normalized. "
+                        "request_id=%s item_id=%s attempt_id=%s provider_attempt=%d/%d "
+                        "normalized_count=%d",
+                        request.request_id,
+                        request.item_id,
+                        request.attempt_id,
+                        provider_attempt,
+                        self.automatic_retries + 1,
+                        normalized_score_count,
                     )
                 payload = InterpretationEvaluationPayload.model_validate(provider_data)
                 self._validate_payload(request, payload)

@@ -5,6 +5,7 @@ from app.features.chat_translation.service import ChatTranslationService
 from app.features.language_learning.speaking.assistance_service import (
     SpeakingAssistanceService,
 )
+from app.features.language_learning.level_test.service import LevelTestService
 from app.features.language_learning.listening.audio_store import (
     TemporaryListeningAudioStore,
 )
@@ -109,6 +110,15 @@ _speaking_tts_service = SpeakingTtsService(
     audio_store=_speaking_audio_store,
 )
 _speaking_evaluation_service = SpeakingEvaluationService(_ai_provider)
+_level_test_service = LevelTestService(
+    provider=_ai_provider,
+    writing_service=_language_learning_writing_service,
+    dictation_service=_listening_dictation_service,
+    interpretation_service=_listening_interpretation_service,
+    audio_processor=_speaking_audio_processor,
+    stt_service=_speaking_stt_service,
+    speech_provider=_ai_provider,
+)
 _speaking_turn_service = SpeakingTurnService(
     audio_processor=_speaking_audio_processor,
     stt_service=_speaking_stt_service,
@@ -220,6 +230,10 @@ def get_stt_service() -> STTService:
 def get_ocr_service() -> OCRService:
     return _ocr_service
 
+
+
+def get_language_learning_level_test_service() -> LevelTestService:
+    return _level_test_service
 
 def get_receipt_analysis_service() -> ReceiptAnalysisService:
     return _receipt_analysis_service

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -27,6 +28,9 @@ from app.schemas.language_learning_speaking import (
     SttSegment,
     TranscriptResult,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -247,20 +251,39 @@ class FasterWhisperSpeakingSttProvider:
     ) -> SttProviderResult:
         if not self.runtime.ready:
             await self.runtime.warm_up()
+        base_options = {
+            "beam_size": 1,
+            "language": language,
+            "initial_prompt": (
+                ", ".join(phrase_hints[:20]) if phrase_hints else None
+            ),
+            "condition_on_previous_text": False,
+        }
         result = await self.runtime.transcribe(
             io.BytesIO(wav_bytes),
             options={
-                "beam_size": 1,
-                "language": language,
-                "initial_prompt": (
-                    ", ".join(phrase_hints[:20]) if phrase_hints else None
-                ),
+                **base_options,
                 "vad_filter": True,
                 "vad_parameters": {"min_silence_duration_ms": 500},
-                "condition_on_previous_text": False,
             },
             priority=InferencePriority.STANDARD,
         )
+        if not result.text.strip():
+            # SpeakingAudioProcessor has already rejected true low-RMS silence.  If
+            # VAD still removes the whole short utterance, retry once without VAD so
+            # quiet but valid learner speech is not classified as INVALID_AUDIO.
+            logger.warning(
+                "Speaking STT VAD removed all transcript; retrying without VAD. language=%s",
+                language,
+            )
+            result = await self.runtime.transcribe(
+                io.BytesIO(wav_bytes),
+                options={
+                    **base_options,
+                    "vad_filter": False,
+                },
+                priority=InferencePriority.STANDARD,
+            )
         segments = [
             SttProviderSegment(
                 start_seconds=segment.start_seconds,

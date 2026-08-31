@@ -5,8 +5,12 @@ from app.ai.providers.gemini.configs import (
     build_chat_ai_reply_config,
     build_default_gemini_config,
     build_fast_translation_config,
+    build_language_learning_choice_verification_config,
     build_language_learning_evaluation_config,
     build_language_learning_generation_config,
+    build_language_learning_task_verification_config,
+    build_language_learning_vocab_design_config,
+    build_language_learning_vocab_repair_config,
     build_voice_translation_config,
 )
 from app.core.config import settings
@@ -50,6 +54,7 @@ class GeminiConfigManager:
                 in {
                     "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
                     "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION",
+                    "LANGUAGE_LEARNING_LEVEL_TEST_V2_GENERATION",
                     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
                     "LANGUAGE_LEARNING_LISTENING_GENERATION",
                     "LANGUAGE_LEARNING_LISTENING_EXPLANATION",
@@ -63,11 +68,52 @@ class GeminiConfigManager:
                     )
                 )
             elif (
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_DESIGN"
+                and schema is not None
+            ):
+                self._config_cache[cache_key] = (
+                    build_language_learning_vocab_design_config(
+                        rule=rule,
+                        schema=schema,
+                    )
+                )
+            elif (
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_REPAIR"
+                and schema is not None
+            ):
+                self._config_cache[cache_key] = (
+                    build_language_learning_vocab_repair_config(
+                        rule=rule,
+                        schema=schema,
+                    )
+                )
+            elif (
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION"
+                and schema is not None
+            ):
+                self._config_cache[cache_key] = (
+                    build_language_learning_choice_verification_config(
+                        rule=rule,
+                        schema=schema,
+                    )
+                )
+            elif (
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_TASK_SUFFICIENCY_VERIFICATION"
+                and schema is not None
+            ):
+                self._config_cache[cache_key] = (
+                    build_language_learning_task_verification_config(
+                        rule=rule,
+                        schema=schema,
+                    )
+                )
+            elif (
                 type_name
                 in {
                     "LANGUAGE_LEARNING_WRITING_EVALUATION",
                     "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
                     "LANGUAGE_LEARNING_LISTENING_INTERPRETATION",
+                    "LANGUAGE_LEARNING_LEVEL_TEST_V2_SPEAKING_EVALUATION",
                 }
                 and schema is not None
             ):

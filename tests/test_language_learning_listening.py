@@ -657,6 +657,38 @@ class ListeningInterpretationTest(unittest.TestCase):
         self.assertEqual(2, len(task.recommended_interpretations))
         self.assertEqual("천천히 보고 싶다", task.omitted_meaning_units[0])
 
+    def test_normalized_zero_to_one_metric_scores_are_converted_to_points(self):
+        payload = interpretation_payload(0.90)
+        for metric in payload["metrics"]:
+            metric["score"] = metric["score"] / 100
+
+        service = ListeningInterpretationService(
+            FakeStructuredProvider([payload]),
+            automatic_retries=0,
+        )
+        response = asyncio.run(service.evaluate(interpretation_request()))
+        task = selected_task(response, ListeningTaskType.INTERPRETATION)
+
+        self.assertEqual(85, task.score)
+        self.assertEqual(
+            [90.0, 80.0, 70.0],
+            [metric.score for metric in task.metrics],
+        )
+
+    def test_mixed_metric_score_scales_are_not_rewritten(self):
+        payload = interpretation_payload(0.90)
+        payload["metrics"][2]["score"] = 1
+
+        service = ListeningInterpretationService(
+            FakeStructuredProvider([payload]),
+            automatic_retries=0,
+        )
+        response = asyncio.run(service.evaluate(interpretation_request()))
+        task = selected_task(response, ListeningTaskType.INTERPRETATION)
+
+        self.assertEqual(74, task.score)
+        self.assertEqual(1.0, task.metrics[2].score)
+
     def test_confidence_069_is_not_evaluable_but_070_is_evaluable(self):
         low = ListeningInterpretationService(
             FakeStructuredProvider([interpretation_payload(0.69)]),
