@@ -62,6 +62,7 @@ from app.schemas.language_learning_level_test import (
     LevelTestChoiceSemanticVerificationPayload,
     LevelTestDomain,
     LevelTestEvaluationResponse,
+    LevelTestFeedbackDetail,
     LevelTestItemType,
     LevelTestMetricResult,
     LevelTestMetricState,
@@ -310,7 +311,8 @@ class LevelTestService:
                     "maxAudioAdjustments=%d maxAnswerLengthAdjustments=%d answerLanguageAdjustments=%d "
                     "promptMarkupSanitizations=%d instructionLanguageRepairs=%d sentenceOrderShuffles=%d "
                     "optionKeyCanonicalizations=%d listeningSourceAliasRepairs=%d referencePayloadShapeRepairs=%d "
-                    "readingStructureRepairs=%d listeningStructureRepairs=%d vocabEmphasisRepairs=%d",
+                    "readingStructureRepairs=%d listeningStructureRepairs=%d vocabEmphasisRepairs=%d "
+                    "generationPlanIdRepairs=%d enumTokenRepairs=%d writingTranslationRepairs=%d",
                     request.request_id,
                     normalization.prompt_text_fallbacks,
                     normalization.task_archetype_compactions,
@@ -327,24 +329,42 @@ class LevelTestService:
                     normalization.reading_structure_repairs,
                     normalization.listening_structure_repairs,
                     normalization.vocab_emphasis_repairs,
+                    normalization.generation_plan_id_repairs,
+                    normalization.enum_token_repairs,
+                    normalization.writing_translation_repairs,
                 )
-            try:
-                payload = LevelTestQuestionGenerationPayload.model_validate(provider_data)
-            except ValidationError as exc:
-                schema_rejection_count += 1
-                telemetry.schema_rejections += 1
-                schema_reasons = self._schema_rejection_reasons(exc)
+
+            parsed_candidates, schema_reasons, rejected_candidates = (
+                self._parse_generation_candidates(provider_data)
+            )
+            if schema_reasons:
+                schema_rejection_count += rejected_candidates
+                telemetry.schema_rejections += rejected_candidates
                 rejection_reasons.update(schema_reasons)
                 rejected_summaries.extend(schema_reasons)
-                logger.warning(
-                    "Level Test generation schema candidate rejected. request_id=%s attempt=%d reasons=%s",
-                    request.request_id,
-                    provider_attempt + 1,
-                    schema_reasons,
-                )
+                if parsed_candidates:
+                    logger.info(
+                        "Level Test generation candidate schema partial salvage. request_id=%s attempt=%d "
+                        "validCandidates=%d rejectedCandidates=%d reasons=%s",
+                        request.request_id,
+                        provider_attempt + 1,
+                        len(parsed_candidates),
+                        rejected_candidates,
+                        schema_reasons,
+                    )
+                else:
+                    logger.warning(
+                        "Level Test generation candidates rejected by schema. request_id=%s attempt=%d "
+                        "validCandidates=0 rejectedCandidates=%d reasons=%s",
+                        request.request_id,
+                        provider_attempt + 1,
+                        rejected_candidates,
+                        schema_reasons,
+                    )
+            if not parsed_candidates:
                 continue
 
-            for candidate_index, generated_candidate in enumerate(payload.candidates):
+            for candidate_index, generated_candidate in parsed_candidates:
                 telemetry.candidates_seen += 1
                 candidate = generated_candidate
                 design: LevelTestVocabContextDesign | None = None
@@ -953,6 +973,18 @@ class LevelTestService:
         """
 
         schema = copy.deepcopy(LevelTestQuestionGenerationPayload.model_json_schema())
+        root_properties = schema.get("properties")
+        candidates_schema = (
+            root_properties.get("candidates")
+            if isinstance(root_properties, dict)
+            else None
+        )
+        if isinstance(candidates_schema, dict):
+            # Generation always asks for two. The parser can still salvage a valid
+            # sibling when the other candidate violates the provider contract.
+            candidates_schema["minItems"] = 2
+            candidates_schema["maxItems"] = 2
+
         reference_schema = schema.get("$defs", {}).get("LevelTestReferencePayload")
         if not isinstance(reference_schema, dict):
             return schema
@@ -960,22 +992,163 @@ class LevelTestService:
         if not isinstance(properties, dict):
             return schema
 
-        if require_vocab_plan_id and request.item_type == LevelTestItemType.VOCAB_CONTEXT_CHOICE:
-            candidate_schema = schema.get("$defs", {}).get("LevelTestQuestionCandidate")
-            if isinstance(candidate_schema, dict):
-                candidate_properties = candidate_schema.get("properties")
-                required = candidate_schema.get("required")
-                if isinstance(candidate_properties, dict):
-                    candidate_properties["generationPlanId"] = {"type": "string", "enum": ["A", "B"]}
-                if isinstance(required, list) and "generationPlanId" not in required:
-                    required.append("generationPlanId")
-
         candidate_schema = schema.get("$defs", {}).get("LevelTestQuestionCandidate")
         candidate_properties = (
             candidate_schema.get("properties")
             if isinstance(candidate_schema, dict)
             else None
         )
+        candidate_required = (
+            candidate_schema.get("required")
+            if isinstance(candidate_schema, dict)
+            else None
+        )
+
+        choice_types = {
+            LevelTestItemType.VOCAB_CONTEXT_CHOICE,
+            LevelTestItemType.VOCAB_PARAPHRASE_CHOICE,
+            LevelTestItemType.GRAMMAR_FORM_CHOICE,
+            LevelTestItemType.GRAMMAR_SENTENCE_ORDER,
+            LevelTestItemType.READING_GIST,
+            LevelTestItemType.READING_DETAIL,
+            LevelTestItemType.READING_DISCOURSE_FUNCTION,
+            LevelTestItemType.READING_TEXT_INFERENCE,
+            LevelTestItemType.LISTENING_GIST_CHOICE,
+            LevelTestItemType.LISTENING_DETAIL_CHOICE,
+        }
+        writing_types = {
+            LevelTestItemType.WRITING_TRANSLATION,
+            LevelTestItemType.WRITING_GUIDED_SENTENCE,
+            LevelTestItemType.WRITING_SCENARIO_RESPONSE,
+            LevelTestItemType.WRITING_SHORT_PARAGRAPH,
+        }
+        speaking_types = {
+            LevelTestItemType.SPEAKING_REPEAT,
+            LevelTestItemType.SPEAKING_GUIDED_RESPONSE,
+            LevelTestItemType.SPEAKING_SHORT_RESPONSE,
+        }
+
+        if isinstance(candidate_properties, dict):
+            candidate_properties["domain"] = {
+                "type": "string",
+                "enum": [request.domain.value],
+            }
+            candidate_properties["itemType"] = {
+                "type": "string",
+                "enum": [request.item_type.value],
+            }
+            candidate_properties["complexityBand"] = {
+                "type": "integer",
+                "enum": [request.target_complexity_band],
+            }
+            candidate_properties["instructionLanguage"] = {
+                "type": "string",
+                "enum": [request.learning_language],
+            }
+
+            if request.item_type == LevelTestItemType.VOCAB_CONTEXT_CHOICE:
+                if require_vocab_plan_id:
+                    candidate_properties["generationPlanId"] = {
+                        "type": "string",
+                        "enum": ["A", "B"],
+                    }
+                    if (
+                        isinstance(candidate_required, list)
+                        and "generationPlanId" not in candidate_required
+                    ):
+                        candidate_required.append("generationPlanId")
+                else:
+                    candidate_properties["generationPlanId"] = {
+                        "anyOf": [
+                            {"type": "string", "enum": ["A", "B"]},
+                            {"type": "null"},
+                        ]
+                    }
+            else:
+                candidate_properties["generationPlanId"] = {"type": "null"}
+
+            if request.item_type in choice_types:
+                candidate_properties["answerMode"] = {
+                    "type": "string",
+                    "enum": ["CHOICE"],
+                }
+                candidate_properties["answerLanguage"] = {"type": "null"}
+                options_schema = candidate_properties.get("options")
+                if isinstance(options_schema, dict):
+                    if request.item_type == LevelTestItemType.GRAMMAR_SENTENCE_ORDER:
+                        options_schema["minItems"] = 2
+                    else:
+                        options_schema["minItems"] = 4
+                        options_schema["maxItems"] = 4
+                if (
+                    isinstance(candidate_required, list)
+                    and "internalAnswerKey" not in candidate_required
+                ):
+                    candidate_required.append("internalAnswerKey")
+            elif request.item_type in writing_types:
+                candidate_properties["answerMode"] = {
+                    "type": "string",
+                    "enum": ["TEXT"],
+                }
+                candidate_properties["answerLanguage"] = {
+                    "type": "string",
+                    "enum": [request.learning_language],
+                }
+            elif request.item_type == LevelTestItemType.LISTENING_DICTATION:
+                candidate_properties["answerMode"] = {
+                    "type": "string",
+                    "enum": ["TEXT"],
+                }
+                candidate_properties["answerLanguage"] = {
+                    "type": "string",
+                    "enum": [request.learning_language],
+                }
+            elif request.item_type == LevelTestItemType.LISTENING_INTERPRETATION:
+                candidate_properties["answerMode"] = {
+                    "type": "string",
+                    "enum": ["TEXT"],
+                }
+                candidate_properties["answerLanguage"] = {
+                    "type": "string",
+                    "enum": [request.origin_language],
+                }
+            elif request.item_type in speaking_types:
+                candidate_properties["answerMode"] = {
+                    "type": "string",
+                    "enum": ["AUDIO"],
+                }
+                candidate_properties["answerLanguage"] = {
+                    "type": "string",
+                    "enum": [request.learning_language],
+                }
+
+        answer_key_schema = schema.get("$defs", {}).get("LevelTestInternalAnswerKey")
+        answer_key_properties = (
+            answer_key_schema.get("properties")
+            if isinstance(answer_key_schema, dict)
+            else None
+        )
+        answer_key_required = (
+            answer_key_schema.get("required")
+            if isinstance(answer_key_schema, dict)
+            else None
+        )
+        if request.item_type in choice_types and isinstance(answer_key_properties, dict):
+            if request.item_type == LevelTestItemType.GRAMMAR_SENTENCE_ORDER:
+                answer_key_properties["correctOptionKey"] = {"type": "null"}
+                correct_order_schema = answer_key_properties.get("correctOrder")
+                if isinstance(correct_order_schema, dict):
+                    correct_order_schema["minItems"] = 2
+            else:
+                answer_key_properties["correctOptionKey"] = {
+                    "type": "string",
+                    "enum": ["A", "B", "C", "D"],
+                }
+                if (
+                    isinstance(answer_key_required, list)
+                    and "correctOptionKey" not in answer_key_required
+                ):
+                    answer_key_required.append("correctOptionKey")
 
         if request.item_type.name.startswith("READING_"):
             properties["readingPassage"] = {"type": "string"}
@@ -1037,12 +1210,114 @@ class LevelTestService:
             if isinstance(diversity_schema, dict)
             else None
         )
-        if preferred and isinstance(diversity_properties, dict):
-            diversity_properties["scenarioCategory"] = {
-                "type": "string",
-                "enum": preferred,
-            }
+        if isinstance(diversity_properties, dict):
+            if preferred:
+                diversity_properties["scenarioCategory"] = {
+                    "type": "string",
+                    "enum": preferred,
+                }
+            intent_definition = schema.get("$defs", {}).get("CommunicativeIntent")
+            intent_values = (
+                intent_definition.get("enum")
+                if isinstance(intent_definition, dict)
+                else None
+            )
+            if isinstance(intent_values, list) and intent_values:
+                diversity_properties["communicativeIntent"] = {
+                    "type": "string",
+                    "enum": intent_values,
+                }
         return schema
+
+    @staticmethod
+    def _parse_generation_candidates(
+        provider_data: dict,
+    ) -> tuple[list[tuple[int, LevelTestQuestionCandidate]], list[str], int]:
+        """Validate candidates independently so one malformed sibling cannot waste the call."""
+
+        raw_candidates = provider_data.get("candidates")
+        if not isinstance(raw_candidates, list):
+            return [], ["SCHEMA:candidates:list_type"], 1
+        if not raw_candidates:
+            return [], ["SCHEMA:candidates:too_short"], 1
+
+        parsed: list[tuple[int, LevelTestQuestionCandidate]] = []
+        reasons: list[str] = []
+        rejected = 0
+
+        for index, raw_candidate in enumerate(raw_candidates[:6]):
+            if not isinstance(raw_candidate, dict):
+                rejected += 1
+                reasons.append(f"SCHEMA:candidates.{index}:dict_type")
+                continue
+            try:
+                candidate = LevelTestQuestionCandidate.model_validate(raw_candidate)
+            except ValidationError as exc:
+                rejected += 1
+                for error in exc.errors(
+                    include_url=False,
+                    include_input=False,
+                )[:6]:
+                    location = ".".join(
+                        str(part) for part in error.get("loc", ())
+                    ) or "candidate"
+                    error_type = LevelTestService._candidate_schema_error_code(error)
+                    reasons.append(
+                        f"SCHEMA:candidates.{index}.{location}:{error_type}"
+                    )
+                continue
+            parsed.append((index, candidate))
+
+        if len(raw_candidates) > 6:
+            rejected += len(raw_candidates) - 6
+            reasons.append("SCHEMA:candidates:too_long")
+
+        return parsed, reasons[:12], rejected
+
+    @staticmethod
+    def _candidate_schema_error_code(error: dict) -> str:
+        """Return a stable, non-sensitive reason code for candidate validation errors."""
+
+        error_type = str(error.get("type") or "validation_error")
+        if error_type != "value_error":
+            return error_type
+
+        message = str(error.get("msg") or "")
+        known_value_errors = (
+            (
+                "Sentence Order에는 최소 2개 Token Option",
+                "sentence_order_too_few_options",
+            ),
+            (
+                "Sentence Order Option key는 중복될 수 없습니다",
+                "sentence_order_duplicate_option_key",
+            ),
+            (
+                "correctOrder는 Option key를 정확히 한 번씩 포함해야 합니다",
+                "sentence_order_correct_order_mismatch",
+            ),
+            ("Choice 문제는 정확히 4개의 Option", "choice_option_count_invalid"),
+            (
+                "Choice 정답 Key가 Option에 존재하지 않습니다",
+                "choice_correct_option_missing",
+            ),
+            (
+                "TEXT/AUDIO 문제에는 Choice Option을 둘 수 없습니다",
+                "non_choice_has_options",
+            ),
+            (
+                "TEXT 문제에는 answerLanguage가 필요합니다",
+                "text_answer_language_missing",
+            ),
+            (
+                "AUDIO 문제에는 answerLanguage가 필요합니다",
+                "audio_answer_language_missing",
+            ),
+        )
+        for fragment, code in known_value_errors:
+            if fragment in message:
+                return code
+        return error_type
 
     @staticmethod
     def _schema_rejection_reasons(exc: ValidationError) -> list[str]:
@@ -1119,6 +1394,30 @@ class LevelTestService:
             LevelTestMetricResult(type="NATURALNESS", score=scores.naturalness, confidence=1.0),
             LevelTestMetricResult(type="EXPRESSION", score=scores.expression, confidence=1.0),
         ]
+        strengths = self._writing_level_test_feedback_texts(
+            request.prompt_text,
+            [item.origin_text for item in result.strengths],
+        )
+        improvements = self._writing_level_test_feedback_texts(
+            request.prompt_text,
+            [item.origin_text for item in result.weaknesses],
+        )
+        for correction in result.corrections:
+            explanation = correction.explanation.origin_text.strip()
+            detail = f"「{correction.original.strip()}」 → 「{correction.corrected.strip()}」"
+            if explanation:
+                detail += f": {explanation}"
+            if detail not in improvements:
+                improvements.append(detail)
+        if scores.overall < 90:
+            overall_explanation = result.explanation.origin_text.strip()
+            if (
+                overall_explanation
+                and not self._looks_like_source_repetition(request.prompt_text, overall_explanation)
+                and overall_explanation not in improvements
+            ):
+                improvements.append(overall_explanation)
+
         return LevelTestEvaluationResponse(
             request_id=request.request_id,
             session_id=request.session_id,
@@ -1129,12 +1428,39 @@ class LevelTestService:
             score=scores.overall,
             confidence=1.0,
             metrics=metrics,
-            strengths=[item.origin_text for item in result.strengths],
-            improvements=[item.origin_text for item in result.weaknesses],
+            strengths=strengths[:20],
+            improvements=improvements[:20],
+            recommended_answers=result.recommended_answers,
+            detailed_feedback=self._writing_feedback_details(result),
             assessment_signals=self._signals(request.domain, metrics),
             evaluation_version=LEVEL_TEST_EVALUATION_VERSION,
             prompt_version=result.prompt_version,
         )
+
+    @staticmethod
+    def _looks_like_source_repetition(source_text: str, feedback: str) -> bool:
+        def compact(value: str) -> str:
+            normalized = unicodedata.normalize("NFKC", value).casefold()
+            return "".join(char for char in normalized if char.isalnum())
+
+        source = compact(source_text)
+        value = compact(feedback)
+        return bool(value) and len(value) >= 8 and value in source
+
+    @classmethod
+    def _writing_level_test_feedback_texts(
+        cls,
+        source_text: str,
+        values: list[str],
+    ) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            text = value.strip()
+            if not text or cls._looks_like_source_repetition(source_text, text):
+                continue
+            if text not in result:
+                result.append(text)
+        return result
 
     async def _evaluate_dictation(
         self,
@@ -1311,28 +1637,91 @@ class LevelTestService:
             acoustic_quality=normalized.quality.model_dump(mode="json", by_alias=True),
         )
         started = time.perf_counter()
-        try:
-            provider_result = await asyncio.wait_for(
-                self.provider.call_with_metadata(
-                    type_name=self.SPEAKING_EVALUATION_TYPE,
-                    data=prompt,
-                    schema=LevelTestSpeakingEvaluationPayload.model_json_schema(),
-                ),
-                timeout=self.evaluation_timeout_seconds,
-            )
-        except (TimeoutError, asyncio.TimeoutError) as exc:
-            raise HTTPException(status_code=504, detail="Level Test Speaking 평가 시간이 초과되었습니다.") from exc
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail="Level Test Speaking 평가 Provider 호출에 실패했습니다.") from exc
+        payload: LevelTestSpeakingEvaluationPayload | None = None
+        provider_result = None
+        total_input_tokens = 0
+        total_output_tokens = 0
+        last_error: Exception | None = None
+        last_timeout = False
 
-        if not isinstance(provider_result.data, dict):
-            raise HTTPException(status_code=502, detail="Level Test Speaking 평가 응답 Schema가 유효하지 않습니다.")
-        try:
-            payload = LevelTestSpeakingEvaluationPayload.model_validate(
-                self._canonicalize_confidence(provider_result.data)
-            )
-        except ValidationError as exc:
-            raise HTTPException(status_code=502, detail="Level Test Speaking 평가 응답 Schema가 유효하지 않습니다.") from exc
+        for evaluation_attempt in range(1, 4):
+            try:
+                current_result = await asyncio.wait_for(
+                    self.provider.call_with_metadata(
+                        type_name=self.SPEAKING_EVALUATION_TYPE,
+                        data=prompt,
+                        schema=LevelTestSpeakingEvaluationPayload.model_json_schema(),
+                    ),
+                    timeout=self.evaluation_timeout_seconds,
+                )
+                total_input_tokens += current_result.input_tokens
+                total_output_tokens += current_result.output_tokens
+                provider_result = current_result
+                if not isinstance(current_result.data, dict):
+                    raise ValueError("Speaking evaluation response must be an object")
+                normalized_payload = self._normalize_speaking_evaluation_payload(
+                    request,
+                    current_result.data,
+                )
+                payload = LevelTestSpeakingEvaluationPayload.model_validate(
+                    normalized_payload
+                )
+                break
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                last_error = exc
+                last_timeout = True
+                logger.warning(
+                    "Level Test Speaking evaluation timed out. request_id=%s item_id=%s attempt=%d/3",
+                    request.request_id,
+                    request.item_id,
+                    evaluation_attempt,
+                )
+            except ValidationError as exc:
+                last_error = exc
+                last_timeout = False
+                logger.warning(
+                    "Level Test Speaking evaluation schema rejected. request_id=%s item_id=%s attempt=%d/3 reasons=%s",
+                    request.request_id,
+                    request.item_id,
+                    evaluation_attempt,
+                    self._schema_rejection_reasons(exc),
+                )
+            except ValueError as exc:
+                last_error = exc
+                last_timeout = False
+                logger.warning(
+                    "Level Test Speaking evaluation payload rejected. request_id=%s item_id=%s attempt=%d/3 reason=%s",
+                    request.request_id,
+                    request.item_id,
+                    evaluation_attempt,
+                    type(exc).__name__,
+                )
+            except Exception as exc:
+                last_error = exc
+                last_timeout = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+                if evaluation_attempt >= 3 or not self._is_transient_provider_error(exc):
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Level Test Speaking 평가 Provider 호출에 실패했습니다.",
+                    ) from exc
+                logger.warning(
+                    "Level Test Speaking transient provider failure. request_id=%s item_id=%s attempt=%d/3 errorType=%s",
+                    request.request_id,
+                    request.item_id,
+                    evaluation_attempt,
+                    type(exc).__name__,
+                )
+
+        if payload is None or provider_result is None:
+            if last_timeout:
+                raise HTTPException(
+                    status_code=504,
+                    detail="Level Test Speaking 평가 시간이 초과되었습니다.",
+                ) from last_error
+            raise HTTPException(
+                status_code=502,
+                detail="Level Test Speaking 평가 응답 Schema가 유효하지 않습니다.",
+            ) from last_error
 
         metrics = [
             LevelTestMetricResult(
@@ -1362,14 +1751,20 @@ class LevelTestService:
             metrics=metrics,
             strengths=payload.strengths,
             improvements=payload.improvements,
+            recommended_answers=(
+                [request.reference_text]
+                if request.item_type == LevelTestItemType.SPEAKING_REPEAT and request.reference_text
+                else payload.recommended_answers
+            ),
+            detailed_feedback=self._speaking_feedback_details(metrics, payload.improvements),
             assessment_signals=self._signals(LevelTestDomain.SPEAKING, metrics) if evaluable else [],
             reason_code=None if evaluable else "INSUFFICIENT_EVIDENCE",
             evaluation_version=LEVEL_TEST_SPEAKING_EVALUATION_VERSION,
             prompt_version=LEVEL_TEST_SPEAKING_PROMPT_VERSION,
             usage=LevelTestUsage(
                 latency_ms=latency_ms + (stt.usage.stt.latency_ms if stt.usage.stt else 0),
-                input_tokens=provider_result.input_tokens,
-                output_tokens=provider_result.output_tokens,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
                 provider=provider_result.provider,
                 model=provider_result.model,
                 prompt_version=LEVEL_TEST_SPEAKING_PROMPT_VERSION,
@@ -1579,8 +1974,8 @@ class LevelTestService:
             raise ValueError("Provider가 요청과 다른 Domain/ItemType을 반환했습니다.")
         if candidate.complexity_band != request.target_complexity_band:
             raise ValueError("Provider가 요청과 다른 complexityBand를 반환했습니다.")
-        if candidate.instruction_language != request.origin_language:
-            raise ValueError("instructionLanguage는 originLanguage여야 합니다.")
+        if candidate.instruction_language != request.learning_language:
+            raise ValueError("instructionLanguage는 learningLanguage여야 합니다.")
 
         preferred_categories = set(request.preferred_scenario_categories)
         if (
@@ -1652,6 +2047,8 @@ class LevelTestService:
 
         if candidate.item_type == LevelTestItemType.VOCAB_CONTEXT_CHOICE:
             LevelTestService._validate_vocab_context_choice(candidate)
+        if candidate.item_type == LevelTestItemType.VOCAB_PARAPHRASE_CHOICE:
+            LevelTestService._validate_vocab_answer_not_exposed(candidate)
         if candidate.item_type == LevelTestItemType.GRAMMAR_FORM_CHOICE:
             LevelTestService._validate_grammar_form_choice(candidate)
         if candidate.item_type == LevelTestItemType.GRAMMAR_SENTENCE_ORDER:
@@ -1700,44 +2097,119 @@ class LevelTestService:
             reference = candidate.reference_payload.get("referenceText")
             if not isinstance(reference, str) or not reference.strip():
                 raise ValueError("SPEAKING_REPEAT에는 referenceText가 필요합니다.")
+            LevelTestService._validate_speaking_repeat_load(request, candidate, reference)
+
+    @staticmethod
+    def _validate_speaking_repeat_load(
+        request: LevelTestQuestionGenerationRequest,
+        candidate: LevelTestQuestionCandidate,
+        reference_text: str,
+    ) -> None:
+        compact = " ".join(reference_text.split())
+        # Q18 and Q19 intentionally share the same SPEAKING_REPEAT pool bucket.
+        # Keep every pooled repeat candidate safe for the stricter audio-only slot.
+        if request.question_number in {18, 19}:
+            if len(compact) > 90:
+                raise ValueError("SPEAKING_REPEAT referenceText가 지나치게 깁니다.")
+            sentence_parts = [
+                part for part in re.split(r"[.!?。！？]+", compact) if part.strip()
+            ]
+            if len(sentence_parts) > 1:
+                raise ValueError("SPEAKING_REPEAT는 한 문장으로 구성해야 합니다.")
+            if candidate.max_audio_seconds is not None and candidate.max_audio_seconds > 20:
+                raise ValueError("SPEAKING_REPEAT maxAudioSeconds는 20초 이하여야 합니다.")
 
     @staticmethod
     def _validate_learning_language_lane(
         request: LevelTestQuestionGenerationRequest,
         candidate: LevelTestQuestionCandidate,
     ) -> None:
-        """Reject origin-language leakage in learner-facing Reading/Listening choice text.
+        """Enforce the learner-facing Level Test language contract.
 
-        This is deliberately deterministic and script-based. It is not a probabilistic
-        language detector: it catches the observed KO/JA lane inversion while allowing
-        names, numerals, and kanji-only option fragments inside an otherwise valid lane.
+        Normal assessment UI is learning-language-first.  The only intentional
+        cross-language task lanes are the WRITING_TRANSLATION source text and the
+        LISTENING_INTERPRETATION answer/reference-meaning lane.
         """
 
-        texts: list[str] = []
-        if candidate.item_type.name.startswith("READING_"):
-            passage = candidate.reference_payload.get("readingPassage")
-            question = candidate.reference_payload.get("readingQuestion")
-            if isinstance(passage, str):
-                texts.append(passage)
-            if isinstance(question, str):
-                texts.append(question)
-            texts.extend(option.text for option in candidate.options)
-        elif candidate.item_type in {
-            LevelTestItemType.LISTENING_GIST_CHOICE,
-            LevelTestItemType.LISTENING_DETAIL_CHOICE,
-        }:
-            question = candidate.reference_payload.get("listeningQuestion")
-            if isinstance(question, str):
-                texts.append(question)
-            texts.extend(option.text for option in candidate.options)
-        else:
-            return
+        learning_texts: list[str] = [candidate.instruction]
+        payload = candidate.reference_payload
 
+        if candidate.item_type == LevelTestItemType.WRITING_TRANSLATION:
+            source = payload.get("translationSourceText")
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError("WRITING_TRANSLATION 번역 원문이 없습니다.")
+            LevelTestService._assert_language_lane(
+                request.origin_language,
+                [source],
+                reason="WRITING_TRANSLATION sourceText 언어가 originLanguage와 일치하지 않습니다.",
+            )
+        else:
+            learning_texts.append(candidate.prompt_text)
+
+        if candidate.item_type.name.startswith("READING_"):
+            for key in ("readingPassage", "readingQuestion"):
+                value = payload.get(key)
+                if isinstance(value, str):
+                    learning_texts.append(value)
+            learning_texts.extend(option.text for option in candidate.options)
+        elif candidate.item_type.name.startswith("LISTENING_"):
+            for key in ("sourceText", "listeningQuestion"):
+                value = payload.get(key)
+                if isinstance(value, str):
+                    learning_texts.append(value)
+            learning_texts.extend(option.text for option in candidate.options)
+        elif candidate.item_type in {
+            LevelTestItemType.VOCAB_CONTEXT_CHOICE,
+            LevelTestItemType.VOCAB_PARAPHRASE_CHOICE,
+            LevelTestItemType.GRAMMAR_FORM_CHOICE,
+            LevelTestItemType.GRAMMAR_SENTENCE_ORDER,
+        }:
+            learning_texts.extend(option.text for option in candidate.options)
+
+        if LevelTestService._requires_task_sufficiency_verification(candidate.item_type):
+            for key in ("providedFacts", "requiredIntents", "responseConstraints"):
+                values = payload.get(key)
+                if isinstance(values, list):
+                    learning_texts.extend(
+                        value for value in values if isinstance(value, str)
+                    )
+
+        LevelTestService._assert_language_lane(
+            request.learning_language,
+            learning_texts,
+            reason=(
+                f"{candidate.item_type.value} 학습자 표시 텍스트가 "
+                f"learningLanguage={request.learning_language}와 일치하지 않습니다."
+            ),
+        )
+
+        if candidate.item_type == LevelTestItemType.LISTENING_INTERPRETATION:
+            origin_texts: list[str] = []
+            for key in ("referenceMeanings", "keyMeaningUnits"):
+                values = payload.get(key)
+                if isinstance(values, list):
+                    origin_texts.extend(
+                        value for value in values if isinstance(value, str)
+                    )
+            if origin_texts:
+                LevelTestService._assert_language_lane(
+                    request.origin_language,
+                    origin_texts,
+                    reason="LISTENING_INTERPRETATION 평가 기준 언어가 originLanguage와 일치하지 않습니다.",
+                )
+
+    @staticmethod
+    def _assert_language_lane(
+        language_code: str,
+        texts: list[str],
+        *,
+        reason: str,
+    ) -> None:
         combined = "\n".join(text for text in texts if text and text.strip())
         if not combined:
-            raise ValueError(f"{candidate.item_type.value} 학습 언어 표시 텍스트가 없습니다.")
+            raise ValueError(reason)
 
-        language = request.learning_language.strip().lower()
+        language = language_code.strip().lower().split("-", 1)[0].split("_", 1)[0]
         has_hangul = bool(re.search(r"[\uac00-\ud7a3]", combined))
         has_kana = bool(re.search(r"[\u3040-\u30ff]", combined))
         has_ascii = bool(re.search(r"[A-Za-z]", combined))
@@ -1754,9 +2226,7 @@ class LevelTestService:
             missing_expected_script = not has_ascii
 
         if mismatch or missing_expected_script:
-            raise ValueError(
-                f"{candidate.item_type.value} 질문/선택지 언어가 learningLanguage={request.learning_language}와 일치하지 않습니다."
-            )
+            raise ValueError(reason)
 
 
     @staticmethod
@@ -1818,6 +2288,10 @@ class LevelTestService:
             raise ValueError(f"{candidate.item_type.value} providedFacts가 유효하지 않습니다.")
         if not isinstance(intents, list) or not all(isinstance(item, str) and item.strip() for item in intents):
             raise ValueError(f"{candidate.item_type.value} requiredIntents가 유효하지 않습니다.")
+        if any(re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", item.strip()) for item in intents):
+            raise ValueError(
+                f"{candidate.item_type.value} requiredIntents에 내부 enum token을 노출할 수 없습니다."
+            )
         if not isinstance(constraints, list) or not all(isinstance(item, str) and item.strip() for item in constraints):
             raise ValueError(f"{candidate.item_type.value} responseConstraints가 유효하지 않습니다.")
 
@@ -1853,6 +2327,34 @@ class LevelTestService:
         ]
         if len(set(normalized_options)) != len(normalized_options):
             raise ValueError("VOCAB_CONTEXT_CHOICE Option에 실질적으로 동일한 표현이 중복되어 있습니다.")
+        LevelTestService._validate_vocab_answer_not_exposed(candidate)
+
+    @staticmethod
+    def _validate_vocab_answer_not_exposed(
+        candidate: LevelTestQuestionCandidate,
+    ) -> None:
+        """Reject vocabulary items that print the correct option in the question.
+
+        This is intentionally deterministic.  Vocabulary context/paraphrase items
+        must test recognition from context; showing the exact correct option text in
+        promptText turns the item into an answer giveaway.
+        """
+
+        correct_key = candidate.internal_answer_key.correct_option_key
+        if not correct_key:
+            return
+        correct_text = next(
+            (option.text for option in candidate.options if option.key == correct_key),
+            None,
+        )
+        if not correct_text:
+            return
+        normalized_answer = LevelTestService._normalize_choice_text(correct_text)
+        normalized_prompt = LevelTestService._normalize_choice_text(candidate.prompt_text)
+        if normalized_answer and normalized_answer in normalized_prompt:
+            raise ValueError(
+                f"{candidate.item_type.value} promptText에 정답 표현이 직접 노출되어 있습니다."
+            )
 
     @staticmethod
     def _normalize_choice_text(value: str) -> str:
@@ -2251,10 +2753,89 @@ class LevelTestService:
             metrics=metrics,
             strengths=task.strengths,
             improvements=task.improvements,
+            recommended_answers=(
+                [request.source_text]
+                if request.item_type == LevelTestItemType.LISTENING_DICTATION and request.source_text
+                else list(getattr(task, "recommended_interpretations", []) or [])
+            ),
+            detailed_feedback=self._listening_feedback_details(task),
             assessment_signals=self._signals(LevelTestDomain.LISTENING, metrics) if task.evaluable else [],
             reason_code=task.reason_code,
             evaluation_version=evaluation_version,
         )
+
+    @staticmethod
+    def _writing_feedback_details(result) -> list[LevelTestFeedbackDetail]:
+        details: list[LevelTestFeedbackDetail] = []
+        for correction in result.corrections:
+            details.append(LevelTestFeedbackDetail(
+                category=correction.category,
+                severity="CORRECTION",
+                original=correction.original,
+                corrected=correction.corrected,
+                explanation=correction.explanation.origin_text,
+            ))
+        for weakness in result.weaknesses:
+            details.append(LevelTestFeedbackDetail(
+                category="IMPROVEMENT",
+                severity="IMPROVEMENT",
+                explanation=weakness.origin_text,
+            ))
+        return details[:50]
+
+    @staticmethod
+    def _listening_feedback_details(task) -> list[LevelTestFeedbackDetail]:
+        details: list[LevelTestFeedbackDetail] = []
+        for evidence in getattr(task, "evidence", []) or []:
+            details.append(LevelTestFeedbackDetail(
+                category=str(getattr(evidence, "metric", "LISTENING")),
+                severity="IMPROVEMENT" if getattr(evidence, "severity", "INFO") != "INFO" else "INFO",
+                original=getattr(evidence, "recognized", None),
+                corrected=getattr(evidence, "reference", None),
+                explanation=getattr(evidence, "feedback", "확인할 부분이 있습니다."),
+            ))
+        for value in getattr(task, "omitted_meaning_units", []) or []:
+            details.append(LevelTestFeedbackDetail(
+                category="MEANING_OMISSION", severity="OMISSION", corrected=value,
+                explanation=f"답변에서 핵심 의미가 빠졌습니다: {value}",
+            ))
+        for value in getattr(task, "misunderstood_meaning_units", []) or []:
+            details.append(LevelTestFeedbackDetail(
+                category="MEANING_MISMATCH", severity="CORRECTION", corrected=value,
+                explanation=f"이 의미 단위를 다르게 이해했습니다: {value}",
+            ))
+        for value in getattr(task, "added_information", []) or []:
+            details.append(LevelTestFeedbackDetail(
+                category="ADDED_INFORMATION", severity="IMPROVEMENT", original=value,
+                explanation=f"원문에 없는 정보가 추가되었습니다: {value}",
+            ))
+        return details[:50]
+
+    @staticmethod
+    def _speaking_feedback_details(
+        metrics: list[LevelTestMetricResult],
+        improvements: list[str],
+    ) -> list[LevelTestFeedbackDetail]:
+        details: list[LevelTestFeedbackDetail] = []
+        for metric in metrics:
+            if metric.summary:
+                details.append(LevelTestFeedbackDetail(
+                    category=metric.type,
+                    severity="IMPROVEMENT" if metric.score is not None and metric.score < 90 else "INFO",
+                    explanation=metric.summary,
+                ))
+            for evidence in metric.evidence:
+                message = evidence.get("message") if isinstance(evidence, dict) else None
+                if isinstance(message, str) and message.strip():
+                    details.append(LevelTestFeedbackDetail(
+                        category=metric.type, severity="IMPROVEMENT", explanation=message.strip(),
+                    ))
+        for improvement in improvements:
+            if improvement and not any(item.explanation == improvement for item in details):
+                details.append(LevelTestFeedbackDetail(
+                    category="TASK", severity="IMPROVEMENT", explanation=improvement,
+                ))
+        return details[:50]
 
     @staticmethod
     def _calculate_speaking_item_score(
@@ -2278,6 +2859,110 @@ class LevelTestService:
             return None
         return int((weighted / available).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
+    @classmethod
+    def _normalize_speaking_evaluation_payload(
+        cls,
+        request: LevelTestSpeakingEvaluationContext,
+        data: dict,
+    ) -> dict:
+        """Repair provider formatting drift without inventing evaluation scores."""
+
+        normalized = cls._canonicalize_confidence(data)
+        if request.item_type == LevelTestItemType.SPEAKING_REPEAT:
+            normalized.setdefault("recommendedAnswers", [])
+        recommended = normalized.get("recommendedAnswers")
+        if isinstance(recommended, str):
+            normalized["recommendedAnswers"] = [recommended]
+        metrics = normalized.get("metrics")
+        if isinstance(metrics, list):
+            numeric_scores = [
+                metric.get("score")
+                for metric in metrics
+                if isinstance(metric, dict)
+                and isinstance(metric.get("score"), (int, float))
+                and not isinstance(metric.get("score"), bool)
+            ]
+            normalized_score_scale = (
+                bool(numeric_scores)
+                and len(numeric_scores) == sum(
+                    1 for metric in metrics
+                    if isinstance(metric, dict) and metric.get("score") is not None
+                )
+                and all(0 <= float(score) <= 1 for score in numeric_scores)
+                and any(0 < float(score) < 1 for score in numeric_scores)
+            )
+            for metric in metrics:
+                if not isinstance(metric, dict):
+                    continue
+                metric_type = metric.get("type")
+                if isinstance(metric_type, str):
+                    token = re.sub(r"[^A-Z0-9]+", "_", metric_type.strip().upper()).strip("_")
+                    token = {
+                        "TASKFULFILLMENT": "TASK_FULFILLMENT",
+                        "TASK_FULFILMENT": "TASK_FULFILLMENT",
+                    }.get(token, token)
+                    metric["type"] = token
+                state = metric.get("state")
+                if isinstance(state, str):
+                    token = re.sub(r"[^A-Z0-9]+", "_", state.strip().upper()).strip("_")
+                    token = {
+                        "UNEVALUABLE": "NOT_EVALUABLE",
+                        "NOT_EVALUABLE": "NOT_EVALUABLE",
+                        "EVALUABLE": "EVALUATED",
+                    }.get(token, token)
+                    metric["state"] = token
+                if normalized_score_scale and isinstance(metric.get("score"), (int, float)):
+                    metric["score"] = float(metric["score"]) * 100
+                evidence = metric.get("evidence")
+                if isinstance(evidence, str):
+                    metric["evidence"] = [evidence]
+                elif isinstance(evidence, list):
+                    normalized_evidence: list[object] = []
+                    for item in evidence:
+                        if isinstance(item, str):
+                            normalized_evidence.append(item)
+                        elif isinstance(item, dict) and isinstance(item.get("message"), str):
+                            normalized_evidence.append(item["message"])
+                        else:
+                            normalized_evidence.append(item)
+                    metric["evidence"] = normalized_evidence
+
+                if metric.get("state") == "NOT_EVALUABLE":
+                    metric["score"] = None
+                    reason = metric.get("notEvaluableReason")
+                    if not isinstance(reason, str) or not reason.strip():
+                        metric["notEvaluableReason"] = cls._not_evaluable_reason(
+                            request.origin_language
+                        )
+                    summary = metric.get("summary")
+                    if not isinstance(summary, str) or not summary.strip():
+                        metric["summary"] = metric["notEvaluableReason"]
+
+        for key in ("strengths", "improvements"):
+            value = normalized.get(key)
+            if isinstance(value, str):
+                normalized[key] = [value]
+            elif isinstance(value, list):
+                normalized_list: list[object] = []
+                for item in value:
+                    if isinstance(item, str):
+                        normalized_list.append(item)
+                    elif isinstance(item, dict) and isinstance(item.get("message"), str):
+                        normalized_list.append(item["message"])
+                    else:
+                        normalized_list.append(item)
+                normalized[key] = normalized_list
+        return normalized
+
+    @staticmethod
+    def _not_evaluable_reason(origin_language: str) -> str:
+        language = origin_language.strip().lower().split("-", 1)[0].split("_", 1)[0]
+        return {
+            "ko": "이 항목을 평가할 근거가 충분하지 않습니다.",
+            "ja": "この項目を評価するための根拠が十分ではありません。",
+            "en": "There is not enough evidence to evaluate this metric.",
+        }.get(language, "Insufficient evidence for this metric.")
+
     @staticmethod
     def _canonicalize_confidence(data: dict) -> dict:
         normalized = copy.deepcopy(data)
@@ -2287,8 +2972,11 @@ class LevelTestService:
             values.extend((metric, "confidence") for metric in metrics if isinstance(metric, dict))
         for target, key in values:
             value = target.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and 1 < value <= 5:
-                target[key] = value / 5
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if 1 < value <= 5:
+                    target[key] = value / 5
+                elif 5 < value <= 100:
+                    target[key] = value / 100
         return normalized
 
     @staticmethod

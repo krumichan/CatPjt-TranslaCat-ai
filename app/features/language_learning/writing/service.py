@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -126,12 +128,16 @@ _DAILY_WRITING_GENERATION_SCHEMA: dict[str, Any] = {
                     "keywords",
                     "focusMetrics",
                     "focusReason",
+                    "languageComplexityBand",
+                    "diversityMetadata",
                 ],
             },
         }
     },
     "required": ["items"],
 }
+
+_DAILY_WRITING_V35_GENERATION_SCHEMA = copy.deepcopy(_DAILY_WRITING_GENERATION_SCHEMA)
 
 _BILINGUAL_MESSAGE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -396,7 +402,15 @@ class LanguageLearningWritingService:
                 difficulty = candidate.difficulty.value
                 if remaining.get(difficulty, 0) <= 0:
                     continue
-                if not self._valid_phase35_daily_candidate(request, candidate):
+                rejection_reason = self._phase35_daily_candidate_rejection_reason(request, candidate)
+                if rejection_reason is not None:
+                    logger.info(
+                        "Phase 3.5 daily writing candidate rejected by deterministic contract. request_id=%s attempt=%d/3 reason=%s difficulty=%s",
+                        request.request_id,
+                        provider_attempt + 1,
+                        rejection_reason,
+                        candidate.difficulty.value,
+                    )
                     continue
                 assert candidate.diversity_metadata is not None
                 decision = validator.validate(
@@ -427,7 +441,7 @@ class LanguageLearningWritingService:
                 difficulty = candidate.difficulty.value
                 if remaining.get(difficulty, 0) <= 0:
                     continue
-                if not self._valid_phase35_daily_candidate(request, candidate):
+                if self._phase35_daily_candidate_rejection_reason(request, candidate) is not None:
                     continue
                 assert candidate.diversity_metadata is not None
                 decision = validator.validate(
@@ -487,6 +501,14 @@ class LanguageLearningWritingService:
         *,
         provider_attempt: int,
     ) -> _DailyWritingPayload:
+        """Generate one Phase 3.5 candidate batch and salvage valid siblings.
+
+        OpenAI structured output can occasionally violate one nested candidate even
+        when other candidates are usable.  Rejecting the entire response multiplies
+        cost and makes Daily Set creation brittle, so candidates are validated one by
+        one while semantic/diversity checks remain fail-closed in the caller.
+        """
+
         prompt = build_daily_writing_generation_prompt(request)
         started = time.perf_counter()
         try:
@@ -494,11 +516,18 @@ class LanguageLearningWritingService:
                 self.provider.call(
                     type_name="LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
                     data=prompt,
-                    schema=_DAILY_WRITING_GENERATION_SCHEMA,
+                    schema=_DAILY_WRITING_V35_GENERATION_SCHEMA,
                 ),
                 timeout=self.generation_timeout_seconds,
             )
         except (TimeoutError, asyncio.TimeoutError) as exc:
+            if provider_attempt < 2:
+                logger.warning(
+                    "Phase 3.5 daily writing generation timed out. request_id=%s attempt=%d/3",
+                    request.request_id,
+                    provider_attempt + 1,
+                )
+                return _DailyWritingPayload(items=[])
             raise HTTPException(
                 status_code=504,
                 detail="daily writing generation 시간이 초과되었습니다.",
@@ -507,34 +536,120 @@ class LanguageLearningWritingService:
             raise
         except Exception as exc:
             status = getattr(exc, "status_code", None)
-            if status in {429, 500, 502, 503, 504} and provider_attempt < 2:
+            retryable_output_failure = isinstance(exc, ValueError)
+            if (status in {408, 409, 429, 500, 502, 503, 504} or retryable_output_failure) and provider_attempt < 2:
                 logger.warning(
-                    "Phase 3.5 daily writing transient provider failure. request_id=%s attempt=%d/3",
+                    "Phase 3.5 daily writing transient provider failure. request_id=%s attempt=%d/3 errorType=%s",
                     request.request_id,
                     provider_attempt + 1,
+                    type(exc).__name__,
                 )
                 return _DailyWritingPayload(items=[])
             raise HTTPException(
                 status_code=502,
                 detail="daily writing generation에 실패했습니다.",
             ) from exc
+
         if not isinstance(result, dict):
-            raise HTTPException(status_code=502, detail="daily writing generation 응답 Schema가 유효하지 않습니다.")
-        try:
-            payload = _DailyWritingPayload.model_validate(result)
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="daily writing generation 응답 Schema가 유효하지 않습니다.",
-            ) from exc
+            logger.warning(
+                "Phase 3.5 daily writing response is not an object. request_id=%s attempt=%d/3 dataType=%s",
+                request.request_id,
+                provider_attempt + 1,
+                type(result).__name__,
+            )
+            return _DailyWritingPayload(items=[])
+        raw_items = result.get("items")
+        if not isinstance(raw_items, list):
+            logger.warning(
+                "Phase 3.5 daily writing response items missing. request_id=%s attempt=%d/3",
+                request.request_id,
+                provider_attempt + 1,
+            )
+            return _DailyWritingPayload(items=[])
+
+        valid_items: list[DailyWritingItem] = []
+        rejected_reasons: list[str] = []
+        for index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                rejected_reasons.append(f"items.{index}:not_object")
+                continue
+            contract_reason = self._phase35_raw_candidate_contract_reason(raw_item)
+            if contract_reason is not None:
+                rejected_reasons.append(f"items.{index}:{contract_reason}")
+                continue
+            normalized_item = self._normalize_daily_candidate_tokens(raw_item)
+            try:
+                valid_items.append(DailyWritingItem.model_validate(normalized_item))
+            except ValidationError as exc:
+                rejected_reasons.extend(
+                    f"items.{index}:{'.'.join(str(part) for part in error.get('loc', ())) or 'item'}:{error.get('type', 'validation_error')}"
+                    for error in exc.errors(include_url=False, include_input=False)[:4]
+                )
+
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        if rejected_reasons:
+            log = logger.info if valid_items else logger.warning
+            log(
+                "Phase 3.5 daily writing candidate schema salvage. request_id=%s attempt=%d/3 validCandidates=%d rejectedCandidates=%d reasons=%s",
+                request.request_id,
+                provider_attempt + 1,
+                len(valid_items),
+                len(raw_items) - len(valid_items),
+                rejected_reasons[:12],
+            )
         logger.info(
             "Phase 3.5 daily writing candidate batch completed. request_id=%s attempt=%d/3 candidates=%d latency_ms=%d",
             request.request_id,
             provider_attempt + 1,
-            len(payload.items),
-            int((time.perf_counter() - started) * 1000),
+            len(valid_items),
+            elapsed_ms,
         )
-        return payload
+        return _DailyWritingPayload(items=valid_items)
+
+    @staticmethod
+    def _phase35_raw_candidate_contract_reason(item: dict[str, Any]) -> str | None:
+        if item.get("languageComplexityBand") is None and item.get("language_complexity_band") is None:
+            return "languageComplexityBand:missing"
+        diversity = item.get("diversityMetadata", item.get("diversity_metadata"))
+        if not isinstance(diversity, dict):
+            return "diversityMetadata:missing"
+        for key in (
+            "scenarioCategory",
+            "communicativeIntent",
+            "taskArchetype",
+            "grammarFocusCodes",
+            "lexicalFocusCodes",
+            "semanticSummary",
+            "requiresBackgroundKnowledge",
+        ):
+            snake = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+            if key not in diversity and snake not in diversity:
+                return f"diversityMetadata.{key}:missing"
+        return None
+
+    @staticmethod
+    def _normalize_daily_candidate_tokens(item: dict[str, Any]) -> dict[str, Any]:
+        normalized = copy.deepcopy(item)
+        difficulty = normalized.get("difficulty")
+        if isinstance(difficulty, str):
+            normalized["difficulty"] = difficulty.strip().upper().replace("-", "_").replace(" ", "_")
+        metrics = normalized.get("focusMetrics", normalized.get("focus_metrics"))
+        if isinstance(metrics, list):
+            normalized_metrics = [
+                re.sub(r"[^A-Z0-9]+", "_", value.strip().upper()).strip("_")
+                if isinstance(value, str) else value
+                for value in metrics
+            ]
+            key = "focusMetrics" if "focusMetrics" in normalized else "focus_metrics"
+            normalized[key] = normalized_metrics
+        diversity = normalized.get("diversityMetadata", normalized.get("diversity_metadata"))
+        if isinstance(diversity, dict):
+            for key in ("scenarioCategory", "communicativeIntent"):
+                actual = key if key in diversity else re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+                value = diversity.get(actual)
+                if isinstance(value, str):
+                    diversity[actual] = re.sub(r"[^A-Z0-9]+", "_", value.strip().upper()).strip("_")
+        return normalized
 
     @staticmethod
     def _expanded_distribution(remaining: dict[str, int]) -> DifficultyDistribution:
@@ -580,17 +695,35 @@ class LanguageLearningWritingService:
         )
 
     @staticmethod
-    def _valid_phase35_daily_candidate(
+    def _phase35_daily_candidate_rejection_reason(
         request: DailyWritingGenerationRequest,
         item: DailyWritingItem,
-    ) -> bool:
-        if item.diversity_metadata is None or item.language_complexity_band is None:
-            return False
+    ) -> str | None:
+        if item.diversity_metadata is None:
+            return "DIVERSITY_METADATA_MISSING"
+        if item.language_complexity_band is None:
+            return "LANGUAGE_COMPLEXITY_BAND_MISSING"
+        if item.diversity_metadata.requires_background_knowledge:
+            return "BACKGROUND_KNOWLEDGE_REQUIRED"
         expected_band = resolve_daily_complexity_band(
             item.difficulty.value,
             request.language_complexity,
         )
-        return item.language_complexity_band == expected_band
+        if item.language_complexity_band != expected_band:
+            return f"COMPLEXITY_BAND_MISMATCH_EXPECTED_{expected_band}"
+        return None
+
+    @staticmethod
+    def _valid_phase35_daily_candidate(
+        request: DailyWritingGenerationRequest,
+        item: DailyWritingItem,
+    ) -> bool:
+        return (
+            LanguageLearningWritingService._phase35_daily_candidate_rejection_reason(
+                request, item
+            )
+            is None
+        )
 
     async def evaluate(
         self,

@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     SERVER_API_KEY: str = ""
 
     # AI Provider
-    AI_TEXT_PROVIDER: str = "gemini"
+    AI_TEXT_PROVIDER: str = "openai"
+    AI_TEXT_PROVIDER_MAX_CONCURRENCY: int = Field(default=8, ge=1, le=128)
+    AI_TEXT_PROVIDER_FAILURE_COOLDOWN_SECONDS: float = Field(default=5.0, ge=0, le=300)
     AI_STT_MAX_AUDIO_FILE_BYTES: int = Field(
         default=25 * 1024 * 1024,
         ge=1024,
@@ -15,7 +17,16 @@ class Settings(BaseSettings):
 
     # Google / Gemini
     GOOGLE_API_KEY: str = ""
-    GEMINI_MODEL_NAME: str = "gemini-2.5-flash"
+    GEMINI_MODEL_FLASH: str = "gemini-3.7-flash"
+    GEMINI_MODEL_FLASH_LITE: str = "gemini-3.5-flash-lite"
+    GEMINI_MODEL_TTS: str = "gemini-2.5-flash-preview-tts"
+
+    # OpenAI
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL_LUNA: str = "gpt-5.6-luna"
+    OPENAI_MODEL_MINI: str = "gpt-5-mini"
+    OPENAI_MODEL_NANO: str = "gpt-5-nano"
+    OPENAI_REQUEST_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=300)
 
     # AI Chat Member Reply
     AI_CHAT_CONTEXT_DEFAULT_MAX_MESSAGES: int = 30
@@ -51,7 +62,6 @@ class Settings(BaseSettings):
     AI_SPEAKING_STT_LOW_CONFIDENCE_THRESHOLD: float = 0.55
     AI_SPEAKING_EVALUATION_CONFIDENCE_THRESHOLD: float = 0.70
     AI_SPEAKING_TTS_AUDIO_TTL_SECONDS: int = 3600
-    GEMINI_TTS_MODEL_NAME: str = "gemini-2.5-flash-preview-tts"
 
     # Language Learning / AI Listening
     AI_LISTENING_STT_MODEL_NAME: str = "tiny"

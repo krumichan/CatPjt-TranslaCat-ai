@@ -363,7 +363,7 @@ def level_question_request():
                 "sameFeatureRecent": [
                     {
                         "sourceType": "LEVEL_TEST",
-                        "content": "내일 약속 시간을 바꾸고 싶다고 말하는 표현을 고르세요.",
+                        "content": "明日の約束の時間を変更したいときに最も自然な表現を選んでください。",
                     }
                 ]
             },
@@ -377,8 +377,8 @@ def level_generation_payload():
             "domain": "VOCABULARY",
             "itemType": "VOCAB_CONTEXT_CHOICE",
             "complexityBand": 2,
-            "instruction": "문맥에 가장 자연스러운 일본어 표현을 고르세요.",
-            "instructionLanguage": "ko",
+            "instruction": "文脈に最も自然な表現を選んでください。",
+            "instructionLanguage": "ja",
             "answerMode": "CHOICE",
             "answerLanguage": None,
             "promptText": prompt,
@@ -399,8 +399,8 @@ def level_generation_payload():
 
     return {
         "candidates": [
-            candidate("내일 약속 시간을 바꾸고 싶다고 말하는 표현을 고르세요.", "SCHEDULE", "REQUEST"),
-            candidate("호텔에서 체크아웃 시간을 늦추고 싶을 때 알맞은 표현을 고르세요.", "TRAVEL", "REQUEST"),
+            candidate("明日の約束の時間を変更したいときに最も自然な表現を選んでください。", "SCHEDULE", "REQUEST"),
+            candidate("ホテルでチェックアウト時間を遅らせたいときに最も適切な表現を選んでください。", "TRAVEL", "REQUEST"),
         ]
     }
 
@@ -632,23 +632,21 @@ class Phase35LevelTestTest(unittest.TestCase):
         response = asyncio.run(self._service(provider).generate_question(level_question_request()))
         self.assertEqual(20, response.total_questions)
         self.assertEqual("VOCABULARY", response.domain.value)
-        self.assertIn("호텔", response.prompt_text)
+        self.assertIn("ホテル", response.prompt_text)
         self.assertEqual("level-test-generation-v2", response.generation_version)
         self.assertEqual("level-test-multiskill-prompt-v9", response.prompt_version)
         self.assertEqual(2, response.complexity_band)
 
-    def test_blank_prompt_text_is_normalized_from_instruction_before_schema_validation(self):
+    def test_blank_prompt_text_is_not_fabricated_from_generic_instruction(self):
         payload = level_generation_payload()
         payload["candidates"][0]["promptText"] = ""
-        payload["candidates"][1]["promptText"] = "   "
-        provider = QueueProvider(structured=[payload])
-
-        response = asyncio.run(
-            self._service(provider).generate_question(level_question_request())
+        normalized, stats = LevelTestGenerationNormalizer.normalize(
+            payload,
+            origin_language="ko",
+            learning_language="ja",
         )
-
-        self.assertTrue(response.prompt_text.strip())
-        self.assertEqual(response.instruction, response.prompt_text)
+        self.assertEqual("", normalized["candidates"][0]["promptText"])
+        self.assertEqual(0, stats.prompt_text_fallbacks)
 
     def test_vocab_paraphrase_migrates_legacy_underline_to_structured_emphasis(self):
         payload = level_generation_payload()
@@ -765,7 +763,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertIn("近年、多くの企業", response.prompt_text)
         self.assertGreater(len(response.prompt_text), 60)
 
-    def test_mixed_reading_instruction_is_repaired_to_origin_language(self):
+    def test_mixed_reading_instruction_is_repaired_to_learning_language(self):
         payload = level_generation_payload()
         reading_prompt = (
             "旅行会社から、来週の出発時間が変更されたという連絡が届きました。"
@@ -806,7 +804,7 @@ class Phase35LevelTestTest(unittest.TestCase):
 
         response = asyncio.run(self._service(provider).generate_question(request))
 
-        self.assertEqual("다음 글을 읽고 가장 적절한 답을 선택하세요.", response.instruction)
+        self.assertEqual("次の文章を読み、最も適切な答えを選んでください。", response.instruction)
 
     def test_reading_underline_is_removed_instead_of_highlighting_answer_evidence(self):
         payload = level_generation_payload()
@@ -863,8 +861,8 @@ class Phase35LevelTestTest(unittest.TestCase):
                     "domain": "GRAMMAR",
                     "itemType": "GRAMMAR_SENTENCE_ORDER",
                     "complexityBand": 3,
-                    "instruction": "다음 조각들을 올바른 순서로 배열하세요.",
-                    "promptText": "다음 조각들을 올바른 순서로 배열하여 의미 있는 문장을 만드세요.",
+                    "instruction": "与えられた要素を正しい順序に並べてください。",
+                    "promptText": "次の語句を正しい順序に並べて、意味の通る文を完成させてください。",
                     "options": [
                         {"key": "A", "text": "もし明日"},
                         {"key": "B", "text": "雨が降ったら、"},
@@ -914,8 +912,8 @@ class Phase35LevelTestTest(unittest.TestCase):
                     "domain": "GRAMMAR",
                     "itemType": "GRAMMAR_SENTENCE_ORDER",
                     "complexityBand": 3,
-                    "instruction": "다음 조각들을 올바른 순서로 배열하세요.",
-                    "promptText": "다음 조각들을 올바른 순서로 배열하여 의미 있는 문장을 만드세요.",
+                    "instruction": "与えられた要素を正しい順序に並べてください。",
+                    "promptText": "次の語句を正しい順序に並べて、意味の通る文を完成させてください。",
                     "options": [
                         {"key": "1", "text": "もし明日"},
                         {"key": "2", "text": "雨が降ったら、"},
@@ -1013,7 +1011,7 @@ class Phase35LevelTestTest(unittest.TestCase):
             ).generate_question(level_question_request())
         )
 
-        self.assertIn("호텔", response.prompt_text)
+        self.assertIn("ホテル", response.prompt_text)
         self.assertEqual(3, len(provider.calls))
         self.assertEqual(
             "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION",
@@ -2087,10 +2085,10 @@ class Phase35LevelTestTest(unittest.TestCase):
                     "domain": "LISTENING",
                     "itemType": "LISTENING_INTERPRETATION",
                     "complexityBand": 2,
-                    "instruction": "음성을 듣고 한국어로 의미를 설명하세요.",
+                    "instruction": "音声を聞き、内容の意味を説明してください。",
                     "answerMode": "TEXT",
                     "answerLanguage": None,
-                    "promptText": "들은 내용의 의미를 한국어로 작성하세요.",
+                    "promptText": "音声を聞き、内容の意味を韓国語で説明してください。",
                     "options": [],
                     "internalAnswerKey": {"correctOptionKey": None, "correctOrder": []},
                     "referencePayload": {
@@ -2131,10 +2129,10 @@ class Phase35LevelTestTest(unittest.TestCase):
                     "domain": "LISTENING",
                     "itemType": "LISTENING_DICTATION",
                     "complexityBand": 3,
-                    "instruction": "들은 일본어 문장을 그대로 입력하세요.",
+                    "instruction": "音声を聞き、聞こえた内容を正確に書き取ってください。",
                     "answerMode": "TEXT",
                     "answerLanguage": "ko",
-                    "promptText": "음성을 듣고 받아쓰세요.",
+                    "promptText": "音声を聞いて、日本語で正確に書き取ってください。",
                     "options": [],
                     "internalAnswerKey": {"correctOptionKey": None, "correctOrder": []},
                     "referencePayload": {"sourceText": "駅まで歩いて十分ぐらいです。"},
@@ -2176,7 +2174,7 @@ class Phase35LevelTestTest(unittest.TestCase):
                     "internalAnswerKey": {"correctOptionKey": None, "correctOrder": []},
                     "referencePayload": {
                         "providedFacts": ["最近楽しんだことを一つ述べる"],
-                        "requiredIntents": ["DESCRIBE_EXPERIENCE"],
+                        "requiredIntents": ["最近の経験を説明する"],
                         "responseConstraints": ["短く説明する"],
                     },
                     "maxAudioSeconds": 90,
@@ -2185,10 +2183,10 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-q19",
-                "idempotencyKey": "level35-q19-idem",
+                "requestId": "level35-q20",
+                "idempotencyKey": "level35-q20-idem",
                 "sessionId": 100,
-                "questionNumber": 19,
+                "questionNumber": 20,
                 "totalQuestions": 20,
                 "domain": "SPEAKING",
                 "itemType": "SPEAKING_GUIDED_RESPONSE",
@@ -2485,6 +2483,7 @@ class Phase35LevelTestTest(unittest.TestCase):
                     ],
                     "strengths": ["의미가 명확합니다."],
                     "improvements": ["조금 더 자연스럽게 연결해 보세요."],
+                    "recommendedAnswers": ["はじめまして。東京で会社員として働いています。よろしくお願いします。"],
                 }
             ]
         )

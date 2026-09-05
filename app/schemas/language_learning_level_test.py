@@ -373,6 +373,14 @@ class LevelTestAssessmentSignal(CamelCaseModel):
     confidence: float = Field(..., ge=0, le=1)
 
 
+class LevelTestFeedbackDetail(CamelCaseModel):
+    category: str = Field(..., min_length=1, max_length=100)
+    severity: Literal["INFO", "STRENGTH", "IMPROVEMENT", "CORRECTION", "OMISSION"] = "INFO"
+    original: str | None = Field(default=None, max_length=2000)
+    corrected: str | None = Field(default=None, max_length=2000)
+    explanation: str = Field(..., min_length=1, max_length=3000)
+
+
 class LevelTestEvaluationResponse(CamelCaseModel):
     request_id: str
     session_id: int | str
@@ -386,6 +394,8 @@ class LevelTestEvaluationResponse(CamelCaseModel):
     metrics: list[LevelTestMetricResult] = Field(default_factory=list)
     strengths: list[str] = Field(default_factory=list, max_length=20)
     improvements: list[str] = Field(default_factory=list, max_length=20)
+    recommended_answers: list[str] = Field(default_factory=list, max_length=3)
+    detailed_feedback: list[LevelTestFeedbackDetail] = Field(default_factory=list, max_length=50)
     assessment_signals: list[LevelTestAssessmentSignal] = Field(default_factory=list, max_length=30)
     reason_code: str | None = None
     evaluation_version: str
@@ -457,6 +467,7 @@ class LevelTestSpeakingEvaluationPayload(CamelCaseModel):
     metrics: list[LevelTestSpeakingMetricPayload] = Field(..., min_length=5, max_length=5)
     strengths: list[str] = Field(default_factory=list, max_length=20)
     improvements: list[str] = Field(default_factory=list, max_length=20)
+    recommended_answers: list[str] = Field(..., max_length=2)
 
     @model_validator(mode="after")
     def validate_metric_set(self) -> "LevelTestSpeakingEvaluationPayload":

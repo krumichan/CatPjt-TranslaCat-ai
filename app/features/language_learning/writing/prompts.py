@@ -45,10 +45,13 @@ Do NOT reveal a translation answer or model answer in this response.
   items only when scenario, communicative intent, task archetype, and grammar focus are meaningfully different.
 
 # Phase 3.5 diversity metadata
-When contentDiversityPolicyVersion is language-learning-diversity-v1, every item MUST also return:
-- languageComplexityBand (1..5) matching the item difficulty and request languageComplexity.
-- diversityMetadata with scenarioCategory, communicativeIntent, taskArchetype, grammarFocusCodes,
-  lexicalFocusCodes, semanticSummary, and requiresBackgroundKnowledge=false.
+When contentDiversityPolicyVersion is language-learning-diversity-v1, EVERY returned item MUST include:
+- languageComplexityBand as an integer 1..5 matching the item difficulty and request languageComplexity.
+- diversityMetadata as a non-null object containing ALL of: scenarioCategory, communicativeIntent,
+  taskArchetype, grammarFocusCodes, lexicalFocusCodes, semanticSummary, and
+  requiresBackgroundKnowledge=false. Never omit these fields and never return null for them.
+- scenarioCategory and communicativeIntent must use only the schema enum tokens.
+- taskArchetype and semanticSummary must be concise and non-empty.
 - Do not reproduce or closely paraphrase diversityContext entries.
 
 # Personalization balance
@@ -59,7 +62,8 @@ Use the supplied data as signals, not rigid quotas. Aim roughly for:
 - new expressions / challenge: 10%
 
 # Output
-Return only fields required by the response schema.
+Return only fields required by the response schema. For Phase 3.5 requests, remember that
+languageComplexityBand and diversityMetadata are required fields even if older examples omitted them.
 - order: 1-based order, unique and contiguous.
 - difficulty: REVIEW, NORMAL, or CHALLENGE.
 - originText: the writing prompt in originLanguage.
@@ -100,10 +104,14 @@ Do NOT calculate or return an overall score. The AI Server calculates OVERALL de
 Spelling and punctuation should be reflected in relevant detailed feedback rather than becoming separate core metrics.
 
 # Feedback
-- Explain concrete strengths and weaknesses.
-- Return corrections when useful, including the original fragment, corrected fragment, category, and reason.
+- Explain concrete strengths and weaknesses tied to the learner's actual answer. Do not merely repeat the source prompt.
+- When a metric is below 90, identify at least one specific error, omission, awkward expression, or unmet task constraint that explains the lost points when evidence exists.
+- Return corrections whenever there is a concrete grammar, vocabulary, spelling, register, or naturalness issue. Each correction must quote the learner's original fragment, provide a corrected learningLanguage fragment, and explain why.
+- For LEVEL_TEST guided tasks, explicitly say which providedFacts / requiredIntents / responseConstraints were satisfied or missed.
+- For LEVEL_TEST translation, explicitly identify meaning omissions/additions and notable mistranslations instead of echoing the source sentence as a weakness.
 - Return exactly 2 or 3 natural recommended answers in learningLanguage. They are examples, not absolute answers.
 - Provide the main explanation and correction reasons in BOTH originLanguage and learningLanguage.
+- Keep strengths/weaknesses concise but diagnostic enough that a learner can understand why the score was not higher.
 - Return profileSignals suitable as evidence for the Backend's long-term Learning Profile update.
 - Keep tags concise and reusable across sessions.
 

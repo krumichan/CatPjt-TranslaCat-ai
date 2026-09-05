@@ -10,10 +10,166 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _HTML_LIKE_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _UNDERLINE_MARKER_RE = re.compile(r"(<u>|</u>)", re.IGNORECASE)
 _UNDERLINE_TARGET_RE = re.compile(r"<u>([\s\S]*?)</u>", re.IGNORECASE)
-_KANA_RE = re.compile(r"[\u3040-\u30ff]")
-_HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 _OPTION_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_-]{0,15}$")
 _MARKDOWN_BOLD_RE = re.compile(r"\*\*([^*\n][\s\S]*?)\*\*")
+
+
+_INSTRUCTION_GROUP_BY_ITEM_TYPE = {
+    "VOCAB_CONTEXT_CHOICE": "VOCAB_CONTEXT",
+    "VOCAB_PARAPHRASE_CHOICE": "VOCAB_PARAPHRASE",
+    "GRAMMAR_FORM_CHOICE": "GRAMMAR_FORM",
+    "GRAMMAR_SENTENCE_ORDER": "SENTENCE_ORDER",
+    "READING_GIST": "READING_CHOICE",
+    "READING_DETAIL": "READING_CHOICE",
+    "READING_DISCOURSE_FUNCTION": "READING_CHOICE",
+    "READING_TEXT_INFERENCE": "READING_CHOICE",
+    "LISTENING_GIST_CHOICE": "LISTENING_CHOICE",
+    "LISTENING_DETAIL_CHOICE": "LISTENING_CHOICE",
+    "LISTENING_DICTATION": "LISTENING_DICTATION",
+    "LISTENING_INTERPRETATION": "LISTENING_INTERPRETATION",
+    "WRITING_TRANSLATION": "WRITING_TRANSLATION",
+    "WRITING_GUIDED_SENTENCE": "WRITING_GUIDED",
+    "WRITING_SCENARIO_RESPONSE": "WRITING_SCENARIO",
+    "WRITING_SHORT_PARAGRAPH": "WRITING_PARAGRAPH",
+    "SPEAKING_REPEAT": "SPEAKING_REPEAT",
+    "SPEAKING_GUIDED_RESPONSE": "SPEAKING_GUIDED",
+    "SPEAKING_SHORT_RESPONSE": "SPEAKING_SHORT",
+}
+
+_INSTRUCTION_TEMPLATES = {
+    "ko": {
+        "VOCAB_CONTEXT": "문맥에 가장 적절한 표현을 선택하세요.",
+        "VOCAB_PARAPHRASE": "제시된 표현과 의미가 가장 가까운 표현을 선택하세요.",
+        "GRAMMAR_FORM": "빈칸에 들어갈 가장 적절한 표현을 선택하세요.",
+        "SENTENCE_ORDER": "주어진 요소를 올바른 순서로 배열하세요.",
+        "READING_CHOICE": "다음 글을 읽고 가장 적절한 답을 선택하세요.",
+        "LISTENING_CHOICE": "음성을 듣고 가장 적절한 답을 선택하세요.",
+        "LISTENING_DICTATION": "음성을 듣고 들은 내용을 정확히 받아쓰세요.",
+        "LISTENING_INTERPRETATION": "음성을 듣고 그 의미를 설명하세요.",
+        "WRITING_TRANSLATION": "다음 내용을 학습 언어로 번역하세요.",
+        "WRITING_GUIDED": "주어진 조건에 맞게 학습 언어로 문장을 작성하세요.",
+        "WRITING_SCENARIO": "주어진 상황에 맞게 학습 언어로 답변하세요.",
+        "WRITING_PARAGRAPH": "주어진 주제에 맞게 학습 언어로 짧은 글을 작성하세요.",
+        "SPEAKING_REPEAT": "음성을 듣고 그대로 따라 말하세요.",
+        "SPEAKING_GUIDED": "주어진 조건에 맞게 학습 언어로 말하세요.",
+        "SPEAKING_SHORT": "질문에 학습 언어로 짧게 답하세요.",
+    },
+    "ja": {
+        "VOCAB_CONTEXT": "文脈に最も適切な表現を選んでください。",
+        "VOCAB_PARAPHRASE": "提示された表現と意味が最も近い表現を選んでください。",
+        "GRAMMAR_FORM": "空欄に入る最も適切な表現を選んでください。",
+        "SENTENCE_ORDER": "与えられた要素を正しい順序に並べてください。",
+        "READING_CHOICE": "次の文章を読み、最も適切な答えを選んでください。",
+        "LISTENING_CHOICE": "音声を聞き、最も適切な答えを選んでください。",
+        "LISTENING_DICTATION": "音声を聞き、聞こえた内容を正確に書き取ってください。",
+        "LISTENING_INTERPRETATION": "音声を聞き、その意味を説明してください。",
+        "WRITING_TRANSLATION": "次の内容を学習言語に翻訳してください。",
+        "WRITING_GUIDED": "与えられた条件に従って、学習言語で文を書いてください。",
+        "WRITING_SCENARIO": "与えられた状況に合わせて、学習言語で答えてください。",
+        "WRITING_PARAGRAPH": "与えられたテーマに沿って、学習言語で短い文章を書いてください。",
+        "SPEAKING_REPEAT": "音声を聞き、そのまま繰り返して話してください。",
+        "SPEAKING_GUIDED": "与えられた条件に従って、学習言語で話してください。",
+        "SPEAKING_SHORT": "質問に学習言語で短く答えてください。",
+    },
+    "en": {
+        "VOCAB_CONTEXT": "Choose the expression that best fits the context.",
+        "VOCAB_PARAPHRASE": "Choose the expression closest in meaning to the given expression.",
+        "GRAMMAR_FORM": "Choose the expression that best completes the blank.",
+        "SENTENCE_ORDER": "Arrange the given elements in the correct order.",
+        "READING_CHOICE": "Read the passage and choose the best answer.",
+        "LISTENING_CHOICE": "Listen to the audio and choose the best answer.",
+        "LISTENING_DICTATION": "Listen to the audio and write down exactly what you hear.",
+        "LISTENING_INTERPRETATION": "Listen to the audio and explain its meaning.",
+        "WRITING_TRANSLATION": "Translate the following content into the learning language.",
+        "WRITING_GUIDED": "Write a sentence in the learning language using the given conditions.",
+        "WRITING_SCENARIO": "Respond in the learning language to the given situation.",
+        "WRITING_PARAGRAPH": "Write a short paragraph in the learning language about the given topic.",
+        "SPEAKING_REPEAT": "Listen to the audio and repeat it exactly.",
+        "SPEAKING_GUIDED": "Speak in the learning language using the given conditions.",
+        "SPEAKING_SHORT": "Give a short answer to the question in the learning language.",
+    },
+}
+
+
+_INTENT_GUIDANCE_TEMPLATES = {
+    "ko": {
+        "DESCRIBE": "상황이나 내용을 설명하기",
+        "REQUEST": "정중하게 요청하기",
+        "CONFIRM": "내용을 확인하기",
+        "REPORT": "상황을 전달하기",
+        "SUGGEST": "제안하기",
+        "DECLINE": "정중하게 거절하기",
+        "APOLOGIZE": "정중하게 사과하기",
+        "COMPARE": "차이점을 비교하기",
+        "EXPLAIN_REASON": "이유를 설명하기",
+        "ASK_INFORMATION": "필요한 정보를 문의하기",
+        "GIVE_INSTRUCTION": "방법이나 절차를 안내하기",
+        "EXPRESS_PREFERENCE": "선호를 표현하기",
+        "SUMMARIZE": "핵심 내용을 요약하기",
+    },
+    "ja": {
+        "DESCRIBE": "状況や内容を説明する",
+        "REQUEST": "丁寧に依頼する",
+        "CONFIRM": "内容を確認する",
+        "REPORT": "状況を伝える",
+        "SUGGEST": "提案する",
+        "DECLINE": "丁寧に断る",
+        "APOLOGIZE": "丁寧に謝罪する",
+        "COMPARE": "違いを比較する",
+        "EXPLAIN_REASON": "理由を説明する",
+        "ASK_INFORMATION": "必要な情報を尋ねる",
+        "GIVE_INSTRUCTION": "方法や手順を案内する",
+        "EXPRESS_PREFERENCE": "好みを表現する",
+        "SUMMARIZE": "要点をまとめる",
+    },
+    "en": {
+        "DESCRIBE": "Describe the situation or content",
+        "REQUEST": "Make a polite request",
+        "CONFIRM": "Confirm the information",
+        "REPORT": "Report the situation",
+        "SUGGEST": "Make a suggestion",
+        "DECLINE": "Decline politely",
+        "APOLOGIZE": "Apologize politely",
+        "COMPARE": "Compare the differences",
+        "EXPLAIN_REASON": "Explain the reason",
+        "ASK_INFORMATION": "Ask for the needed information",
+        "GIVE_INSTRUCTION": "Explain the method or steps",
+        "EXPRESS_PREFERENCE": "Express a preference",
+        "SUMMARIZE": "Summarize the key points",
+    },
+}
+
+
+_SCENARIO_CATEGORY_TOKENS = {
+    "DAILY_LIFE",
+    "WORK",
+    "TRAVEL",
+    "SHOPPING",
+    "FOOD",
+    "SERVICE",
+    "LEARNING",
+    "HOBBY",
+    "DIGITAL_LIFE",
+    "SOCIAL",
+    "SCHEDULE",
+    "HEALTH_GENERAL",
+}
+_COMMUNICATIVE_INTENT_TOKENS = {
+    "DESCRIBE",
+    "REQUEST",
+    "CONFIRM",
+    "REPORT",
+    "SUGGEST",
+    "DECLINE",
+    "APOLOGIZE",
+    "COMPARE",
+    "EXPLAIN_REASON",
+    "ASK_INFORMATION",
+    "GIVE_INSTRUCTION",
+    "EXPRESS_PREFERENCE",
+    "SUMMARIZE",
+}
+
 
 
 @dataclass(frozen=True)
@@ -33,6 +189,9 @@ class LevelTestGenerationNormalizationStats:
     reading_structure_repairs: int = 0
     listening_structure_repairs: int = 0
     vocab_emphasis_repairs: int = 0
+    generation_plan_id_repairs: int = 0
+    enum_token_repairs: int = 0
+    writing_translation_repairs: int = 0
 
     @property
     def total(self) -> int:
@@ -52,6 +211,9 @@ class LevelTestGenerationNormalizationStats:
             + self.reading_structure_repairs
             + self.listening_structure_repairs
             + self.vocab_emphasis_repairs
+            + self.generation_plan_id_repairs
+            + self.enum_token_repairs
+            + self.writing_translation_repairs
         )
 
 
@@ -92,6 +254,9 @@ class LevelTestGenerationNormalizer:
             "reading_structure_repairs": 0,
             "listening_structure_repairs": 0,
             "vocab_emphasis_repairs": 0,
+            "generation_plan_id_repairs": 0,
+            "enum_token_repairs": 0,
+            "writing_translation_repairs": 0,
         }
 
         for candidate in candidates:
@@ -115,16 +280,17 @@ class LevelTestGenerationNormalizer:
         origin_language: str | None,
         learning_language: str | None,
     ) -> None:
+        cls._normalize_generation_plan_id(candidate, counts)
         cls._normalize_vocab_paraphrase_emphasis(candidate, counts)
+        cls._normalize_instruction_language(
+            candidate,
+            learning_language=learning_language,
+            counts=counts,
+        )
 
         prompt_key = cls._existing_key(candidate, "promptText", "prompt_text") or "promptText"
-        prompt_text = candidate.get(prompt_key)
-        if not cls._has_text(prompt_text):
-            instruction = cls._value(candidate, "instruction")
-            if cls._has_text(instruction):
-                candidate[prompt_key] = cls._compact_whitespace(str(instruction))
-                counts["prompt_text_fallbacks"] += 1
-
+        # Do not invent semantic task text from the generic instruction.  A missing
+        # promptText is a genuine provider contract failure and must be rejected.
         prompt_text = candidate.get(prompt_key)
         if cls._has_text(prompt_text):
             original_prompt = str(prompt_text)
@@ -136,13 +302,14 @@ class LevelTestGenerationNormalizer:
             if sanitized_prompt != original_prompt:
                 counts["prompt_markup_sanitizations"] += 1
 
-        cls._normalize_instruction_language(
-            candidate,
-            origin_language=origin_language,
-            counts=counts,
-        )
         cls._normalize_listening_source_alias(candidate, counts)
         cls._normalize_reference_payload_shape(candidate, counts)
+        cls._normalize_guided_intent_labels(
+            candidate,
+            learning_language=learning_language,
+            counts=counts,
+        )
+        cls._normalize_writing_translation_structure(candidate, counts)
         cls._normalize_listening_structure(candidate, counts)
         cls._normalize_reading_structure(candidate, counts)
         cls._normalize_reading_emphasis(candidate, counts)
@@ -162,6 +329,44 @@ class LevelTestGenerationNormalizer:
         )
         cls._normalize_max_audio_seconds(candidate, answer_mode, counts)
         cls._normalize_max_answer_length(candidate, answer_mode, counts)
+
+    @classmethod
+    def _normalize_generation_plan_id(
+        cls,
+        candidate: dict[str, Any],
+        counts: dict[str, int],
+    ) -> None:
+        """Canonicalize the reserved A/B design binding without inventing semantics.
+
+        generationPlanId is meaningful only for staged VOCAB_CONTEXT_CHOICE. Other
+        recipes must carry null. Invalid vocabulary plan IDs are cleared so a bad
+        sibling cannot invalidate the entire provider batch; the later server design
+        binding still fails closed when A/B is actually required.
+        """
+
+        key = cls._existing_key(candidate, "generationPlanId", "generation_plan_id")
+        if key is None:
+            return
+
+        item_type = cls._value(candidate, "itemType", "item_type")
+        value = candidate.get(key)
+        if item_type != "VOCAB_CONTEXT_CHOICE":
+            if value is not None:
+                candidate[key] = None
+                counts["generation_plan_id_repairs"] += 1
+            return
+
+        if value is None:
+            return
+        normalized = str(value).strip().upper() if isinstance(value, str) else ""
+        if normalized in {"A", "B"}:
+            if normalized != value:
+                candidate[key] = normalized
+                counts["generation_plan_id_repairs"] += 1
+            return
+
+        candidate[key] = None
+        counts["generation_plan_id_repairs"] += 1
 
     @classmethod
     def _normalize_option_keys(
@@ -418,6 +623,54 @@ class LevelTestGenerationNormalizer:
         if changed:
             counts["reference_payload_shape_repairs"] += 1
 
+    @classmethod
+    def _normalize_writing_translation_structure(
+        cls,
+        candidate: dict[str, Any],
+        counts: dict[str, int],
+    ) -> None:
+        """Keep the visible Writing source and evaluation source identical.
+
+        promptText is what the learner actually sees, so it is the source of truth when
+        both fields are present. If promptText is missing but translationSourceText is
+        available, the existing provider text can safely fill the visible field.
+        """
+
+        if cls._value(candidate, "itemType", "item_type") != "WRITING_TRANSLATION":
+            return
+        payload = cls._value(candidate, "referencePayload", "reference_payload")
+        if not isinstance(payload, dict):
+            return
+
+        source_key = cls._existing_key(
+            payload,
+            "translationSourceText",
+            "translation_source_text",
+        ) or "translationSourceText"
+        prompt_key = cls._existing_key(candidate, "promptText", "prompt_text") or "promptText"
+        source = payload.get(source_key)
+        prompt = candidate.get(prompt_key)
+
+        changed = False
+        if cls._has_text(prompt):
+            canonical = str(prompt).strip()
+            if candidate.get(prompt_key) != canonical:
+                candidate[prompt_key] = canonical
+                changed = True
+            if payload.get(source_key) != canonical:
+                payload[source_key] = canonical
+                changed = True
+        elif cls._has_text(source):
+            canonical = str(source).strip()
+            if payload.get(source_key) != canonical:
+                payload[source_key] = canonical
+                changed = True
+            candidate[prompt_key] = canonical
+            changed = True
+
+        if changed:
+            counts["writing_translation_repairs"] += 1
+
 
     @classmethod
     def _normalize_listening_structure(
@@ -616,34 +869,118 @@ class LevelTestGenerationNormalizer:
         cls,
         candidate: dict[str, Any],
         *,
-        origin_language: str | None,
+        learning_language: str | None,
         counts: dict[str, int],
     ) -> None:
-        domain = cls._value(candidate, "domain")
-        if domain != "READING" or not origin_language:
+        """Keep all Level Test operation instructions in the learning language.
+
+        The Level Test is an assessment surface, so short operation instructions are
+        server-owned learner-facing content.  Cross-language behavior belongs only to
+        explicit task payloads (for example a WRITING_TRANSLATION source or an
+        interpretation answer language), not to the operation instruction itself.
+        """
+
+        if not isinstance(learning_language, str) or not learning_language.strip():
             return
-        key = cls._existing_key(candidate, "instruction") or "instruction"
-        instruction = candidate.get(key)
-        if not cls._has_text(instruction):
-            return
-        value = str(instruction)
-        language = origin_language.lower()
-        mismatch = (
-            language == "ko" and bool(_KANA_RE.search(value))
-            or language == "ja" and bool(_HANGUL_RE.search(value))
-            or language == "en" and bool(_KANA_RE.search(value) or _HANGUL_RE.search(value))
+
+        expected_language = learning_language.strip()
+        primary_language = re.split(r"[-_]", expected_language.lower(), maxsplit=1)[0]
+        item_type = cls._value(candidate, "itemType", "item_type")
+        instruction_group = (
+            _INSTRUCTION_GROUP_BY_ITEM_TYPE.get(item_type)
+            if isinstance(item_type, str)
+            else None
         )
-        if not mismatch:
+        template = (
+            _INSTRUCTION_TEMPLATES.get(primary_language, {}).get(instruction_group)
+            if instruction_group is not None
+            else None
+        )
+
+        changed = False
+        language_key = (
+            cls._existing_key(candidate, "instructionLanguage", "instruction_language")
+            or "instructionLanguage"
+        )
+        if candidate.get(language_key) != expected_language:
+            candidate[language_key] = expected_language
+            changed = True
+
+        if template is not None:
+            instruction_key = cls._existing_key(candidate, "instruction") or "instruction"
+            if candidate.get(instruction_key) != template:
+                candidate[instruction_key] = template
+                changed = True
+
+        if changed:
+            counts["instruction_language_repairs"] += 1
+
+    @staticmethod
+    def instruction_template(
+        item_type: str,
+        learning_language: str,
+    ) -> str | None:
+        """Expose the canonical learning-language template for tests/diagnostics."""
+
+        if not isinstance(item_type, str) or not isinstance(learning_language, str):
+            return None
+        language = re.split(r"[-_]", learning_language.strip().lower(), maxsplit=1)[0]
+        group = _INSTRUCTION_GROUP_BY_ITEM_TYPE.get(item_type)
+        if group is None:
+            return None
+        return _INSTRUCTION_TEMPLATES.get(language, {}).get(group)
+
+    @classmethod
+    def _normalize_guided_intent_labels(
+        cls,
+        candidate: dict[str, Any],
+        *,
+        learning_language: str | None,
+        counts: dict[str, int],
+    ) -> None:
+        """Convert internal communicative-intent tokens into learner-facing labels.
+
+        Only exact known enum tokens are rewritten.  Arbitrary natural-language text
+        is never translated here because that would invent semantic content.
+        """
+
+        if not isinstance(learning_language, str) or not learning_language.strip():
             return
-        fallback = {
-            "ko": "다음 글을 읽고 가장 적절한 답을 선택하세요.",
-            "ja": "次の文章を読み、最も適切な答えを選んでください。",
-            "en": "Read the passage and choose the best answer.",
-        }.get(language)
-        if fallback is None:
+        language = re.split(r"[-_]", learning_language.strip().lower(), maxsplit=1)[0]
+        labels = _INTENT_GUIDANCE_TEMPLATES.get(language)
+        if not labels:
             return
-        candidate[key] = fallback
-        counts["instruction_language_repairs"] += 1
+        payload = cls._value(candidate, "referencePayload", "reference_payload")
+        if not isinstance(payload, dict):
+            return
+        key = cls._existing_key(payload, "requiredIntents", "required_intents")
+        if key is None:
+            return
+        values = payload.get(key)
+        if not isinstance(values, list):
+            return
+
+        repaired = 0
+        normalized_values: list[object] = []
+        for value in values:
+            if not isinstance(value, str):
+                normalized_values.append(value)
+                continue
+            token = cls._canonical_enum_token(value)
+            label = labels.get(token)
+            if label is None:
+                normalized_values.append(value)
+                continue
+            normalized_values.append(label)
+            if label != value:
+                repaired += 1
+        if repaired:
+            payload[key] = normalized_values
+            counts["enum_token_repairs"] += repaired
+
+    @staticmethod
+    def _canonical_enum_token(value: str) -> str:
+        return re.sub(r"[\s-]+", "_", value.strip()).upper()
 
     @classmethod
     def _normalize_diversity_metadata(
@@ -651,6 +988,19 @@ class LevelTestGenerationNormalizer:
         metadata: dict[str, Any],
         counts: dict[str, int],
     ) -> None:
+        for aliases, allowed in (
+            (("scenarioCategory", "scenario_category"), _SCENARIO_CATEGORY_TOKENS),
+            (("communicativeIntent", "communicative_intent"), _COMMUNICATIVE_INTENT_TOKENS),
+        ):
+            key = cls._existing_key(metadata, *aliases)
+            if key is None or not isinstance(metadata.get(key), str):
+                continue
+            original = str(metadata[key])
+            normalized = re.sub(r"[\s-]+", "_", original.strip()).upper()
+            if normalized in allowed and normalized != original:
+                metadata[key] = normalized
+                counts["enum_token_repairs"] += 1
+
         task_key = cls._existing_key(metadata, "taskArchetype", "task_archetype")
         if task_key is not None and cls._has_text(metadata.get(task_key)):
             original = str(metadata[task_key])

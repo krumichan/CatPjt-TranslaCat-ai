@@ -41,7 +41,7 @@ class GeminiService:
 
     def __init__(self) -> None:
         self._client = None
-        self.model_name = settings.GEMINI_MODEL_NAME
+        self.model_name = settings.GEMINI_MODEL_FLASH
         self.config_manager = GeminiConfigManager()
 
     @property
@@ -135,7 +135,7 @@ class GeminiService:
         for attempt in range(1, max_attempts + 1):
             try:
                 response = await self.client.aio.models.generate_content(
-                    model=settings.GEMINI_TTS_MODEL_NAME,
+                    model=settings.GEMINI_MODEL_TTS,
                     contents=instruction,
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
@@ -154,7 +154,7 @@ class GeminiService:
                     audio_bytes=wav_bytes,
                     content_type="audio/wav",
                     provider="gemini",
-                    model=settings.GEMINI_TTS_MODEL_NAME,
+                    model=settings.GEMINI_MODEL_TTS,
                     duration_seconds=len(pcm) / (24_000 * 2),
                 )
             except ValueError as exc:
@@ -390,7 +390,7 @@ class GeminiService:
 
         try:
             response = await self.client.aio.models.generate_content(
-                model=settings.AI_VOICE_TRANSLATION_MODEL_NAME,
+                model=settings.GEMINI_MODEL_FLASH,
                 contents=prompt,
                 config=self.config_manager.get_voice_translation_config(schema),
             )
@@ -408,7 +408,7 @@ class GeminiService:
                 input_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
                 output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
                 provider="gemini",
-                model=settings.AI_VOICE_TRANSLATION_MODEL_NAME,
+                model=settings.GEMINI_MODEL_FLASH,
             )
         except Exception:
             # Voice content and provider raw responses must never enter logs.

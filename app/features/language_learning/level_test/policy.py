@@ -33,9 +33,13 @@ LEVEL_TEST_RECIPE: dict[int, tuple[LevelTestDomain, LevelTestItemType]] = {
     15: (LevelTestDomain.WRITING, LevelTestItemType.WRITING_TRANSLATION),
     16: (LevelTestDomain.WRITING, LevelTestItemType.WRITING_TRANSLATION),
     17: (LevelTestDomain.WRITING, LevelTestItemType.WRITING_SHORT_PARAGRAPH),
+    # Speaking intentionally separates pronunciation from free production:
+    # 18 = text-assisted repeat (pronunciation/intonation with low memory load),
+    # 19 = audio-only repeat (up to three listens; shorter utterance),
+    # 20 = one guided open response.
     18: (LevelTestDomain.SPEAKING, LevelTestItemType.SPEAKING_REPEAT),
-    19: (LevelTestDomain.SPEAKING, LevelTestItemType.SPEAKING_GUIDED_RESPONSE),
-    20: (LevelTestDomain.SPEAKING, LevelTestItemType.SPEAKING_SHORT_RESPONSE),
+    19: (LevelTestDomain.SPEAKING, LevelTestItemType.SPEAKING_REPEAT),
+    20: (LevelTestDomain.SPEAKING, LevelTestItemType.SPEAKING_GUIDED_RESPONSE),
 }
 
 DOMAIN_WEIGHTS: dict[LevelTestDomain, Decimal] = {

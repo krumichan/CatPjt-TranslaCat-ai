@@ -1,4 +1,7 @@
-from app.ai.provider_factory import create_text_generation_provider
+from app.ai.provider_factory import (
+    create_speech_synthesis_provider,
+    create_text_generation_provider,
+)
 from app.core.config import settings
 from app.features.chat_ai_reply.service import ChatAiReplyService
 from app.features.chat_translation.service import ChatTranslationService
@@ -58,6 +61,7 @@ from app.services.ocr_service import OCRService
 from app.services.stt_service import STTService
 
 _ai_provider = create_text_generation_provider()
+_speech_provider = create_speech_synthesis_provider()
 
 _speech_runtime = FasterWhisperRuntime()
 _stt_service = STTService(runtime=_speech_runtime)
@@ -86,7 +90,7 @@ _listening_audio_processor = SpeakingAudioProcessor()
 _listening_stt_provider = FasterWhisperListeningSttProvider(runtime=_speech_runtime)
 _listening_generation_service = ListeningGenerationService(_ai_provider)
 _listening_tts_service = ListeningTtsService(
-    provider=_ai_provider,
+    provider=_speech_provider,
     audio_store=_listening_audio_store,
 )
 _listening_dictation_service = ListeningDictationService()
@@ -106,7 +110,7 @@ _speaking_stt_service = SpeakingSttService(_speaking_stt_provider)
 _speaking_conversation_service = SpeakingConversationService(_ai_provider)
 _speaking_assistance_service = SpeakingAssistanceService(_ai_provider)
 _speaking_tts_service = SpeakingTtsService(
-    provider=_ai_provider,
+    provider=_speech_provider,
     audio_store=_speaking_audio_store,
 )
 _speaking_evaluation_service = SpeakingEvaluationService(_ai_provider)
@@ -117,7 +121,7 @@ _level_test_service = LevelTestService(
     interpretation_service=_listening_interpretation_service,
     audio_processor=_speaking_audio_processor,
     stt_service=_speaking_stt_service,
-    speech_provider=_ai_provider,
+    speech_provider=_speech_provider,
 )
 _speaking_turn_service = SpeakingTurnService(
     audio_processor=_speaking_audio_processor,
@@ -143,6 +147,10 @@ _voice_stream_service = VoiceStreamApplicationService(
 
 def get_ai_provider():
     return _ai_provider
+
+
+def get_speech_synthesis_provider():
+    return _speech_provider
 
 
 def get_speech_runtime() -> FasterWhisperRuntime:

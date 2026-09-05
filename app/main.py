@@ -8,6 +8,7 @@ from app.api.dependencies import (
     get_ai_provider,
     get_ocr_service,
     get_speech_runtime,
+    get_speech_synthesis_provider,
     get_voice_speech_evidence_guard,
     get_voice_stream_service,
     get_voice_translation_service,
@@ -41,6 +42,11 @@ async def lifespan(app: FastAPI):
         shutdown_provider = getattr(get_ai_provider(), "shutdown", None)
         if shutdown_provider is not None:
             await shutdown_provider()
+        shutdown_speech_provider = getattr(
+            get_speech_synthesis_provider(), "shutdown", None
+        )
+        if shutdown_speech_provider is not None:
+            await shutdown_speech_provider()
 
 
 app = FastAPI(

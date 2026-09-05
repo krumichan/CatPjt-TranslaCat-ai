@@ -246,16 +246,51 @@ class ListeningDictationService:
     @staticmethod
     def _improvements(summary) -> list[str]:
         improvements: list[str] = []
-        if summary.omission_count:
-            improvements.append("빠뜨린 부분을 구간 반복으로 다시 확인해 보세요.")
-        if summary.addition_count:
+
+        def sample(status, *, limit: int = 3):
+            return [entry for entry in summary.entries if entry.status == status][:limit]
+
+        omissions = sample(AlignmentStatus.OMISSION)
+        if omissions:
+            tokens = "、".join(f"「{entry.source}」" for entry in omissions if entry.source)
             improvements.append(
-                "들리지 않은 말을 추측해 덧붙이지 않았는지 확인해 보세요."
+                f"빠뜨린 부분: {tokens}. 해당 구간을 다시 듣고 확인해 보세요."
+                if tokens
+                else "빠뜨린 부분을 구간 반복으로 다시 확인해 보세요."
             )
-        if summary.order_count:
+
+        additions = sample(AlignmentStatus.ADDITION)
+        if additions:
+            tokens = "、".join(f"「{entry.answer}」" for entry in additions if entry.answer)
             improvements.append(
-                "Token은 들었지만 순서가 바뀐 부분을 다시 확인해 보세요."
+                f"원문에 없는데 추가한 부분: {tokens}. 들리지 않은 말을 추측해 덧붙이지 않았는지 확인해 보세요."
+                if tokens
+                else "들리지 않은 말을 추측해 덧붙이지 않았는지 확인해 보세요."
             )
-        if summary.substitution_count:
-            improvements.append("다르게 적은 Token의 소리를 집중해서 들어 보세요.")
+
+        order_errors = sample(AlignmentStatus.ORDER)
+        if order_errors:
+            pairs = "、".join(
+                f"「{entry.source}」→「{entry.answer}」"
+                for entry in order_errors
+                if entry.source or entry.answer
+            )
+            improvements.append(
+                f"순서를 다시 확인할 부분: {pairs}."
+                if pairs
+                else "Token은 들었지만 순서가 바뀐 부분을 다시 확인해 보세요."
+            )
+
+        substitutions = sample(AlignmentStatus.SUBSTITUTION)
+        if substitutions:
+            pairs = "、".join(
+                f"「{entry.source}」→「{entry.answer}」"
+                for entry in substitutions
+                if entry.source or entry.answer
+            )
+            improvements.append(
+                f"다르게 받아쓴 부분: {pairs}. 원문의 소리를 다시 비교해 보세요."
+                if pairs
+                else "다르게 적은 Token의 소리를 집중해서 들어 보세요."
+            )
         return improvements
