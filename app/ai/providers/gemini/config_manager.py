@@ -113,6 +113,7 @@ class GeminiConfigManager:
                     "LANGUAGE_LEARNING_WRITING_EVALUATION",
                     "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
                     "LANGUAGE_LEARNING_LISTENING_INTERPRETATION",
+                    "LANGUAGE_LEARNING_LISTENING_SUMMARY_EVALUATION",
                     "LANGUAGE_LEARNING_LEVEL_TEST_V2_SPEAKING_EVALUATION",
                 }
                 and schema is not None

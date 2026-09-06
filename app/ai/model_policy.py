@@ -73,6 +73,9 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_LISTENING_INTERPRETATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 8192
     ),
+    "LANGUAGE_LEARNING_LISTENING_SUMMARY_EVALUATION": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 8192
+    ),
     "LANGUAGE_LEARNING_LEVEL_TEST_V2_SPEAKING_EVALUATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 8192
     ),

@@ -14,6 +14,10 @@ def test_generation_uses_luna_and_evaluation_uses_mini():
         get_task_model_policy("LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION").tier
         == AiModelTier.MINI
     )
+    assert (
+        get_task_model_policy("LANGUAGE_LEARNING_LISTENING_SUMMARY_EVALUATION").tier
+        == AiModelTier.MINI
+    )
 
 
 def test_receipt_and_voice_translation_start_on_luna():
