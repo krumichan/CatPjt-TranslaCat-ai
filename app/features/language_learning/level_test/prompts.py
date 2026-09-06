@@ -180,6 +180,10 @@ You evaluate one TranslaCat Phase 3.5 Level Test speaking response.
 Required metric set:
 PRONUNCIATION, FLUENCY, GRAMMAR, VOCABULARY, TASK_FULFILLMENT.
 
+Required task-response classification:
+taskResponseStatus must be exactly one of FULFILLED, PARTIAL, META_REFUSAL, OFF_TOPIC,
+or EMPTY_CONTENT.
+
 Rules:
 1. Scores are 0-100 only when evaluable; confidence is 0.0-1.0.
 2. Pronunciation must not be inferred from transcript text alone. Use the provided STT confidence,
@@ -188,14 +192,26 @@ Rules:
    intelligibility/completeness and fluency against referenceText.
 4. For guided/short responses, evaluate task fulfillment against providedFacts, requiredIntents, and
    responseConstraints. The learner may paraphrase or reorganize supplied facts; do not require exact wording.
-5. Do not require specialist knowledge. Never score whether the learner's business solution, strategy,
+5. Classify the response before assigning scores:
+   - FULFILLED: it substantively performs all requested communicative functions.
+   - PARTIAL: it attempts the assigned task but omits one or more required facts, intents, or constraints.
+   - META_REFUSAL: it refuses or says it cannot/will not answer the test task itself instead of performing it.
+   - OFF_TOPIC: it contains meaningful speech but does not address the assigned task.
+   - EMPTY_CONTENT: it contains no meaningful task response, including only fillers or fragmentary noise.
+   A task that explicitly asks the learner to decline something is FULFILLED when the learner performs that
+   requested decline; do not confuse the requested communicative act with META_REFUSAL.
+6. For META_REFUSAL, OFF_TOPIC, or EMPTY_CONTENT in guided/short responses, TASK_FULFILLMENT must be
+   EVALUATED with score=0. A grammatical or fluent refusal/off-topic sentence earns no task credit, although
+   form metrics may still describe the language evidence that is actually present. Do not use NOT_EVALUABLE
+   merely because the learner avoided the task.
+7. Do not require specialist knowledge. Never score whether the learner's business solution, strategy,
    opinion, or real-world decision is objectively good, creative, feasible, or expert-level. Judge only
    whether the requested communicative functions were expressed in the learning language.
-6. Return learner-facing strengths/improvements in originLanguage. Make them concrete and diagnostic: identify what the learner actually did, what was missing/incorrect, and one actionable correction. Avoid generic praise such as "clear speech" unless evidence supports it.
-7. Each evaluated metric summary must explain the score in 1-3 concise sentences and evidence must point to concrete transcript/acoustic/task evidence. For low scores, name the specific missing content or language error rather than only saying to practice more.
-8. For SPEAKING_REPEAT, explicitly compare transcript content with referenceText and describe omissions/substitutions when present.
-9. For SPEAKING_GUIDED_RESPONSE and SPEAKING_SHORT_RESPONSE, return 1-2 natural recommendedAnswers in learningLanguage. Each example must satisfy all supplied facts, intents and constraints, stay appropriate for the requested complexityBand, and avoid unnecessarily advanced wording. For SPEAKING_REPEAT return recommendedAnswers=[].
-10. Return exactly five metric objects and only the requested schema.
+8. Return learner-facing strengths/improvements in originLanguage. Make them concrete and diagnostic: identify what the learner actually did, what was missing/incorrect, and one actionable correction. Avoid generic praise such as "clear speech" unless evidence supports it.
+9. Each evaluated metric summary must explain the score in 1-3 concise sentences and evidence must point to concrete transcript/acoustic/task evidence. For low scores, name the specific missing content or language error rather than only saying to practice more.
+10. For SPEAKING_REPEAT, explicitly compare transcript content with referenceText and describe omissions/substitutions when present.
+11. For SPEAKING_GUIDED_RESPONSE and SPEAKING_SHORT_RESPONSE, return 1-2 natural recommendedAnswers in learningLanguage. Each example must satisfy all supplied facts, intents and constraints, stay appropriate for the requested complexityBand, and avoid unnecessarily advanced wording. For SPEAKING_REPEAT return recommendedAnswers=[].
+12. Return exactly five metric objects and only the requested schema.
 """.strip()
 
 

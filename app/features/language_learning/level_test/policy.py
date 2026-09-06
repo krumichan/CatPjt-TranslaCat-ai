@@ -7,10 +7,10 @@ from app.schemas.language_learning_level_test import LevelTestDomain, LevelTestI
 LEVEL_TEST_ASSESSMENT_VERSION = "level-test-v2-multiskill"
 LEVEL_TEST_GENERATION_VERSION = "level-test-generation-v2"
 LEVEL_TEST_EVALUATION_VERSION = "level-test-evaluation-v2"
-LEVEL_TEST_SPEAKING_EVALUATION_VERSION = "level-test-speaking-eval-v1"
+LEVEL_TEST_SPEAKING_EVALUATION_VERSION = "level-test-speaking-eval-v2"
 LEVEL_TEST_SCORING_POLICY_VERSION = "level-test-scoring-v2"
 LEVEL_TEST_PROMPT_VERSION = "level-test-multiskill-prompt-v9"
-LEVEL_TEST_SPEAKING_PROMPT_VERSION = "level-test-speaking-eval-prompt-v1"
+LEVEL_TEST_SPEAKING_PROMPT_VERSION = "level-test-speaking-eval-prompt-v2"
 
 LEVEL_TEST_RECIPE: dict[int, tuple[LevelTestDomain, LevelTestItemType]] = {
     1: (LevelTestDomain.VOCABULARY, LevelTestItemType.VOCAB_CONTEXT_CHOICE),
@@ -63,6 +63,11 @@ SPEAKING_REPEAT_WEIGHTS: dict[str, Decimal] = {
     "PRONUNCIATION": Decimal("0.60"),
     "FLUENCY": Decimal("0.40"),
 }
+
+# A fluent sentence that refuses or avoids the assigned task still demonstrates
+# some target-language production, but it must not receive a placement score from
+# form metrics alone.
+SPEAKING_NON_RESPONSE_SCORE_CAP = 10
 
 
 def validate_recipe(question_number: int, domain: LevelTestDomain, item_type: LevelTestItemType) -> None:

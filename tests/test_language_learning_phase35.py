@@ -31,6 +31,7 @@ from app.schemas.language_learning_level_test import (
     LevelTestQuestionGenerationPayload,
     LevelTestQuestionGenerationRequest,
     LevelTestSpeakingEvaluationContext,
+    LevelTestSpeakingTaskResponseStatus,
     LevelTestTextEvaluationRequest,
     LevelTestVocabContextDesignPayload,
 )
@@ -161,6 +162,9 @@ class FakeAudioProcessor:
 
 
 class FakeSttService:
+    def __init__(self, transcript_text="自己紹介をします。東京で働いています。"):
+        self.transcript_text = transcript_text
+
     async def transcribe(self, **kwargs):
         quality = AudioQualitySignals(
             rms=0.1,
@@ -174,10 +178,17 @@ class FakeSttService:
             session_id=kwargs["session_id"],
             turn_index=kwargs["turn_index"],
             transcript=TranscriptResult(
-                text="自己紹介をします。東京で働いています。",
+                text=self.transcript_text,
                 language="ja",
                 confidence=0.92,
-                segments=[SttSegment(start_ms=0, end_ms=3000, text="自己紹介をします。", confidence=0.92)],
+                segments=[
+                    SttSegment(
+                        start_ms=0,
+                        end_ms=3000,
+                        text=self.transcript_text,
+                        confidence=0.92,
+                    )
+                ],
                 metadata=SttAnalysisMetadata(
                     provider="fake-stt",
                     model="fake",
@@ -611,6 +622,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         enable_vocab_context_multistage=False,
         verify_task_sufficiency=False,
         telemetry_summary_interval=20,
+        stt_service=None,
     ):
         return LevelTestService(
             provider=provider,
@@ -618,7 +630,7 @@ class Phase35LevelTestTest(unittest.TestCase):
             dictation_service=NoopEvaluationService(),
             interpretation_service=NoopEvaluationService(),
             audio_processor=FakeAudioProcessor(),
-            stt_service=FakeSttService(),
+            stt_service=stt_service or FakeSttService(),
             speech_provider=provider,
             audio_uploader=audio_uploader,
             verify_vocab_context_semantics=verify_vocab_context_semantics,
@@ -2474,6 +2486,7 @@ class Phase35LevelTestTest(unittest.TestCase):
             structured=[
                 {
                     "evaluationConfidence": 0.9,
+                    "taskResponseStatus": "FULFILLED",
                     "metrics": [
                         {"type": "PRONUNCIATION", "state": "EVALUATED", "score": 80, "confidence": 0.9, "summary": "명료합니다.", "evidence": ["STT/acoustic"]},
                         {"type": "FLUENCY", "state": "EVALUATED", "score": 75, "confidence": 0.9, "summary": "대체로 유창합니다.", "evidence": ["3 seconds"]},
@@ -2515,7 +2528,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertTrue(response.evaluable)
         self.assertEqual(5, len(response.metrics))
         self.assertEqual("自己紹介をします。東京で働いています。", response.transcript)
-        self.assertEqual("level-test-speaking-eval-v1", response.evaluation_version)
+        self.assertEqual("level-test-speaking-eval-v2", response.evaluation_version)
         prompt = provider.calls[-1][1]
         self.assertIn('"providedFacts":["이름과 직업을 말한다"]', prompt)
         self.assertIn('"requiredIntents":["자기소개"]', prompt)
@@ -2534,6 +2547,82 @@ class Phase35LevelTestTest(unittest.TestCase):
             metrics=metrics,
         )
         self.assertEqual(85, score)
+
+    def test_speaking_meta_refusal_is_evaluable_but_capped_at_ten(self):
+        metrics = [
+            LevelTestMetricResult(type="PRONUNCIATION", score=55, confidence=1),
+            LevelTestMetricResult(type="FLUENCY", score=55, confidence=1),
+            LevelTestMetricResult(type="GRAMMAR", score=55, confidence=1),
+            LevelTestMetricResult(type="VOCABULARY", score=55, confidence=1),
+            LevelTestMetricResult(type="TASK_FULFILLMENT", score=0, confidence=1),
+        ]
+        raw_score = LevelTestService._calculate_speaking_item_score(
+            item_type=LevelTestItemType.SPEAKING_GUIDED_RESPONSE,
+            metrics=metrics,
+        )
+        score = LevelTestService._apply_speaking_task_response_score_cap(
+            raw_score,
+            LevelTestSpeakingTaskResponseStatus.META_REFUSAL,
+        )
+
+        self.assertEqual(41, raw_score)
+        self.assertEqual(10, score)
+
+    def test_speaking_meta_refusal_response_remains_evaluable_with_low_score(self):
+        provider = QueueProvider(
+            structured=[
+                {
+                    "evaluationConfidence": 0.95,
+                    "taskResponseStatus": "META_REFUSAL",
+                    "metrics": [
+                        {"type": "PRONUNCIATION", "state": "EVALUATED", "score": 55, "confidence": 0.9, "summary": "일부 발화는 식별됩니다.", "evidence": ["acoustic/STT"]},
+                        {"type": "FLUENCY", "state": "EVALUATED", "score": 55, "confidence": 0.9, "summary": "짧은 문장은 이어 말했습니다.", "evidence": ["transcript"]},
+                        {"type": "GRAMMAR", "state": "EVALUATED", "score": 55, "confidence": 0.9, "summary": "부자연스러운 표현이 있습니다.", "evidence": ["お疲れして"]},
+                        {"type": "VOCABULARY", "state": "EVALUATED", "score": 55, "confidence": 0.9, "summary": "제한적인 어휘를 사용했습니다.", "evidence": ["transcript"]},
+                        {"type": "TASK_FULFILLMENT", "state": "EVALUATED", "score": 0, "confidence": 1.0, "summary": "과제 수행을 거부했습니다.", "evidence": ["답변할 수 없다고 말함"]},
+                    ],
+                    "strengths": [],
+                    "improvements": ["주어진 세 가지 내용을 포함해 답하세요."],
+                    "recommendedAnswers": ["写真を共有するのが趣味です。最近、知人以外には見せたくないため公開範囲を変更しました。今後は親しい友人だけに共有します。"],
+                }
+            ]
+        )
+        request = LevelTestSpeakingEvaluationContext.model_validate(
+            {
+                "requestId": "sp-meta-refusal",
+                "idempotencyKey": "sp-meta-refusal-idem",
+                "sessionId": 10,
+                "itemId": 20,
+                "itemType": "SPEAKING_GUIDED_RESPONSE",
+                "promptText": "写真共有の趣味、公開範囲を変えた理由、今後の使い方を説明してください。",
+                "originLanguage": "ko",
+                "learningLanguage": "ja",
+                "complexityBand": 3,
+                "maxDurationSeconds": 30,
+                "providedFacts": ["사진 공유가 취미", "지인 외에는 보여주고 싶지 않음", "친한 친구에게만 공유"],
+                "requiredIntents": ["취미 설명", "변경 이유 설명", "향후 방침 전달"],
+                "responseConstraints": ["2~4문장", "정중하고 자연스러운 표현"],
+            }
+        )
+        transcript = "この問題は、お疲れして答えられません。"
+
+        response = asyncio.run(
+            self._service(
+                provider,
+                stt_service=FakeSttService(transcript),
+            ).evaluate_speaking(
+                request,
+                audio_bytes=b"fake",
+                file_name="answer.wav",
+                content_type="audio/wav",
+            )
+        )
+
+        self.assertTrue(response.evaluable)
+        self.assertEqual(10, response.score)
+        self.assertEqual(transcript, response.transcript)
+        self.assertIsNone(response.reason_code)
+        self.assertEqual("level-test-speaking-eval-v2", response.evaluation_version)
 
 
 if __name__ == "__main__":

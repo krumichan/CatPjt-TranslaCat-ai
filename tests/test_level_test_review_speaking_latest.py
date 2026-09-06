@@ -96,6 +96,7 @@ def test_repeat_pool_candidates_are_safe_for_audio_only_slot():
 def test_repeat_speaking_payload_defaults_model_answer_list_without_fabricating_scores():
     raw = {
         "evaluationConfidence": 90,
+        "taskResponseStatus": "partial",
         "metrics": [
             {
                 "type": "pronunciation",
@@ -152,6 +153,7 @@ def test_repeat_speaking_payload_defaults_model_answer_list_without_fabricating_
     )
 
     assert normalized["evaluationConfidence"] == pytest.approx(0.9)
+    assert normalized["taskResponseStatus"] == "PARTIAL"
     assert normalized["recommendedAnswers"] == []
     assert normalized["metrics"][0]["type"] == "PRONUNCIATION"
     assert normalized["metrics"][0]["evidence"] == ["문장 끝부분이 약하게 들렸습니다."]

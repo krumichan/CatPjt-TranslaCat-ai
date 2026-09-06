@@ -29,6 +29,7 @@ from app.features.language_learning.level_test.policy import (
     LEVEL_TEST_PROMPT_VERSION,
     LEVEL_TEST_SPEAKING_EVALUATION_VERSION,
     LEVEL_TEST_SPEAKING_PROMPT_VERSION,
+    SPEAKING_NON_RESPONSE_SCORE_CAP,
     SPEAKING_REPEAT_WEIGHTS,
     SPEAKING_RESPONSE_WEIGHTS,
     validate_recipe,
@@ -74,6 +75,7 @@ from app.schemas.language_learning_level_test import (
     LevelTestScoredInternalAnswerKey,
     LevelTestSpeakingEvaluationContext,
     LevelTestSpeakingEvaluationPayload,
+    LevelTestSpeakingTaskResponseStatus,
     LevelTestTaskSufficiencyVerificationPayload,
     LevelTestTextEvaluationRequest,
     LevelTestUsage,
@@ -1735,7 +1737,10 @@ class LevelTestService:
             )
             for item in payload.metrics
         ]
-        score = self._calculate_speaking_item_score(request.item_type, metrics)
+        score = self._apply_speaking_task_response_score_cap(
+            self._calculate_speaking_item_score(request.item_type, metrics),
+            payload.task_response_status,
+        )
         evaluable = score is not None
         latency_ms = int((time.perf_counter() - started) * 1000)
         return LevelTestEvaluationResponse(
@@ -2859,6 +2864,21 @@ class LevelTestService:
             return None
         return int((weighted / available).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
+    @staticmethod
+    def _apply_speaking_task_response_score_cap(
+        score: int | None,
+        task_response_status: LevelTestSpeakingTaskResponseStatus,
+    ) -> int | None:
+        if score is None:
+            return None
+        if task_response_status in {
+            LevelTestSpeakingTaskResponseStatus.META_REFUSAL,
+            LevelTestSpeakingTaskResponseStatus.OFF_TOPIC,
+            LevelTestSpeakingTaskResponseStatus.EMPTY_CONTENT,
+        }:
+            return min(score, SPEAKING_NON_RESPONSE_SCORE_CAP)
+        return score
+
     @classmethod
     def _normalize_speaking_evaluation_payload(
         cls,
@@ -2868,6 +2888,28 @@ class LevelTestService:
         """Repair provider formatting drift without inventing evaluation scores."""
 
         normalized = cls._canonicalize_confidence(data)
+        status_key = (
+            "taskResponseStatus"
+            if "taskResponseStatus" in normalized
+            else "task_response_status"
+        )
+        task_response_status = normalized.get(status_key)
+        if isinstance(task_response_status, str):
+            token = re.sub(
+                r"[^A-Z0-9]+",
+                "_",
+                task_response_status.strip().upper(),
+            ).strip("_")
+            normalized[status_key] = {
+                "COMPLETE": "FULFILLED",
+                "COMPLETED": "FULFILLED",
+                "PARTIALLY_FULFILLED": "PARTIAL",
+                "REFUSAL": "META_REFUSAL",
+                "OFFTOPIC": "OFF_TOPIC",
+                "EMPTY": "EMPTY_CONTENT",
+                "EMPTY_RESPONSE": "EMPTY_CONTENT",
+                "NON_RESPONSE": "EMPTY_CONTENT",
+            }.get(token, token)
         if request.item_type == LevelTestItemType.SPEAKING_REPEAT:
             normalized.setdefault("recommendedAnswers", [])
         recommended = normalized.get("recommendedAnswers")

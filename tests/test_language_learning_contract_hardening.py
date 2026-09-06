@@ -27,8 +27,10 @@ from tests.test_language_learning_phase35 import (
 
 def test_daily_v35_provider_schema_requires_quality_metadata():
     item_schema = _DAILY_WRITING_V35_GENERATION_SCHEMA["properties"]["items"]["items"]
-    assert "languageComplexityBand" in item_schema["required"]
-    assert "diversityMetadata" in item_schema["required"]
+    required = item_schema["required"]
+    assert required.count("languageComplexityBand") == 1
+    assert required.count("diversityMetadata") == 1
+    assert len(required) == len(set(required))
 
 
 def test_daily_v35_salvages_valid_sibling_when_one_candidate_is_malformed():
@@ -164,6 +166,7 @@ def _speaking_request() -> LevelTestSpeakingEvaluationContext:
 def _valid_speaking_payload() -> dict:
     return {
         "evaluationConfidence": 90,
+        "taskResponseStatus": "PARTIAL",
         "metrics": [
             {"type": "pronunciation", "state": "evaluated", "score": 0.8, "confidence": 90, "summary": "발음이 대체로 명료합니다.", "evidence": "STT와 음향 근거"},
             {"type": "fluency", "state": "evaluated", "score": 0.7, "confidence": 90, "summary": "일부 끊김이 있습니다.", "evidence": ["짧은 멈춤"]},

@@ -67,6 +67,14 @@ class LevelTestMetricState(str, Enum):
     NOT_EVALUABLE = "NOT_EVALUABLE"
 
 
+class LevelTestSpeakingTaskResponseStatus(str, Enum):
+    FULFILLED = "FULFILLED"
+    PARTIAL = "PARTIAL"
+    META_REFUSAL = "META_REFUSAL"
+    OFF_TOPIC = "OFF_TOPIC"
+    EMPTY_CONTENT = "EMPTY_CONTENT"
+
+
 class LevelTestPreviousResult(CamelCaseModel):
     question_number: int = Field(..., ge=1, le=20)
     domain: LevelTestDomain
@@ -464,6 +472,7 @@ class LevelTestSpeakingMetricPayload(CamelCaseModel):
 
 class LevelTestSpeakingEvaluationPayload(CamelCaseModel):
     evaluation_confidence: float = Field(..., ge=0, le=1)
+    task_response_status: LevelTestSpeakingTaskResponseStatus
     metrics: list[LevelTestSpeakingMetricPayload] = Field(..., min_length=5, max_length=5)
     strengths: list[str] = Field(default_factory=list, max_length=20)
     improvements: list[str] = Field(default_factory=list, max_length=20)
@@ -475,4 +484,16 @@ class LevelTestSpeakingEvaluationPayload(CamelCaseModel):
         actual = [metric.type for metric in self.metrics]
         if len(actual) != len(set(actual)) or set(actual) != expected:
             raise ValueError("Level Test Speaking 5축 Metric이 정확히 필요합니다.")
+        task_metric = next(metric for metric in self.metrics if metric.type == "TASK_FULFILLMENT")
+        if (
+            self.task_response_status
+            in {
+                LevelTestSpeakingTaskResponseStatus.META_REFUSAL,
+                LevelTestSpeakingTaskResponseStatus.OFF_TOPIC,
+                LevelTestSpeakingTaskResponseStatus.EMPTY_CONTENT,
+            }
+            and task_metric.state == LevelTestMetricState.EVALUATED
+            and task_metric.score != 0
+        ):
+            raise ValueError("과제 비응답 Speaking 평가의 TASK_FULFILLMENT score는 0이어야 합니다.")
         return self
