@@ -41,6 +41,12 @@ class DailyWritingDifficulty(str, Enum):
     CHALLENGE = "CHALLENGE"
 
 
+class DailyWritingType(str, Enum):
+    TRANSLATION = "TRANSLATION"
+    GUIDED = "GUIDED"
+    FREE = "FREE"
+
+
 class LevelTestDifficulty(str, Enum):
     EASY = "EASY"
     NORMAL = "NORMAL"
@@ -125,6 +131,7 @@ class DailyWritingGenerationRequest(CamelCaseModel):
     request_id: str = Field(..., min_length=1, max_length=100)
     origin_language: str = Field(..., min_length=2, max_length=20)
     learning_language: str = Field(..., min_length=2, max_length=20)
+    writing_type: DailyWritingType = DailyWritingType.FREE
     sentence_count: int = Field(
         ...,
         ge=1,
@@ -161,6 +168,9 @@ class DailyWritingItem(CamelCaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=20)
     focus_metrics: list[WritingMetric] = Field(default_factory=list, max_length=5)
     focus_reason: str = Field(..., min_length=1, max_length=1000)
+    provided_facts: list[str] = Field(default_factory=list, max_length=12)
+    required_intents: list[str] = Field(default_factory=list, max_length=12)
+    response_constraints: list[str] = Field(default_factory=list, max_length=12)
     language_complexity_band: int | None = Field(default=None, ge=1, le=5)
     diversity_metadata: DiversityMetadata | None = None
 
@@ -200,6 +210,7 @@ class ProfileSignals(CamelCaseModel):
 class WritingEvaluationRequest(CamelCaseModel):
     request_id: str = Field(..., min_length=1, max_length=100)
     context: WritingEvaluationContext = WritingEvaluationContext.DAILY
+    writing_type: DailyWritingType | None = None
     origin_language: str = Field(..., min_length=2, max_length=20)
     learning_language: str = Field(..., min_length=2, max_length=20)
     origin_sentence: str = Field(..., min_length=1, max_length=4000)
@@ -208,7 +219,7 @@ class WritingEvaluationRequest(CamelCaseModel):
     keywords: list[SelectedKeyword] = Field(default_factory=list, max_length=20)
     focus_metrics: list[WritingMetric] = Field(default_factory=list, max_length=5)
     learning_profile_summary: LearningProfileSummary | None = None
-    # Optional structured Level Test task contract. Daily Writing leaves these empty.
+    # Structured task contract used by guided Daily Writing and Level Test writing tasks.
     task_type: str | None = Field(default=None, max_length=100)
     translation_source_text: str | None = Field(default=None, max_length=4000)
     provided_facts: list[str] = Field(default_factory=list, max_length=12)

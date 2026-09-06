@@ -549,7 +549,7 @@ class Phase35GenerationTest(unittest.TestCase):
         service = LanguageLearningWritingService(provider=provider)
         response = asyncio.run(service.generate_daily(writing_phase35_request()))
         self.assertEqual(2, len(response.items))
-        self.assertEqual("writing-generation-diversity-v2", response.prompt_version)
+        self.assertEqual("writing-generation-modes-diversity-v1", response.prompt_version)
         self.assertEqual("language-learning-diversity-v1", response.content_diversity_policy_version)
         self.assertEqual({"NORMAL", "CHALLENGE"}, {item.difficulty.value for item in response.items})
         self.assertTrue(all(item.diversity_metadata for item in response.items))

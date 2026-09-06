@@ -87,6 +87,9 @@ _DAILY_WRITING_GENERATION_SCHEMA: dict[str, Any] = {
                         },
                     },
                     "focusReason": {"type": "STRING"},
+                    "providedFacts": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "requiredIntents": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "responseConstraints": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "languageComplexityBand": {"type": "INTEGER"},
                     "diversityMetadata": {
                         "type": "OBJECT",
@@ -128,6 +131,9 @@ _DAILY_WRITING_GENERATION_SCHEMA: dict[str, Any] = {
                     "keywords",
                     "focusMetrics",
                     "focusReason",
+                    "providedFacts",
+                    "requiredIntents",
+                    "responseConstraints",
                     "languageComplexityBand",
                     "diversityMetadata",
                 ],
@@ -699,6 +705,12 @@ class LanguageLearningWritingService:
         request: DailyWritingGenerationRequest,
         item: DailyWritingItem,
     ) -> str | None:
+        mode_reason = LanguageLearningWritingService._writing_type_contract_reason(
+            request,
+            item,
+        )
+        if mode_reason is not None:
+            return mode_reason
         if item.diversity_metadata is None:
             return "DIVERSITY_METADATA_MISSING"
         if item.language_complexity_band is None:
@@ -712,6 +724,50 @@ class LanguageLearningWritingService:
         if item.language_complexity_band != expected_band:
             return f"COMPLEXITY_BAND_MISMATCH_EXPECTED_{expected_band}"
         return None
+
+    @staticmethod
+    def _writing_type_contract_reason(
+        request: DailyWritingGenerationRequest,
+        item: DailyWritingItem,
+    ) -> str | None:
+        provided_facts = LanguageLearningWritingService._non_blank_values(
+            item.provided_facts
+        )
+        required_intents = LanguageLearningWritingService._non_blank_values(
+            item.required_intents
+        )
+        response_constraints = LanguageLearningWritingService._non_blank_values(
+            item.response_constraints
+        )
+        has_blank_guidance = (
+            len(provided_facts) != len(item.provided_facts)
+            or len(required_intents) != len(item.required_intents)
+            or len(response_constraints) != len(item.response_constraints)
+        )
+        if has_blank_guidance:
+            return "GUIDANCE_CONTAINS_BLANK_VALUE"
+
+        writing_type = request.writing_type.value
+        if writing_type == "GUIDED":
+            if not provided_facts:
+                return "GUIDED_PROVIDED_FACTS_MISSING"
+            if not required_intents:
+                return "GUIDED_REQUIRED_INTENTS_MISSING"
+            if not response_constraints:
+                return "GUIDED_RESPONSE_CONSTRAINTS_MISSING"
+            return None
+
+        if provided_facts or required_intents or response_constraints:
+            return f"{writing_type}_GUIDANCE_MUST_BE_EMPTY"
+        return None
+
+    @staticmethod
+    def _non_blank_values(values: list[str]) -> list[str]:
+        return [
+            value.strip()
+            for value in values
+            if isinstance(value, str) and value.strip()
+        ]
 
     @staticmethod
     def _valid_phase35_daily_candidate(
@@ -905,6 +961,16 @@ class LanguageLearningWritingService:
             "CHALLENGE": expected.challenge,
         }:
             raise ValueError("AI가 요청한 난이도 분배를 준수하지 않았습니다.")
+
+        for item in items:
+            mode_reason = LanguageLearningWritingService._writing_type_contract_reason(
+                request,
+                item,
+            )
+            if mode_reason is not None:
+                raise ValueError(
+                    f"Daily Writing 유형 계약을 준수하지 않았습니다: {mode_reason}"
+                )
 
     @staticmethod
     def _round_score(value: float) -> int:

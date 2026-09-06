@@ -316,7 +316,7 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
         response = await service.generate_daily(build_daily_request())
 
         self.assertEqual(len(response.items), 5)
-        self.assertEqual(response.prompt_version, "daily-writing-generation-v1")
+        self.assertEqual(response.prompt_version, "daily-writing-generation-modes-v1")
         self.assertEqual(
             provider.calls[0]["type_name"],
             "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
