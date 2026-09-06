@@ -277,7 +277,7 @@ class SpeakingKeywordPromptPolicyTest(unittest.TestCase):
         )
         self.assertEqual(
             SPEAKING_CONVERSATION_PROMPT_VERSION,
-            "speaking-conversation-v2",
+            "speaking-conversation-v3",
         )
 
     def test_conversation_payload_keeps_both_keyword_types_flat(self):
@@ -304,6 +304,32 @@ class SpeakingKeywordPromptPolicyTest(unittest.TestCase):
         self.assertIn('"type":"TOPIC"', prompt)
         self.assertIn('"key":"price"', prompt)
         self.assertIn('"type":"VOCABULARY"', prompt)
+
+
+    def test_keyword_topic_prompt_requires_concrete_resolved_topic(self):
+        prompt = build_conversation_prompt(
+            conversation_request(
+                category="KEYWORDS",
+                isInitialTurn=True,
+                selectedKeywords=[
+                    {
+                        "key": "travel",
+                        "text": "旅行",
+                        "source": "SYSTEM",
+                        "type": "TOPIC",
+                    },
+                    {
+                        "key": "hotel",
+                        "text": "ホテル",
+                        "source": "CUSTOM",
+                        "type": "VOCABULARY",
+                    },
+                ],
+            )
+        )
+        self.assertIn("category is KEYWORDS", SPEAKING_CONVERSATION_SYSTEM_PROMPT)
+        self.assertIn('"category":"KEYWORDS"', prompt)
+        self.assertIn('"isInitialTurn":true', prompt)
 
     def test_empty_keyword_selection_remains_valid(self):
         prompt = build_conversation_prompt(conversation_request())
@@ -609,6 +635,31 @@ class SpeakingConversationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.usage.conversation.input_tokens, 12)
         self.assertEqual(provider.calls[0][0], "LANGUAGE_LEARNING_SPEAKING_CONVERSATION")
 
+
+    async def test_keyword_initial_turn_requires_resolved_topic(self):
+        invalid = conversation_payload()
+        provider = FakeStructuredProvider(results=[invalid])
+        service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)
+        with self.assertRaises(SpeakingStageException):
+            await service.generate(
+                conversation_request(
+                    category="KEYWORDS",
+                    isInitialTurn=True,
+                )
+            )
+
+        valid = conversation_payload()
+        valid["resolvedTopic"] = "ホテルでのチェックイン"
+        provider = FakeStructuredProvider(results=[valid])
+        service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)
+        response = await service.generate(
+            conversation_request(
+                category="KEYWORDS",
+                isInitialTurn=True,
+            )
+        )
+        self.assertEqual(response.conversation.resolved_topic, "ホテルでのチェックイン")
+
     async def test_invalid_schema_is_retried(self):
         provider = FakeStructuredProvider(
             results=[{"assistantText": "missing fields"}, conversation_payload()]
@@ -626,7 +677,7 @@ class SpeakingConversationServiceTest(unittest.IsolatedAsyncioTestCase):
         })
         provider = FakeStructuredProvider(results=[payload])
         service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)
-        response = await service.generate(conversation_request(practiceMode="READ_ALOUD"))
+        response = await service.generate(conversation_request(practiceMode="READ_ALOUD", turnIndex=0))
         self.assertEqual(response.conversation.script_text, payload["assistantText"])
         self.assertEqual([], response.conversation.provided_facts)
 
@@ -1070,6 +1121,83 @@ class SpeakingTurnServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.conversation.calls, 1)
         self.assertEqual(self.tts.calls, 1)
 
+    async def test_read_aloud_first_attempt_stops_after_stt(self):
+        service = self.build_service()
+        response = await service.process_turn(
+            context=conversation_request(
+                practiceMode="READ_ALOUD",
+                turnIndex=1,
+                problemIndex=1,
+                attemptIndex=1,
+                readAloudGenerateNextProblem=False,
+                sessionPolicySnapshot={"maxTurns": 15},
+                idempotencyKey="read-aloud-problem-1-attempt-1",
+            ),
+            audio_bytes=make_wav(),
+            file_name="turn.wav",
+            content_type="audio/wav",
+        )
+
+        self.assertEqual(response.status, "READY")
+        self.assertIsNotNone(response.transcript)
+        self.assertIsNone(response.assistant)
+        self.assertIsNone(response.conversation)
+        self.assertEqual(self.stt.calls, 1)
+        self.assertEqual(self.conversation.calls, 0)
+        self.assertEqual(self.tts.calls, 0)
+        self.assertEqual(response.internal_metadata["readAloudProblemIndex"], 1)
+        self.assertEqual(response.internal_metadata["readAloudAttemptIndex"], 1)
+        self.assertFalse(response.internal_metadata["readAloudNextProblemPrepared"])
+
+    async def test_read_aloud_second_attempt_prepares_next_problem(self):
+        service = self.build_service()
+        response = await service.process_turn(
+            context=conversation_request(
+                practiceMode="READ_ALOUD",
+                turnIndex=2,
+                problemIndex=1,
+                attemptIndex=2,
+                readAloudGenerateNextProblem=True,
+                sessionPolicySnapshot={"maxTurns": 15},
+                idempotencyKey="read-aloud-problem-1-attempt-2",
+            ),
+            audio_bytes=make_wav(),
+            file_name="turn.wav",
+            content_type="audio/wav",
+        )
+
+        self.assertEqual(response.status, "READY")
+        self.assertIsNotNone(response.transcript)
+        self.assertIsNotNone(response.assistant)
+        self.assertIsNotNone(response.conversation)
+        self.assertEqual(self.stt.calls, 1)
+        self.assertEqual(self.conversation.calls, 1)
+        self.assertEqual(self.tts.calls, 1)
+        self.assertTrue(response.internal_metadata["readAloudNextProblemPrepared"])
+
+    async def test_read_aloud_last_problem_never_generates_sixth_prompt(self):
+        service = self.build_service()
+        response = await service.process_turn(
+            context=conversation_request(
+                practiceMode="READ_ALOUD",
+                turnIndex=10,
+                problemIndex=5,
+                attemptIndex=2,
+                readAloudGenerateNextProblem=False,
+                sessionPolicySnapshot={"maxTurns": 15},
+                idempotencyKey="read-aloud-problem-5-attempt-2",
+            ),
+            audio_bytes=make_wav(),
+            file_name="turn.wav",
+            content_type="audio/wav",
+        )
+
+        self.assertEqual(response.status, "READY")
+        self.assertIsNone(response.assistant)
+        self.assertIsNone(response.conversation)
+        self.assertEqual(self.conversation.calls, 0)
+        self.assertEqual(self.tts.calls, 0)
+
     async def test_selected_keywords_are_forwarded_as_stt_phrase_hints(self):
         service = self.build_service()
         await service.process_turn(
@@ -1134,7 +1262,7 @@ class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(assisted, AssistanceLevel.ASSISTED)
         self.assertEqual(guided, AssistanceLevel.GUIDED)
 
-    def test_stt_ratio_uses_all_submitted_turns(self):
+    def test_stt_ratio_ignores_excluded_turns(self):
         turns = [
             SpeakingEvaluationTurn.model_validate(evaluation_turn(i))
             for i in range(1, 6)
@@ -1151,9 +1279,8 @@ class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
         )
         eligibility = calculate_evaluation_eligibility(turns)
         self.assertEqual(eligibility.valid_user_turns, 5)
-        self.assertAlmostEqual(eligibility.valid_stt_turn_ratio, 5 / 7, places=4)
-        self.assertFalse(eligibility.eligible_before_ai)
-        self.assertIn("VALID_STT_TURN_RATIO", eligibility.missing_requirements)
+        self.assertEqual(eligibility.valid_stt_turn_ratio, 1.0)
+        self.assertTrue(eligibility.eligible_before_ai)
 
     def test_stt_ratio_80_percent_boundary(self):
         turns = [

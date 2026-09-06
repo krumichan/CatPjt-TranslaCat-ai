@@ -13,6 +13,7 @@ from app.schemas.language_learning_speaking import (
     SessionStartRequest,
     SessionStartResponse,
     SpeakingError,
+    SpeakingPracticeMode,
     SpeakingStage,
     SpeakingUsage,
     SttRequestContext,
@@ -144,6 +145,23 @@ class SpeakingTurnService:
                 usage=usage,
             )
 
+        if self._should_stop_after_read_aloud_stt(context):
+            return TurnProcessResponse(
+                request_id=context.request_id,
+                session_id=context.session_id,
+                turn_index=context.turn_index,
+                status="READY",
+                transcript=transcript,
+                assistant=None,
+                conversation=None,
+                usage=usage,
+                internal_metadata={
+                    "readAloudProblemIndex": context.problem_index,
+                    "readAloudAttemptIndex": context.attempt_index,
+                    "readAloudNextProblemPrepared": False,
+                },
+            )
+
         try:
             conversation_request = context.model_copy(update={"transcript": transcript})
             conversation = await self.conversation_service.generate(
@@ -190,6 +208,12 @@ class SpeakingTurnService:
                     usage.conversation.prompt_version
                     if usage.conversation
                     else None
+                ),
+                "readAloudProblemIndex": context.problem_index,
+                "readAloudAttemptIndex": context.attempt_index,
+                "readAloudNextProblemPrepared": (
+                    context.practice_mode == SpeakingPracticeMode.READ_ALOUD
+                    and context.read_aloud_generate_next_problem
                 ),
             },
         )
@@ -266,6 +290,15 @@ class SpeakingTurnService:
                 ),
                 SpeakingUsage(),
             )
+
+    @staticmethod
+    def _should_stop_after_read_aloud_stt(
+        context: ConversationGenerationRequest,
+    ) -> bool:
+        return (
+            context.practice_mode == SpeakingPracticeMode.READ_ALOUD
+            and not context.read_aloud_generate_next_problem
+        )
 
     @staticmethod
     def _resolve_start_mode(request: SessionStartRequest) -> ConversationStartMode:

@@ -48,6 +48,9 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),
+    "LANGUAGE_LEARNING_SPEAKING_ASSISTANCE": AiTaskModelPolicy(
+        AiModelTier.LUNA, "none", 2048
+    ),
     "LANGUAGE_LEARNING_LISTENING_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 8192
     ),

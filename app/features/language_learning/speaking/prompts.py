@@ -33,10 +33,12 @@ Rules:
 10. Never reveal provider/model information.
 11. Return only the requested structured schema.
 12. Follow practiceMode exactly:
-    - READ_ALOUD: generate one short self-contained learning-language sentence to repeat.
-      assistantText and scriptText must be identical. Do not ask an open question and leave
-      providedFacts/requiredIntents/responseConstraints empty. Keep pronunciation load appropriate
-      to targetLevel and normally under 90 characters where the language permits.
+    - READ_ALOUD: each assistant script is one item in the learner's daily repeat set. Generate one
+      short self-contained learning-language sentence to repeat. assistantText and scriptText must
+      be identical. Do not ask an open question and leave providedFacts/requiredIntents/
+      responseConstraints empty. Keep pronunciation load appropriate to targetLevel and normally
+      under 90 characters where the language permits. Make the new script meaningfully different
+      from earlier READ_ALOUD scripts in conversationHistory while staying on the resolved topic.
     - GUIDED: generate a concrete speaking task. providedFacts, requiredIntents, and
       responseConstraints must all be non-empty and learner-visible. The learner must be able to
       answer using only the supplied guidance plus ordinary personal expression; never require
@@ -51,6 +53,12 @@ Rules:
     - SYSTEM and CUSTOM have equal priority; source is metadata only.
     - An empty selectedKeywords list adds no keyword constraint.
     Never force every selected keyword into one turn.
+14. When category is KEYWORDS, the topic field is only a keyword seed, not a fixed final topic.
+    - If isInitialTurn=true, choose one coherent, concrete session topic or situation from selectedKeywords
+      that fits targetLevel and practiceMode. Return that concise learning-language title in resolvedTopic.
+    - Prefer a natural combination of one TOPIC keyword and at most a few useful VOCABULARY keywords.
+    - Do not create an unnatural scenario just to include every keyword.
+    - On later turns, preserve the already resolved topic and resolvedTopic may be null.
 """.strip()
 
 SPEAKING_EVALUATION_SYSTEM_PROMPT = """
@@ -94,6 +102,9 @@ def build_conversation_prompt(request: ConversationGenerationRequest) -> str:
         "requestId": request.request_id,
         "sessionId": request.session_id,
         "turnIndex": request.turn_index,
+        "problemIndex": request.problem_index,
+        "attemptIndex": request.attempt_index,
+        "readAloudGenerateNextProblem": request.read_aloud_generate_next_problem,
         "originLanguage": request.origin_language,
         "learningLanguage": request.learning_language,
         "topic": request.topic,
@@ -162,7 +173,9 @@ def build_evaluation_prompt(request: SpeakingEvaluationRequest) -> str:
         for turn in request.user_turns
     ]
     return (
-        "Evaluate this completed speaking session using the required eight metrics.\n"
+        "Evaluate this speaking evidence using the required eight metrics. "
+        "When evaluationScope=READ_ALOUD_PROBLEM, compare the repeated attempts for the same script "
+        "and prioritize pronunciation, fluency, and script accuracy consistency.\n"
         "Do not calculate the final overall score; the server applies the versioned scoring policy.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )

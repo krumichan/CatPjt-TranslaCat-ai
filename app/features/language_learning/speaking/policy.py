@@ -16,7 +16,7 @@ from app.schemas.language_learning_speaking import (
 SPEAKING_SCORING_POLICY_VERSION = "speaking-scoring-policy-v1"
 SPEAKING_EVALUATION_VERSION = "speaking-evaluation-v1"
 SPEAKING_EVALUATION_PROMPT_VERSION = "speaking-evaluation-prompt-v1"
-SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation-v2"
+SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation-v3"
 SPEAKING_TTS_VERSION = "speaking-tts-v1"
 AUDIO_NORMALIZATION_VERSION = "speaking-audio-normalization-v1"
 STT_HINT_VERSION = "speaking-stt-hint-v1"
@@ -46,6 +46,9 @@ def calculate_evaluation_eligibility(
     turns: list[SpeakingEvaluationTurn],
     *,
     min_stt_confidence: float = 0.55,
+    required_user_turns: int = 5,
+    required_speech_seconds: float = 60.0,
+    required_stt_turn_ratio: float = 0.80,
 ) -> EvaluationEligibility:
     submitted_turns = list(turns)
     evaluation_turns = [turn for turn in submitted_turns if not turn.excluded_from_evaluation]
@@ -58,24 +61,27 @@ def calculate_evaluation_eligibility(
     )
     valid_stt_turns = sum(
         bool(turn.transcript.strip()) and turn.stt_confidence >= min_stt_confidence
-        for turn in submitted_turns
+        for turn in evaluation_turns
     )
     valid_stt_turn_ratio = (
-        valid_stt_turns / len(submitted_turns) if submitted_turns else 0.0
+        valid_stt_turns / len(evaluation_turns) if evaluation_turns else 0.0
     )
 
     missing: list[str] = []
-    if valid_user_turns < 5:
+    if valid_user_turns < required_user_turns:
         missing.append("VALID_USER_TURNS")
-    if valid_user_speech_seconds < 60:
+    if valid_user_speech_seconds < required_speech_seconds:
         missing.append("VALID_SPEECH_SECONDS")
-    if valid_stt_turn_ratio < 0.80:
+    if valid_stt_turn_ratio < required_stt_turn_ratio:
         missing.append("VALID_STT_TURN_RATIO")
 
     return EvaluationEligibility(
         valid_user_turns=valid_user_turns,
         valid_user_speech_seconds=round(valid_user_speech_seconds, 3),
         valid_stt_turn_ratio=round(valid_stt_turn_ratio, 4),
+        required_user_turns=required_user_turns,
+        required_speech_seconds=required_speech_seconds,
+        required_stt_turn_ratio=required_stt_turn_ratio,
         eligible_before_ai=not missing,
         missing_requirements=missing,
     )

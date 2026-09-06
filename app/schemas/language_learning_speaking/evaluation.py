@@ -45,6 +45,10 @@ class SpeakingEvaluationRequest(CamelCaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     topic: str = Field(..., min_length=1, max_length=500)
     practice_mode: SpeakingPracticeMode = SpeakingPracticeMode.FREE
+    evaluation_scope: str = Field(
+        default="SESSION",
+        pattern="^(SESSION|READ_ALOUD_PROBLEM)$",
+    )
     goal: str | None = Field(default=None, max_length=1000)
     target_level: str | None = Field(default=None, max_length=50)
     origin_language: str = Field(..., min_length=2, max_length=20)

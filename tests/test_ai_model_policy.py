@@ -18,6 +18,12 @@ def test_generation_uses_luna_and_evaluation_uses_mini():
         get_task_model_policy("LANGUAGE_LEARNING_LISTENING_SUMMARY_EVALUATION").tier
         == AiModelTier.MINI
     )
+    assistance_policy = get_task_model_policy(
+        "LANGUAGE_LEARNING_SPEAKING_ASSISTANCE"
+    )
+    assert assistance_policy.tier == AiModelTier.LUNA
+    assert assistance_policy.reasoning_effort == "none"
+    assert assistance_policy.max_output_tokens == 2048
 
 
 def test_receipt_and_voice_translation_start_on_luna():

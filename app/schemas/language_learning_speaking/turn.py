@@ -38,6 +38,9 @@ class SpeakingSessionContext(CamelCaseModel):
     idempotency_key: str = Field(..., min_length=1, max_length=200)
     session_id: str = Field(..., min_length=1, max_length=100)
     turn_index: int = Field(..., ge=0, le=20)
+    problem_index: int | None = Field(default=None, ge=1, le=5)
+    attempt_index: int | None = Field(default=None, ge=1, le=3)
+    read_aloud_generate_next_problem: bool = False
     origin_language: str = Field(..., min_length=2, max_length=20)
     learning_language: str = Field(..., min_length=2, max_length=20)
     topic: str = Field(..., min_length=1, max_length=500)
@@ -84,6 +87,12 @@ class SpeakingSessionContext(CamelCaseModel):
             raise ValueError(
                 "TOPIC_RECOMMENDED에는 topicRecommendedStartMode가 필요합니다."
             )
+        if self.practice_mode == SpeakingPracticeMode.READ_ALOUD and self.turn_index > 0:
+            if self.problem_index is None or self.attempt_index is None:
+                raise ValueError("READ_ALOUD Turn에는 problemIndex/attemptIndex가 필요합니다.")
+        if self.practice_mode != SpeakingPracticeMode.READ_ALOUD:
+            if self.problem_index is not None or self.attempt_index is not None:
+                raise ValueError("대화형 Speaking에는 problemIndex/attemptIndex를 사용할 수 없습니다.")
         return self
 
 
@@ -138,6 +147,7 @@ class CoachingCorrection(CamelCaseModel):
 
 
 class ConversationPayload(CamelCaseModel):
+    resolved_topic: str | None = Field(default=None, max_length=500)
     assistant_text: str = Field(..., min_length=1, max_length=4000)
     script_text: str | None = Field(default=None, max_length=4000)
     provided_facts: list[str] = Field(default_factory=list, max_length=12)
@@ -170,6 +180,7 @@ class AssistantTurn(CamelCaseModel):
 
 class ConversationResult(CamelCaseModel):
     intent: str
+    resolved_topic: str | None = None
     script_text: str | None = None
     provided_facts: list[str] = Field(default_factory=list)
     required_intents: list[str] = Field(default_factory=list)

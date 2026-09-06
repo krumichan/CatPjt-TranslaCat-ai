@@ -69,7 +69,8 @@ class SpeakingEvaluationService:
             )
 
         evaluation_key = (
-            f"{request.session_id}:{request.evaluation_policy_version}"
+            f"{request.session_id}:{request.evaluation_scope}:"
+            f"{request.evaluation_policy_version}"
         )
         response, _ = await self.idempotency_store.execute(
             evaluation_key,
@@ -84,9 +85,21 @@ class SpeakingEvaluationService:
         self,
         request: SpeakingEvaluationRequest,
     ) -> SpeakingEvaluationResponse:
+        required_user_turns = 5
+        required_speech_seconds = 60.0
+        if request.evaluation_scope == "READ_ALOUD_PROBLEM":
+            required_user_turns = 2
+            required_speech_seconds = 0.0
+        elif request.practice_mode.value == "READ_ALOUD":
+            required_user_turns = 10
+            required_speech_seconds = 0.0
+
         eligibility = calculate_evaluation_eligibility(
             request.user_turns,
             min_stt_confidence=settings.AI_SPEAKING_STT_LOW_CONFIDENCE_THRESHOLD,
+            required_user_turns=required_user_turns,
+            required_speech_seconds=required_speech_seconds,
+            required_stt_turn_ratio=0.80,
         )
         if not eligibility.eligible_before_ai:
             return SpeakingEvaluationResponse(

@@ -140,6 +140,7 @@ class SpeakingConversationService:
             assistant_text=payload.assistant_text,
             conversation=ConversationResult(
                 intent=payload.intent,
+                resolved_topic=payload.resolved_topic,
                 script_text=payload.script_text,
                 provided_facts=payload.provided_facts,
                 required_intents=payload.required_intents,
@@ -166,6 +167,13 @@ class SpeakingConversationService:
 
     @staticmethod
     def _validate_practice_mode_payload(request, payload: ConversationPayload) -> None:
+        if (
+            request.is_initial_turn
+            and request.category == "KEYWORDS"
+            and (not payload.resolved_topic or not payload.resolved_topic.strip())
+        ):
+            raise ValueError("KEYWORDS 초기 Turn에는 resolvedTopic이 필요합니다.")
+
         mode = request.practice_mode.value
         if mode == "READ_ALOUD":
             if not payload.script_text or payload.script_text.strip() != payload.assistant_text.strip():
