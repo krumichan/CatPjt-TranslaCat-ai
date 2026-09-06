@@ -97,6 +97,7 @@ class SpeakingConversationService:
                     raise ValueError(
                         "COACHING correction에는 improvementLink가 필요합니다."
                     )
+                self._validate_practice_mode_payload(request, payload)
                 return result, payload
             except (TimeoutError, asyncio.TimeoutError) as exc:
                 raise SpeakingStageException(
@@ -139,6 +140,10 @@ class SpeakingConversationService:
             assistant_text=payload.assistant_text,
             conversation=ConversationResult(
                 intent=payload.intent,
+                script_text=payload.script_text,
+                provided_facts=payload.provided_facts,
+                required_intents=payload.required_intents,
+                response_constraints=payload.response_constraints,
                 difficulty=payload.difficulty,
                 should_end=should_end,
                 end_reason=end_reason,
@@ -158,6 +163,27 @@ class SpeakingConversationService:
                 )
             ),
         )
+
+    @staticmethod
+    def _validate_practice_mode_payload(request, payload: ConversationPayload) -> None:
+        mode = request.practice_mode.value
+        if mode == "READ_ALOUD":
+            if not payload.script_text or payload.script_text.strip() != payload.assistant_text.strip():
+                raise ValueError("READ_ALOUD는 assistantText와 동일한 scriptText가 필요합니다.")
+            if payload.provided_facts or payload.required_intents or payload.response_constraints:
+                raise ValueError("READ_ALOUD에는 structured guidance를 둘 수 없습니다.")
+            return
+        if mode == "GUIDED":
+            if payload.script_text is not None:
+                raise ValueError("GUIDED에는 scriptText를 둘 수 없습니다.")
+            if not payload.provided_facts or not payload.required_intents or not payload.response_constraints:
+                raise ValueError("GUIDED에는 사실/전달 내용/답변 조건이 모두 필요합니다.")
+            return
+        if mode == "FREE":
+            if payload.script_text is not None:
+                raise ValueError("FREE에는 scriptText를 둘 수 없습니다.")
+            return
+        raise ValueError("지원하지 않는 Speaking practiceMode입니다.")
 
     @staticmethod
     def _resolve_end_policy(

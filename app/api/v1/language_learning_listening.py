@@ -8,16 +8,19 @@ from pydantic import ValidationError
 
 from app.api.dependencies import (
     get_language_learning_listening_audio_store,
+    get_language_learning_listening_comprehension_service,
     get_language_learning_listening_dictation_service,
     get_language_learning_listening_explanation_service,
     get_language_learning_listening_generation_service,
     get_language_learning_listening_interpretation_service,
     get_language_learning_listening_repeat_service,
+    get_language_learning_listening_summary_service,
     get_language_learning_listening_tts_service,
 )
 from app.features.language_learning.listening.audio_store import (
     TemporaryListeningAudioStore,
 )
+from app.features.language_learning.listening.comprehension_service import ListeningComprehensionService
 from app.features.language_learning.listening.dictation_service import (
     ListeningDictationService,
 )
@@ -34,8 +37,10 @@ from app.features.language_learning.listening.interpretation_service import (
 from app.features.language_learning.listening.repeat_service import (
     ListeningRepeatService,
 )
+from app.features.language_learning.listening.summary_service import ListeningSummaryService
 from app.features.language_learning.listening.tts_service import ListeningTtsService
 from app.schemas.language_learning_listening import (
+    ComprehensionEvaluationRequest,
     DictationEvaluationRequest,
     InterpretationEvaluationRequest,
     ListeningEvaluationResponse,
@@ -46,6 +51,7 @@ from app.schemas.language_learning_listening import (
     RecommendationExplanationRequest,
     RecommendationExplanationResponse,
     RepeatEvaluationContext,
+    SummaryEvaluationRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -141,11 +147,35 @@ async def evaluate_dictation(
     return await service.evaluate(request)
 
 
+@router.post("/evaluate/comprehension", response_model=ListeningEvaluationResponse)
+async def evaluate_comprehension(
+    request: ComprehensionEvaluationRequest,
+    service: ListeningComprehensionService = Depends(
+        get_language_learning_listening_comprehension_service
+    ),
+) -> ListeningEvaluationResponse:
+    return await service.evaluate(request)
+
+
 @router.post("/evaluate/interpretation", response_model=ListeningEvaluationResponse)
 async def evaluate_interpretation(
     request: InterpretationEvaluationRequest,
     service: ListeningInterpretationService = Depends(
         get_language_learning_listening_interpretation_service
+    ),
+) -> ListeningEvaluationResponse:
+    try:
+        return await service.evaluate(request)
+    except ListeningStageException as exc:
+        _raise_listening_error(exc)
+        raise AssertionError("unreachable")
+
+
+@router.post("/evaluate/summary", response_model=ListeningEvaluationResponse)
+async def evaluate_summary(
+    request: SummaryEvaluationRequest,
+    service: ListeningSummaryService = Depends(
+        get_language_learning_listening_summary_service
     ),
 ) -> ListeningEvaluationResponse:
     try:

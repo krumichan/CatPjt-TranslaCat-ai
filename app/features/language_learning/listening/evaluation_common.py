@@ -161,7 +161,7 @@ def build_evaluation_response(
         overall=ListeningEvaluationOverall(
             score=overall_score,
             evaluated_task_count=len(evaluated),
-            total_task_count=3,
+            total_task_count=len(ListeningTaskType),
         ),
         usage=usage or ListeningUsage(),
     )

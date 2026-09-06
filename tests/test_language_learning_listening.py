@@ -15,6 +15,13 @@ from app.features.language_learning.listening.benchmark import (
 from app.features.language_learning.listening.dictation_service import (
     ListeningDictationService,
 )
+from app.features.language_learning.listening.comprehension_service import (
+    ListeningComprehensionService,
+)
+from app.core.config import settings
+from app.features.language_learning.listening.summary_service import (
+    ListeningSummaryService,
+)
 from app.features.language_learning.listening.errors import ListeningStageException
 from app.features.language_learning.listening.explanation_service import (
     ListeningExplanationService,
@@ -46,7 +53,9 @@ from app.features.language_learning.speaking.stt_service import (
 from app.schemas.language_learning_listening import (
     AssistanceUsage,
     DictationEvaluationRequest,
+    ComprehensionEvaluationRequest,
     InterpretationEvaluationRequest,
+    SummaryEvaluationRequest,
     ListeningAssistanceLevel,
     ListeningAssistanceType,
     ListeningBenchmarkSample,
@@ -375,6 +384,75 @@ def interpretation_request(*, purpose="OFFICIAL", answer_revealed=False):
     return InterpretationEvaluationRequest.model_validate(data)
 
 
+def comprehension_request(selected="B", *, correct="B"):
+    data = evaluation_base()
+    data.update(
+        {
+            "question": "話者は次に何をしますか？",
+            "options": [
+                {"key": "A", "text": "電話します"},
+                {"key": "B", "text": "予約します"},
+                {"key": "C", "text": "帰ります"},
+                {"key": "D", "text": "待ちます"},
+            ],
+            "selectedOptionKey": selected,
+            "correctOptionKey": correct,
+            "comprehensionFocus": "NEXT_ACTION",
+            "originLanguage": "ko",
+            "learningLanguage": "ja",
+        }
+    )
+    return ComprehensionEvaluationRequest.model_validate(data)
+
+
+def summary_request():
+    data = evaluation_base()
+    data.update(
+        {
+            "sourceText": "会議は十時から三時に変更になりました。参加できるか確認してください。",
+            "summaryKeyPoints": ["会議時間の変更", "参加可否の確認"],
+            "answer": "会議が三時に変わり、参加できるか確認しています。",
+            "originLanguage": "ko",
+            "learningLanguage": "ja",
+        }
+    )
+    return SummaryEvaluationRequest.model_validate(data)
+
+
+def summary_payload():
+    scores = {
+        "GIST_COVERAGE": 100,
+        "KEY_POINT_COVERAGE": 80,
+        "LANGUAGE_CLARITY": 60,
+    }
+    return {
+        "evaluationConfidence": 0.9,
+        "metrics": [
+            {
+                "type": metric_type,
+                "score": score,
+                "confidence": 0.9,
+                "evidence": [
+                    {
+                        "metric": metric_type,
+                        "severity": "INFO",
+                        "feedback": "근거",
+                    }
+                ],
+            }
+            for metric_type, score in scores.items()
+        ],
+        "strengths": ["핵심을 파악했습니다."],
+        "improvements": ["세부 정보를 더 포함해 보세요."],
+        "recommendedSummaries": [
+            "会議は三時に変更され、参加可否の確認が必要です。",
+            "会議時間が変更されたため、参加できるか確認します。",
+        ],
+        "deliveredKeyPoints": ["会議時間の変更"],
+        "omittedKeyPoints": ["参加可否の確認"],
+    }
+
+
 def repeat_request(*, purpose="OFFICIAL", assistance=None, answer_revealed=False):
     data = evaluation_base(purpose, assistance, answer_revealed)
     data.update(
@@ -405,6 +483,46 @@ class ListeningGenerationTest(unittest.TestCase):
         self.assertEqual(2, len(response.items[0].reference_meanings))
         self.assertIn("profileFocus", provider.calls[0][1])
         self.assertIn("VOCABULARY", provider.calls[0][1])
+
+    def test_generation_accepts_comprehension_mode_contract(self):
+        request_data = generation_request().model_dump(by_alias=True, mode="json")
+        request_data["setContext"]["learningMode"] = "COMPREHENSION"
+        payload = generation_payload()
+        for item in payload["items"]:
+            item.update({
+                "question": "話者は次に何をしますか？",
+                "options": [
+                    {"key": "A", "text": "電話します"},
+                    {"key": "B", "text": "予約します"},
+                    {"key": "C", "text": "帰ります"},
+                    {"key": "D", "text": "待ちます"},
+                ],
+                "correctOptionKey": "B",
+                "comprehensionFocus": "NEXT_ACTION",
+                "summaryKeyPoints": [],
+            })
+        service = ListeningGenerationService(FakeStructuredProvider([payload]), automatic_retries=0)
+        response = asyncio.run(service.generate(ListeningSetGenerationRequest.model_validate(request_data)))
+        self.assertEqual("B", response.items[0].correct_option_key)
+        self.assertEqual(4, len(response.items[0].options))
+
+    def test_generation_accepts_summary_mode_contract(self):
+        request_data = generation_request().model_dump(by_alias=True, mode="json")
+        request_data["setContext"]["learningMode"] = "SUMMARY"
+        payload = generation_payload()
+        for item in payload["items"]:
+            item.update({"summaryKeyPoints": ["旅行の予定", "予約の状況"]})
+        service = ListeningGenerationService(FakeStructuredProvider([payload]), automatic_retries=0)
+        response = asyncio.run(service.generate(ListeningSetGenerationRequest.model_validate(request_data)))
+        self.assertEqual(2, len(response.items[0].summary_key_points))
+
+    def test_generation_rejects_mode_payload_mismatch(self):
+        request_data = generation_request().model_dump(by_alias=True, mode="json")
+        request_data["setContext"]["learningMode"] = "COMPREHENSION"
+        service = ListeningGenerationService(FakeStructuredProvider([generation_payload()]), automatic_retries=0)
+        with self.assertRaises(ListeningStageException) as context:
+            asyncio.run(service.generate(ListeningSetGenerationRequest.model_validate(request_data)))
+        self.assertEqual(ListeningErrorCode.INVALID_RESPONSE_SCHEMA, context.exception.code)
 
     def test_generation_is_idempotent(self):
         provider = FakeStructuredProvider([generation_payload()])
@@ -584,6 +702,53 @@ class ListeningDictationTest(unittest.TestCase):
             self.assertLess(task.score, 100)
         self.assertEqual(4, len(scores))
 
+    def test_improvements_show_exact_difference_and_local_context(self):
+        service = ListeningDictationService()
+
+        omission_task = selected_task(
+            asyncio.run(
+                service.evaluate(
+                    dictation_request(
+                        source="午後一時から会議を始めます。",
+                        answer="午後時から会議を始めます。",
+                        accepted_variants={},
+                    ).model_copy(update={"idempotency_key": "detail-omission"})
+                )
+            ),
+            ListeningTaskType.DICTATION,
+        )
+        self.assertTrue(any("누락: 「一」" in item for item in omission_task.improvements))
+        self.assertTrue(any("원문 구간" in item for item in omission_task.improvements))
+        self.assertTrue(any("내 답변 구간" in item for item in omission_task.improvements))
+        self.assertEqual(
+            ["대부분의 Token과 어순을 정확히 받아썼습니다."],
+            omission_task.strengths,
+        )
+        omission_evidence = next(
+            item for item in omission_task.evidence if item.reference == "一"
+        )
+        self.assertIn("답변에서 누락", omission_evidence.feedback)
+
+        addition_task = selected_task(
+            asyncio.run(
+                service.evaluate(
+                    dictation_request(
+                        source="客様から問い合わせがありました。",
+                        answer="お客様から問い合わせがありました。",
+                        accepted_variants={},
+                    ).model_copy(update={"idempotency_key": "detail-addition"})
+                )
+            ),
+            ListeningTaskType.DICTATION,
+        )
+        self.assertTrue(any("추가: 「お」" in item for item in addition_task.improvements))
+        self.assertTrue(any("원문 구간" in item for item in addition_task.improvements))
+        self.assertTrue(any("내 답변 구간" in item for item in addition_task.improvements))
+        addition_evidence = next(
+            item for item in addition_task.evidence if item.recognized == "お"
+        )
+        self.assertIn("원문에 없는", addition_evidence.feedback)
+
     def test_metric_weights_and_profile_signal_allowlist_are_fixed(self):
         response = asyncio.run(
             ListeningDictationService().evaluate(dictation_request())
@@ -759,6 +924,43 @@ class ListeningInterpretationTest(unittest.TestCase):
                 ListeningTaskType.INTERPRETATION,
             ).profile_signals,
         )
+
+
+class ListeningComprehensionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_objective_choice_is_scored_deterministically(self):
+        service = ListeningComprehensionService()
+        correct = await service.evaluate(comprehension_request("B"))
+        wrong = await service.evaluate(
+            comprehension_request("A").model_copy(
+                update={"idempotency_key": "evaluation-idem-wrong"}
+            )
+        )
+        correct_task = next(task for task in correct.tasks if task.task_type == ListeningTaskType.COMPREHENSION)
+        wrong_task = next(task for task in wrong.tasks if task.task_type == ListeningTaskType.COMPREHENSION)
+        self.assertEqual(100, correct_task.score)
+        self.assertEqual(0, wrong_task.score)
+        self.assertEqual("ANSWER_ACCURACY", correct_task.metrics[0].type)
+
+
+class ListeningSummaryTest(unittest.IsolatedAsyncioTestCase):
+    def test_summary_service_uses_evaluation_timeout_by_default(self):
+        provider = FakeStructuredProvider([summary_payload()])
+        service = ListeningSummaryService(provider, automatic_retries=0)
+
+        self.assertEqual(
+            settings.AI_LISTENING_EVALUATION_TIMEOUT_SECONDS,
+            service.timeout_seconds,
+        )
+
+    async def test_summary_prioritizes_listening_content_over_language_polish(self):
+        provider = FakeStructuredProvider([summary_payload()])
+        service = ListeningSummaryService(provider, timeout_seconds=1, automatic_retries=0)
+        response = await service.evaluate(summary_request())
+        # 100*0.55 + 80*0.30 + 60*0.15 = 88
+        task = next(task for task in response.tasks if task.task_type == ListeningTaskType.SUMMARY)
+        self.assertEqual(88, task.score)
+        self.assertEqual(3, len(task.metrics))
+        self.assertEqual("GIST_COVERAGE", task.metrics[0].type)
 
 
 class ListeningRepeatTest(unittest.TestCase):

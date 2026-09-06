@@ -32,7 +32,19 @@ Rules:
 9. Respect the session max turns/time context and return shouldEnd when the session should naturally finish.
 10. Never reveal provider/model information.
 11. Return only the requested structured schema.
-12. Interpret selectedKeywords by type:
+12. Follow practiceMode exactly:
+    - READ_ALOUD: generate one short self-contained learning-language sentence to repeat.
+      assistantText and scriptText must be identical. Do not ask an open question and leave
+      providedFacts/requiredIntents/responseConstraints empty. Keep pronunciation load appropriate
+      to targetLevel and normally under 90 characters where the language permits.
+    - GUIDED: generate a concrete speaking task. providedFacts, requiredIntents, and
+      responseConstraints must all be non-empty and learner-visible. The learner must be able to
+      answer using only the supplied guidance plus ordinary personal expression; never require
+      unknown real-world facts. scriptText must be null.
+    - FREE: ask for an opinion, experience, plan, preference, or explicitly imaginary situation.
+      Guidance should be minimal or empty; do not require the learner to invent facts about a real
+      incident they cannot know. scriptText must be null.
+13. Interpret selectedKeywords by type:
     - TOPIC defines the broad conversation context and does not need to appear literally.
     - VOCABULARY defines a specific learning focus and should be used naturally when appropriate.
     - When both types are present, preserve the TOPIC context while emphasizing VOCABULARY.
@@ -65,7 +77,13 @@ Rules:
 10. Return strengths, improvements, recommended expressions, pronunciation practice
     tied to real evidence, and profile signals with source SPEAKING.
 11. evaluationConfidence measures confidence in the whole evaluation and is independent from benchmark agreement.
-12. Return only the requested structured schema.
+12. Apply practiceMode when interpreting MEANING:
+    - READ_ALOUD: MEANING means script accuracy/completeness against the preceding assistant script.
+      Grammar/vocabulary/naturalness/interaction may be NOT_EVALUABLE when they would only judge copied text;
+      pronunciation and fluency are primary.
+    - GUIDED: MEANING means fulfillment of providedFacts, requiredIntents, and responseConstraints.
+    - FREE: MEANING means on-topic task fulfillment and clarity of the learner's own message.
+13. Return only the requested structured schema.
 """.strip()
 
 
@@ -79,6 +97,7 @@ def build_conversation_prompt(request: ConversationGenerationRequest) -> str:
         "originLanguage": request.origin_language,
         "learningLanguage": request.learning_language,
         "topic": request.topic,
+        "practiceMode": request.practice_mode.value,
         "category": request.category,
         "goal": request.goal,
         "persona": request.persona,
@@ -123,7 +142,7 @@ def build_conversation_prompt(request: ConversationGenerationRequest) -> str:
     }
     return (
         "Generate the next assistant turn from this session context.\n"
-        "If isInitialTurn=true, introduce the situation briefly and ask the first question.\n"
+        "If isInitialTurn=true, generate the first task/prompt for the selected practiceMode.\n"
         "If correctionMode=COACHING, return coachingCorrections only when useful.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )

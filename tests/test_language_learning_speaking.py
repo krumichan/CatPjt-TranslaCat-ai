@@ -618,6 +618,45 @@ class SpeakingConversationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.conversation.intent, "DAILY_CHAT")
         self.assertEqual(len(provider.calls), 2)
 
+    async def test_read_aloud_requires_matching_script(self):
+        payload = conversation_payload()
+        payload.update({
+            "assistantText": "明日は三時から会議があります。",
+            "scriptText": "明日は三時から会議があります。",
+        })
+        provider = FakeStructuredProvider(results=[payload])
+        service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)
+        response = await service.generate(conversation_request(practiceMode="READ_ALOUD"))
+        self.assertEqual(response.conversation.script_text, payload["assistantText"])
+        self.assertEqual([], response.conversation.provided_facts)
+
+    async def test_guided_requires_all_structured_guidance(self):
+        payload = conversation_payload()
+        payload.update({
+            "assistantText": "会議時間の変更を伝えてください。",
+            "providedFacts": ["会議は10時から15時に変更"],
+            "requiredIntents": ["変更を伝える", "参加可能か確認する"],
+            "responseConstraints": ["丁寧な表現を使う"],
+        })
+        provider = FakeStructuredProvider(results=[payload])
+        service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)
+        response = await service.generate(conversation_request(practiceMode="GUIDED"))
+        self.assertTrue(response.conversation.provided_facts)
+        self.assertTrue(response.conversation.required_intents)
+        self.assertTrue(response.conversation.response_constraints)
+
+    async def test_guided_missing_constraints_is_rejected(self):
+        payload = conversation_payload()
+        payload.update({
+            "providedFacts": ["会議は15時に変更"],
+            "requiredIntents": ["変更を伝える"],
+            "responseConstraints": [],
+        })
+        provider = FakeStructuredProvider(results=[payload])
+        service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)
+        with self.assertRaises(SpeakingStageException):
+            await service.generate(conversation_request(practiceMode="GUIDED"))
+
     async def test_coaching_assistance_is_reflected_in_prompt(self):
         provider = FakeStructuredProvider(results=[conversation_payload()])
         service = SpeakingConversationService(provider, timeout_seconds=1, automatic_retries=0)

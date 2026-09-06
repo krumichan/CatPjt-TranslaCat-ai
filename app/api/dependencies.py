@@ -12,6 +12,7 @@ from app.features.language_learning.level_test.service import LevelTestService
 from app.features.language_learning.listening.audio_store import (
     TemporaryListeningAudioStore,
 )
+from app.features.language_learning.listening.comprehension_service import ListeningComprehensionService
 from app.features.language_learning.listening.dictation_service import (
     ListeningDictationService,
 )
@@ -30,6 +31,7 @@ from app.features.language_learning.listening.repeat_service import (
 from app.features.language_learning.listening.stt_provider import (
     FasterWhisperListeningSttProvider,
 )
+from app.features.language_learning.listening.summary_service import ListeningSummaryService
 from app.features.language_learning.listening.tts_service import ListeningTtsService
 from app.features.language_learning.speaking.audio_processor import (
     SpeakingAudioProcessor,
@@ -94,7 +96,9 @@ _listening_tts_service = ListeningTtsService(
     audio_store=_listening_audio_store,
 )
 _listening_dictation_service = ListeningDictationService()
+_listening_comprehension_service = ListeningComprehensionService()
 _listening_interpretation_service = ListeningInterpretationService(_ai_provider)
+_listening_summary_service = ListeningSummaryService(_ai_provider)
 _listening_repeat_service = ListeningRepeatService(
     audio_processor=_listening_audio_processor,
     stt_provider=_listening_stt_provider,
@@ -189,10 +193,18 @@ def get_language_learning_listening_dictation_service() -> ListeningDictationSer
     return _listening_dictation_service
 
 
+def get_language_learning_listening_comprehension_service() -> ListeningComprehensionService:
+    return _listening_comprehension_service
+
+
 def get_language_learning_listening_interpretation_service() -> (
     ListeningInterpretationService
 ):
     return _listening_interpretation_service
+
+
+def get_language_learning_listening_summary_service() -> ListeningSummaryService:
+    return _listening_summary_service
 
 
 def get_language_learning_listening_repeat_service() -> ListeningRepeatService:

@@ -9,6 +9,7 @@ from app.schemas.language_learning_speaking.common import (
     MetricEvaluationState,
     SpeakingEvaluationStatus,
     SpeakingMetricType,
+    SpeakingPracticeMode,
     SpeakingUsage,
 )
 from app.schemas.language_learning_speaking.turn import AudioQualitySignals, SttSegment
@@ -32,6 +33,10 @@ class AssistantEvaluationTurn(CamelCaseModel):
     turn_id: str = Field(..., min_length=1, max_length=100)
     turn_index: int = Field(..., ge=0, le=20)
     text: str = Field(..., min_length=1, max_length=4000)
+    script_text: str | None = Field(default=None, max_length=4000)
+    provided_facts: list[str] = Field(default_factory=list, max_length=12)
+    required_intents: list[str] = Field(default_factory=list, max_length=12)
+    response_constraints: list[str] = Field(default_factory=list, max_length=12)
 
 
 class SpeakingEvaluationRequest(CamelCaseModel):
@@ -39,6 +44,7 @@ class SpeakingEvaluationRequest(CamelCaseModel):
     idempotency_key: str = Field(..., min_length=1, max_length=200)
     session_id: str = Field(..., min_length=1, max_length=100)
     topic: str = Field(..., min_length=1, max_length=500)
+    practice_mode: SpeakingPracticeMode = SpeakingPracticeMode.FREE
     goal: str | None = Field(default=None, max_length=1000)
     target_level: str | None = Field(default=None, max_length=50)
     origin_language: str = Field(..., min_length=2, max_length=20)

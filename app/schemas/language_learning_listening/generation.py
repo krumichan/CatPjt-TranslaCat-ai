@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -14,6 +15,7 @@ from app.schemas.language_learning_quality import (
 from app.schemas.language_learning_listening.common import (
     CamelCaseModel,
     ListeningDifficulty,
+    ListeningLearningMode,
     ListeningError,
     ListeningUsage,
     SafetyResult,
@@ -34,6 +36,7 @@ class ListeningUserContext(CamelCaseModel):
 
 class ListeningSetContext(CamelCaseModel):
     learning_date: date
+    learning_mode: ListeningLearningMode = ListeningLearningMode.DICTATION
     topic: ListeningTopic
     selected_keywords: list[SelectedKeyword] = Field(
         default_factory=list, max_length=20
@@ -77,6 +80,20 @@ class ListeningSetGenerationRequest(CamelCaseModel):
     content_diversity_policy_version: str | None = Field(default=None, max_length=100)
 
 
+ComprehensionFocus = Literal[
+    "GIST",
+    "DETAIL",
+    "INTENT",
+    "INFERENCE",
+    "NEXT_ACTION",
+]
+
+
+class ListeningChoiceOption(CamelCaseModel):
+    key: str = Field(..., min_length=1, max_length=12)
+    text: str = Field(..., min_length=1, max_length=1000)
+
+
 class GeneratedListeningItemPayload(CamelCaseModel):
     item_index: int = Field(..., ge=1, le=30)
     source_text: str = Field(..., min_length=1, max_length=4000)
@@ -87,6 +104,11 @@ class GeneratedListeningItemPayload(CamelCaseModel):
     safety: SafetyResult
     language_complexity_band: int | None = Field(default=None, ge=1, le=5)
     diversity_metadata: DiversityMetadata | None = None
+    question: str | None = Field(default=None, max_length=2000)
+    options: list[ListeningChoiceOption] = Field(default_factory=list, max_length=4)
+    correct_option_key: str | None = Field(default=None, max_length=12)
+    comprehension_focus: ComprehensionFocus | None = None
+    summary_key_points: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ListeningGenerationPayload(CamelCaseModel):
@@ -106,6 +128,11 @@ class ListeningItem(CamelCaseModel):
     safety: SafetyResult
     language_complexity_band: int | None = Field(default=None, ge=1, le=5)
     diversity_metadata: DiversityMetadata | None = None
+    question: str | None = None
+    options: list[ListeningChoiceOption] = Field(default_factory=list)
+    correct_option_key: str | None = None
+    comprehension_focus: ComprehensionFocus | None = None
+    summary_key_points: list[str] = Field(default_factory=list)
 
 
 class ListeningSetGenerationResponse(CamelCaseModel):

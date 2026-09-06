@@ -15,6 +15,12 @@ class CamelCaseModel(BaseModel):
     )
 
 
+class SpeakingPracticeMode(str, Enum):
+    READ_ALOUD = "READ_ALOUD"
+    GUIDED = "GUIDED"
+    FREE = "FREE"
+
+
 class ConversationStartMode(str, Enum):
     AI_FIRST = "AI_FIRST"
     USER_FIRST = "USER_FIRST"

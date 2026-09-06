@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from app.core.config import settings
 from app.schemas.language_learning_listening import (
     AssistanceUsage,
+    ComprehensionMetricType,
     DictationMetricType,
     EvaluationPurpose,
     InterpretationMetricType,
@@ -16,6 +17,7 @@ from app.schemas.language_learning_listening import (
     ListeningTaskType,
     ProfileMetric,
     RepeatMetricType,
+    SummaryMetricType,
 )
 
 LISTENING_GENERATION_VERSION = "listening-generation-v1"
@@ -29,6 +31,7 @@ LISTENING_EVALUATION_VERSION = "listening-eval-v1"
 LISTENING_SCORING_POLICY_VERSION = "listening-scoring-v1-half-up"
 LISTENING_PROFILE_POLICY_VERSION = "listening-profile-v1"
 LISTENING_INTERPRETATION_PROMPT_VERSION = "listening-interpretation-prompt-v4"
+LISTENING_SUMMARY_PROMPT_VERSION = "listening-summary-prompt-v1"
 LISTENING_REPEAT_EVALUATOR_VERSION = "listening-repeat-acoustic-v1"
 LISTENING_EXPLANATION_VERSION = "listening-explanation-v1"
 LISTENING_EXPLANATION_PROMPT_VERSION = "listening-explanation-prompt-v1"
@@ -55,6 +58,16 @@ INTERPRETATION_WEIGHTS: dict[str, float] = {
     InterpretationMetricType.ORIGIN_NATURALNESS.value: 0.15,
 }
 
+COMPREHENSION_WEIGHTS: dict[str, float] = {
+    ComprehensionMetricType.ANSWER_ACCURACY.value: 1.00,
+}
+
+SUMMARY_WEIGHTS: dict[str, float] = {
+    SummaryMetricType.GIST_COVERAGE.value: 0.55,
+    SummaryMetricType.KEY_POINT_COVERAGE.value: 0.30,
+    SummaryMetricType.LANGUAGE_CLARITY.value: 0.15,
+}
+
 REPEAT_WEIGHTS: dict[str, float] = {
     RepeatMetricType.PRONUNCIATION.value: 0.40,
     RepeatMetricType.PROSODY_RHYTHM.value: 0.25,
@@ -71,6 +84,12 @@ PROFILE_SIGNAL_WEIGHTS: dict[ListeningTaskType, dict[ProfileMetric, float]] = {
     ListeningTaskType.INTERPRETATION: {
         ProfileMetric.MEANING: 1.00,
         ProfileMetric.ORIGIN_NATURALNESS: 0.30,
+    },
+    ListeningTaskType.COMPREHENSION: {
+        ProfileMetric.MEANING: 1.00,
+    },
+    ListeningTaskType.SUMMARY: {
+        ProfileMetric.MEANING: 1.00,
     },
     ListeningTaskType.REPEAT_AFTER_AUDIO: {
         ProfileMetric.PRONUNCIATION: 1.00,
@@ -206,6 +225,10 @@ def _profile_scores(task: ListeningTaskResult) -> dict[ProfileMetric, float]:
                 InterpretationMetricType.ORIGIN_NATURALNESS.value
             ],
         }
+    if task.task_type == ListeningTaskType.COMPREHENSION:
+        return {ProfileMetric.MEANING: overall}
+    if task.task_type == ListeningTaskType.SUMMARY:
+        return {ProfileMetric.MEANING: overall}
     return {
         ProfileMetric.PRONUNCIATION: metric_scores[
             RepeatMetricType.PRONUNCIATION.value

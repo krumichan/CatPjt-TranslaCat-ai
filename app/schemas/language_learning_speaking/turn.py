@@ -14,6 +14,7 @@ from app.schemas.language_learning_speaking.common import (
     ConversationStartMode,
     CorrectionMode,
     SpeakingError,
+    SpeakingPracticeMode,
     SpeakingUsage,
 )
 
@@ -40,6 +41,7 @@ class SpeakingSessionContext(CamelCaseModel):
     origin_language: str = Field(..., min_length=2, max_length=20)
     learning_language: str = Field(..., min_length=2, max_length=20)
     topic: str = Field(..., min_length=1, max_length=500)
+    practice_mode: SpeakingPracticeMode = SpeakingPracticeMode.FREE
     category: str | None = Field(default=None, max_length=100)
     goal: str | None = Field(default=None, max_length=1000)
     persona: str | None = Field(default=None, max_length=1000)
@@ -137,6 +139,10 @@ class CoachingCorrection(CamelCaseModel):
 
 class ConversationPayload(CamelCaseModel):
     assistant_text: str = Field(..., min_length=1, max_length=4000)
+    script_text: str | None = Field(default=None, max_length=4000)
+    provided_facts: list[str] = Field(default_factory=list, max_length=12)
+    required_intents: list[str] = Field(default_factory=list, max_length=12)
+    response_constraints: list[str] = Field(default_factory=list, max_length=12)
     intent: str = Field(..., min_length=1, max_length=200)
     difficulty: str = Field(..., min_length=1, max_length=100)
     should_end: bool = False
@@ -164,6 +170,10 @@ class AssistantTurn(CamelCaseModel):
 
 class ConversationResult(CamelCaseModel):
     intent: str
+    script_text: str | None = None
+    provided_facts: list[str] = Field(default_factory=list)
+    required_intents: list[str] = Field(default_factory=list)
+    response_constraints: list[str] = Field(default_factory=list)
     difficulty: str
     should_end: bool
     end_reason: str | None = None

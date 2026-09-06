@@ -38,6 +38,7 @@ from app.features.language_learning.listening.provider_error import (
 )
 from app.features.language_learning.listening.retry import run_with_stage_retry
 from app.schemas.language_learning_listening import (
+    GeneratedListeningItemPayload,
     ListeningErrorCode,
     ListeningGenerationPayload,
     ListeningItem,
@@ -255,23 +256,23 @@ class ListeningGenerationService:
                     "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
                     False,
                 )
-            try:
-                payload = ListeningGenerationPayload.model_validate(result.data)
-            except ValidationError as exc:
-                logger.error(
-                    "Phase 3.5 Listening generation schema validation failed. request_id=%s errors=%s",
-                    request.request_id,
-                    exc.errors(include_url=False, include_input=False),
-                )
+            candidates, _ = self._salvage_phase35_candidates(
+                result.data,
+                request_id=request.request_id,
+                provider_attempt=provider_attempt + 1,
+            )
+            if not candidates:
+                if provider_attempt < 2:
+                    continue
                 raise ListeningStageException(
                     ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
                     ListeningStage.GENERATION,
                     "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
                     False,
-                ) from exc
+                )
 
             validator = DiversityValidator(effective_context)
-            for candidate in payload.items:
+            for candidate in candidates:
                 all_candidates.append(candidate)
                 finalized = self._phase35_candidate(request, candidate)
                 if finalized is None:
@@ -365,6 +366,82 @@ class ListeningGenerationService:
             ),
         )
 
+    @classmethod
+    def _salvage_phase35_candidates(
+        cls,
+        data: dict,
+        *,
+        request_id: str,
+        provider_attempt: int,
+    ) -> tuple[list[GeneratedListeningItemPayload], list[str]]:
+        raw_items = data.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            logger.warning(
+                "Phase 3.5 Listening candidate schema salvage. request_id=%s "
+                "attempt=%d/3 validCandidates=0 rejectedCandidates=1 "
+                "reasons=%s",
+                request_id,
+                provider_attempt,
+                ["items:not-a-non-empty-list"],
+            )
+            return [], ["items:not-a-non-empty-list"]
+
+        valid: list[GeneratedListeningItemPayload] = []
+        reasons: list[str] = []
+        for index, raw_candidate in enumerate(raw_items):
+            if not isinstance(raw_candidate, dict):
+                reasons.append(f"items.{index}:candidate:not-an-object")
+                continue
+            candidate = dict(raw_candidate)
+            if "comprehensionFocus" in candidate:
+                candidate["comprehensionFocus"] = cls._normalize_comprehension_focus(
+                    candidate.get("comprehensionFocus")
+                )
+            try:
+                valid.append(GeneratedListeningItemPayload.model_validate(candidate))
+            except ValidationError as exc:
+                reasons.extend(
+                    cls._validation_reasons(index, exc, raw_candidate)
+                )
+
+        if reasons:
+            logger.info(
+                "Phase 3.5 Listening candidate schema salvage. request_id=%s "
+                "attempt=%d/3 validCandidates=%d rejectedCandidates=%d reasons=%s",
+                request_id,
+                provider_attempt,
+                len(valid),
+                len(raw_items) - len(valid),
+                reasons[:12],
+            )
+        return valid, reasons
+
+    @staticmethod
+    def _normalize_comprehension_focus(value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().upper().replace("-", "_").replace(" ", "_")
+        if normalized in {"GIST", "DETAIL", "INTENT", "INFERENCE", "NEXT_ACTION"}:
+            return normalized
+        return value
+
+    @staticmethod
+    def _validation_reasons(
+        item_index: int,
+        exc: ValidationError,
+        raw_candidate: dict,
+    ) -> list[str]:
+        reasons: list[str] = []
+        for error in exc.errors(include_url=False, include_input=False):
+            location = ".".join(str(part) for part in error.get("loc", ())) or "candidate"
+            reason = f"items.{item_index}:{location}:{error.get('type', 'validation_error')}"
+            if location in {"comprehension_focus", "comprehensionFocus"}:
+                value = raw_candidate.get("comprehensionFocus")
+                if value is not None:
+                    reason += f":value={str(value)[:40]}"
+            reasons.append(reason)
+        return reasons
+
     def _phase35_candidate(
         self,
         request: ListeningSetGenerationRequest,
@@ -380,6 +457,8 @@ class ListeningGenerationService:
             return None
         minimum, maximum = self._duration_range(request)
         if not minimum <= item.estimated_audio_seconds <= maximum:
+            return None
+        if not self._valid_mode_payload(request, item):
             return None
         normalized = normalize_text(item.source_text, request.user_context.learning_language)
         content_hash = hashlib.sha256(normalized.text.encode("utf-8")).hexdigest()
@@ -397,6 +476,11 @@ class ListeningGenerationService:
             safety=item.safety,
             language_complexity_band=item.language_complexity_band,
             diversity_metadata=item.diversity_metadata,
+            question=item.question,
+            options=item.options,
+            correct_option_key=item.correct_option_key,
+            comprehension_focus=item.comprehension_focus,
+            summary_key_points=item.summary_key_points,
         )
 
     @staticmethod
@@ -619,6 +703,8 @@ class ListeningGenerationService:
                 raise ValueError(
                     f"estimatedAudioSeconds는 {minimum:g}~{maximum:g}초여야 합니다."
                 )
+            if not self._valid_mode_payload(request, item):
+                raise ValueError("learningMode에 맞지 않는 Listening 문항이 생성되었습니다.")
             normalized = normalize_text(
                 item.source_text,
                 request.user_context.learning_language,
@@ -649,9 +735,48 @@ class ListeningGenerationService:
                     content_hash=content_hash,
                     similarity_key=hashlib.sha256(key.encode("utf-8")).hexdigest(),
                     safety=item.safety,
+                    question=item.question,
+                    options=item.options,
+                    correct_option_key=item.correct_option_key,
+                    comprehension_focus=item.comprehension_focus,
+                    summary_key_points=item.summary_key_points,
                 )
             )
         return finalized
+
+    @staticmethod
+    def _valid_mode_payload(request: ListeningSetGenerationRequest, item) -> bool:
+        mode = request.set_context.learning_mode.value
+        if mode == "DICTATION":
+            return (
+                item.question is None
+                and not item.options
+                and item.correct_option_key is None
+                and item.comprehension_focus is None
+                and not item.summary_key_points
+            )
+        if mode == "COMPREHENSION":
+            keys = [option.key for option in item.options]
+            return (
+                bool(item.question and item.question.strip())
+                and len(item.options) == 4
+                and set(keys) == {"A", "B", "C", "D"}
+                and item.correct_option_key in set(keys)
+                and item.comprehension_focus in {
+                    "GIST", "DETAIL", "INTENT", "INFERENCE", "NEXT_ACTION"
+                }
+                and not item.summary_key_points
+            )
+        if mode == "SUMMARY":
+            points = [point.strip() for point in item.summary_key_points if point.strip()]
+            return (
+                2 <= len(points) <= 6
+                and item.question is None
+                and not item.options
+                and item.correct_option_key is None
+                and item.comprehension_focus is None
+            )
+        return False
 
     @staticmethod
     def _duration_range(request: ListeningSetGenerationRequest) -> tuple[float, float]:

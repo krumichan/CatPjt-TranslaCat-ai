@@ -22,10 +22,18 @@ class ListeningDifficulty(str, Enum):
     CHALLENGE = "CHALLENGE"
 
 
+class ListeningLearningMode(str, Enum):
+    DICTATION = "DICTATION"
+    COMPREHENSION = "COMPREHENSION"
+    SUMMARY = "SUMMARY"
+
+
 class ListeningTaskType(str, Enum):
     DICTATION = "DICTATION"
     INTERPRETATION = "INTERPRETATION"
     REPEAT_AFTER_AUDIO = "REPEAT_AFTER_AUDIO"
+    COMPREHENSION = "COMPREHENSION"
+    SUMMARY = "SUMMARY"
 
 
 class EvaluationPurpose(str, Enum):
@@ -63,6 +71,8 @@ class ListeningStage(str, Enum):
     TTS = "TTS"
     DICTATION = "DICTATION"
     INTERPRETATION = "INTERPRETATION"
+    COMPREHENSION = "COMPREHENSION"
+    SUMMARY = "SUMMARY"
     AUDIO_VALIDATION = "AUDIO_VALIDATION"
     STT = "STT"
     ALIGNMENT = "ALIGNMENT"
@@ -89,6 +99,8 @@ class ListeningErrorCode(str, Enum):
     LOW_AUDIO_QUALITY = "LOW_AUDIO_QUALITY"
     STT_FAILED = "STT_FAILED"
     INTERPRETATION_FAILED = "INTERPRETATION_FAILED"
+    COMPREHENSION_FAILED = "COMPREHENSION_FAILED"
+    SUMMARY_FAILED = "SUMMARY_FAILED"
     EXPLANATION_FAILED = "EXPLANATION_FAILED"
     ANSWER_REVEALED = "ANSWER_REVEALED"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
@@ -122,6 +134,8 @@ class ListeningUsage(CamelCaseModel):
     tts: StageUsage | None = None
     dictation: StageUsage | None = None
     interpretation: StageUsage | None = None
+    comprehension: StageUsage | None = None
+    summary: StageUsage | None = None
     stt: StageUsage | None = None
     alignment: StageUsage | None = None
     pronunciation: StageUsage | None = None

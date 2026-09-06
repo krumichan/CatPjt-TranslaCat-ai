@@ -150,6 +150,8 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
         cls.interpretation_service = FakeInterpretationService()
         cls.repeat_service = FakeRepeatService()
         cls.explanation_service = FakeExplanationService()
+        cls.comprehension_service = object()
+        cls.summary_service = object()
         cls.audio_store = FakeAudioStore()
 
         setattr(
@@ -186,6 +188,16 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
             fake_dependencies,
             "get_language_learning_listening_explanation_service",
             lambda: cls.explanation_service,
+        )
+        setattr(
+            fake_dependencies,
+            "get_language_learning_listening_comprehension_service",
+            lambda: cls.comprehension_service,
+        )
+        setattr(
+            fake_dependencies,
+            "get_language_learning_listening_summary_service",
+            lambda: cls.summary_service,
         )
 
         cls.original_dependencies = sys.modules.get("app.api.dependencies")
@@ -235,7 +247,7 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
             "modelConfigVersion": "model-v1",
         }
 
-    def test_dictation_api_returns_three_task_camel_case_contract(self):
+    def test_dictation_api_returns_all_task_camel_case_contract(self):
         payload = self.evaluation_base()
         payload.update(
             {
@@ -251,7 +263,7 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
         )
         self.assertEqual(200, response.status_code)
         body = response.json()
-        self.assertEqual(3, len(body["tasks"]))
+        self.assertEqual(5, len(body["tasks"]))
         self.assertEqual("DICTATION", body["tasks"][0]["taskType"])
         self.assertEqual(100, body["tasks"][0]["score"])
         self.assertEqual("listening-profile-v1", body["profilePolicyVersion"])

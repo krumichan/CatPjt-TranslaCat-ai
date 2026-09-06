@@ -573,6 +573,44 @@ class Phase35GenerationTest(unittest.TestCase):
         self.assertNotEqual(response.items[0].content_hash, response.items[1].content_hash)
         self.assertTrue(all(item.diversity_metadata for item in response.items))
 
+    def test_listening_phase35_salvages_invalid_comprehension_focus_candidate(self):
+        request_data = listening_phase35_request().model_dump(by_alias=True, mode="json")
+        request_data["setContext"]["learningMode"] = "COMPREHENSION"
+        payload = listening_candidate_payload()
+        focuses = ["MAIN_IDEA", "next-action", "GIST", "DETAIL"]
+        for index, item in enumerate(payload["items"]):
+            item.update(
+                {
+                    "question": "話者について最も適切な説明はどれですか？",
+                    "options": [
+                        {"key": "A", "text": "選択肢A"},
+                        {"key": "B", "text": "選択肢B"},
+                        {"key": "C", "text": "選択肢C"},
+                        {"key": "D", "text": "選択肢D"},
+                    ],
+                    "correctOptionKey": "B",
+                    "comprehensionFocus": focuses[index],
+                    "summaryKeyPoints": [],
+                }
+            )
+
+        provider = QueueProvider(structured=[payload])
+        service = ListeningGenerationService(provider, automatic_retries=0)
+        response = asyncio.run(
+            service.generate(ListeningSetGenerationRequest.model_validate(request_data))
+        )
+
+        self.assertEqual(2, len(response.items))
+        self.assertEqual(["NEXT_ACTION", "GIST"], [item.comprehension_focus for item in response.items])
+        self.assertEqual(1, len(provider.calls))
+
+    def test_listening_generation_schema_exposes_comprehension_focus_as_enum(self):
+        from app.schemas.language_learning_listening import ListeningGenerationPayload
+
+        schema_text = str(ListeningGenerationPayload.model_json_schema())
+        for value in ["GIST", "DETAIL", "INTENT", "INFERENCE", "NEXT_ACTION"]:
+            self.assertIn(value, schema_text)
+
 
 class Phase35BenchmarkTest(unittest.TestCase):
     def test_level_test_human_benchmark_requires_all_segments_to_pass(self):

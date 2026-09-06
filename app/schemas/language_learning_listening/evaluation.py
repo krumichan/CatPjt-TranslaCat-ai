@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
+from app.schemas.language_learning_listening.generation import ListeningChoiceOption
+
 from app.schemas.language_learning_listening.common import (
     AssistanceUsage,
     CamelCaseModel,
@@ -27,6 +29,16 @@ class InterpretationMetricType(str, Enum):
     MEANING_FIDELITY = "MEANING_FIDELITY"
     DETAIL_AND_NUANCE = "DETAIL_AND_NUANCE"
     ORIGIN_NATURALNESS = "ORIGIN_NATURALNESS"
+
+
+class ComprehensionMetricType(str, Enum):
+    ANSWER_ACCURACY = "ANSWER_ACCURACY"
+
+
+class SummaryMetricType(str, Enum):
+    GIST_COVERAGE = "GIST_COVERAGE"
+    KEY_POINT_COVERAGE = "KEY_POINT_COVERAGE"
+    LANGUAGE_CLARITY = "LANGUAGE_CLARITY"
 
 
 class RepeatMetricType(str, Enum):
@@ -81,6 +93,37 @@ class InterpretationEvaluationRequest(EvaluationBaseRequest):
     source_text: str = Field(..., min_length=1, max_length=4000)
     reference_meanings: list[str] = Field(..., min_length=2, max_length=3)
     key_meaning_units: list[str] = Field(..., min_length=1, max_length=30)
+    answer: str = Field(..., min_length=1, max_length=4000)
+    origin_language: str = Field(..., min_length=2, max_length=20)
+    learning_language: str = Field(..., min_length=2, max_length=20)
+
+
+class ComprehensionEvaluationRequest(EvaluationBaseRequest):
+    question: str = Field(..., min_length=1, max_length=2000)
+    options: list[ListeningChoiceOption] = Field(..., min_length=2, max_length=4)
+    selected_option_key: str = Field(..., min_length=1, max_length=12)
+    correct_option_key: str = Field(..., min_length=1, max_length=12)
+    comprehension_focus: str = Field(
+        ..., pattern="^(GIST|DETAIL|INTENT|INFERENCE|NEXT_ACTION)$"
+    )
+    origin_language: str = Field(..., min_length=2, max_length=20)
+    learning_language: str = Field(..., min_length=2, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "ComprehensionEvaluationRequest":
+        keys = [option.key for option in self.options]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Listening 객관식 option key는 중복될 수 없습니다.")
+        if self.correct_option_key not in set(keys):
+            raise ValueError("correctOptionKey는 options에 포함되어야 합니다.")
+        if self.selected_option_key not in set(keys):
+            raise ValueError("selectedOptionKey는 options에 포함되어야 합니다.")
+        return self
+
+
+class SummaryEvaluationRequest(EvaluationBaseRequest):
+    source_text: str = Field(..., min_length=1, max_length=4000)
+    summary_key_points: list[str] = Field(..., min_length=2, max_length=8)
     answer: str = Field(..., min_length=1, max_length=4000)
     origin_language: str = Field(..., min_length=2, max_length=20)
     learning_language: str = Field(..., min_length=2, max_length=20)
@@ -193,8 +236,8 @@ class ListeningTaskResult(CamelCaseModel):
 
 class ListeningEvaluationOverall(CamelCaseModel):
     score: int | None = Field(default=None, ge=0, le=100)
-    evaluated_task_count: int = Field(..., ge=0, le=3)
-    total_task_count: int = Field(default=3, ge=3, le=3)
+    evaluated_task_count: int = Field(..., ge=0, le=5)
+    total_task_count: int = Field(default=5, ge=5, le=5)
 
 
 class ListeningEvaluationResponse(CamelCaseModel):
@@ -204,7 +247,7 @@ class ListeningEvaluationResponse(CamelCaseModel):
     evaluation_version: str
     scoring_policy_version: str
     profile_policy_version: str
-    tasks: list[ListeningTaskResult] = Field(..., min_length=3, max_length=3)
+    tasks: list[ListeningTaskResult] = Field(..., min_length=5, max_length=5)
     overall: ListeningEvaluationOverall
     usage: ListeningUsage
 
@@ -212,7 +255,7 @@ class ListeningEvaluationResponse(CamelCaseModel):
     def validate_task_set(self) -> "ListeningEvaluationResponse":
         types = [task.task_type for task in self.tasks]
         if len(types) != len(set(types)) or set(types) != set(ListeningTaskType):
-            raise ValueError("tasks는 Listening 3종을 중복 없이 포함해야 합니다.")
+            raise ValueError("tasks는 Listening Task 전체를 중복 없이 포함해야 합니다.")
         return self
 
 
@@ -233,6 +276,23 @@ class InterpretationEvaluationPayload(CamelCaseModel):
     recommended_interpretations: list[str] = Field(..., min_length=2, max_length=3)
     strengths: list[str] = Field(default_factory=list, max_length=20)
     improvements: list[str] = Field(default_factory=list, max_length=20)
+
+
+class SummaryMetricPayload(CamelCaseModel):
+    type: SummaryMetricType
+    score: float = Field(..., ge=0, le=100)
+    confidence: float = Field(..., ge=0, le=1)
+    evidence: list[MetricEvidence] = Field(..., min_length=1, max_length=30)
+
+
+class SummaryEvaluationPayload(CamelCaseModel):
+    evaluation_confidence: float = Field(..., ge=0, le=1)
+    metrics: list[SummaryMetricPayload] = Field(..., min_length=3, max_length=3)
+    strengths: list[str] = Field(default_factory=list, max_length=20)
+    improvements: list[str] = Field(default_factory=list, max_length=20)
+    recommended_summaries: list[str] = Field(..., min_length=2, max_length=3)
+    delivered_key_points: list[str] = Field(default_factory=list, max_length=30)
+    omitted_key_points: list[str] = Field(default_factory=list, max_length=30)
 
 
 class RecommendationEvidenceSummary(CamelCaseModel):
