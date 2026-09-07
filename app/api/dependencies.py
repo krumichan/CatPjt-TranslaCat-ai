@@ -52,6 +52,9 @@ from app.features.language_learning.speaking.turn_service import SpeakingTurnSer
 from app.features.language_learning.writing.service import (
     LanguageLearningWritingService,
 )
+from app.features.language_learning.reading_vocabulary.service import (
+    ReadingVocabularyGenerationService,
+)
 from app.features.receipt.service import ReceiptAnalysisService
 from app.features.speech_to_text import FasterWhisperRuntime
 from app.features.translation.service import TranslationService
@@ -82,6 +85,9 @@ _chat_ai_reply_service = ChatAiReplyService(
 )
 
 _language_learning_writing_service = LanguageLearningWritingService(
+    provider=_ai_provider,
+)
+_language_learning_reading_vocabulary_service = ReadingVocabularyGenerationService(
     provider=_ai_provider,
 )
 
@@ -175,6 +181,10 @@ def get_chat_ai_reply_service() -> ChatAiReplyService:
 
 def get_language_learning_writing_service() -> LanguageLearningWritingService:
     return _language_learning_writing_service
+
+
+def get_language_learning_reading_vocabulary_service() -> ReadingVocabularyGenerationService:
+    return _language_learning_reading_vocabulary_service
 
 
 def get_language_learning_listening_generation_service() -> ListeningGenerationService:

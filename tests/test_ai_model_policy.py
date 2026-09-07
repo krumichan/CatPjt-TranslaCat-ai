@@ -33,3 +33,33 @@ def test_receipt_and_voice_translation_start_on_luna():
 
 def test_unknown_task_fails_quality_safe_to_mini():
     assert get_task_model_policy("NEW_UNCLASSIFIED_TASK").tier == AiModelTier.MINI
+
+
+def test_reading_vocabulary_uses_nano_only_for_low_risk_origin_explanations():
+    assert (
+        get_task_model_policy("LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION").tier
+        == AiModelTier.LUNA
+    )
+    assert (
+        get_task_model_policy("LANGUAGE_LEARNING_READING_PASSAGE_GENERATION").tier
+        == AiModelTier.LUNA
+    )
+    assert (
+        get_task_model_policy("LANGUAGE_LEARNING_READING_VOCABULARY_USAGE_PRESCREEN").tier
+        == AiModelTier.NANO
+    )
+    assert (
+        get_task_model_policy("LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION").tier
+        == AiModelTier.MINI
+    )
+    nano_policy = get_task_model_policy(
+        "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION"
+    )
+    assert nano_policy.tier == AiModelTier.NANO
+    assert nano_policy.max_output_tokens == 2048
+    assert (
+        get_task_model_policy(
+            "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION_FALLBACK"
+        ).tier
+        == AiModelTier.MINI
+    )

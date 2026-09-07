@@ -4,6 +4,7 @@ from app.api.v1 import (
     chat,
     language_learning,
     language_learning_listening,
+    language_learning_practice,
     language_learning_level_test,
     language_learning_speaking,
     receipt,
@@ -19,5 +20,6 @@ api_router.include_router(receipt.router)
 api_router.include_router(chat.router)
 api_router.include_router(language_learning.router)
 api_router.include_router(language_learning_listening.router)
+api_router.include_router(language_learning_practice.router)
 api_router.include_router(language_learning_level_test.router)
 api_router.include_router(language_learning_speaking.router)

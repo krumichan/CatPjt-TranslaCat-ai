@@ -19,3 +19,15 @@ def test_speaking_assistance_prompt_is_registered():
         get_prompt_rule("LANGUAGE_LEARNING_SPEAKING_ASSISTANCE")
         == SPEAKING_ASSISTANCE_SYSTEM_PROMPT
     )
+
+
+def test_reading_vocabulary_pipeline_prompts_are_registered():
+    for type_name in [
+        "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION",
+        "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION",
+        "LANGUAGE_LEARNING_READING_VOCABULARY_USAGE_PRESCREEN",
+        "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION",
+        "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION",
+        "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION_FALLBACK",
+    ]:
+        assert get_prompt_rule(type_name)

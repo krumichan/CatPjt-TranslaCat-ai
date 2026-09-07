@@ -36,6 +36,26 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 8192
     ),
+    "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION": AiTaskModelPolicy(
+        AiModelTier.LUNA, "none", 4096
+    ),
+    "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION": AiTaskModelPolicy(
+        AiModelTier.LUNA, "none", 4096
+    ),
+    "LANGUAGE_LEARNING_READING_VOCABULARY_USAGE_PRESCREEN": AiTaskModelPolicy(
+        AiModelTier.NANO, "low", 2048
+    ),
+    "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 4096
+    ),
+    # Lightweight post-validation explanation localization is intentionally Nano.
+    # It never decides correctness; Mini is the quality-safe fallback.
+    "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION": AiTaskModelPolicy(
+        AiModelTier.NANO, "low", 2048
+    ),
+    "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION_FALLBACK": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 2048
+    ),
     "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),
