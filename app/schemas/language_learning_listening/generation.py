@@ -70,9 +70,9 @@ class ListeningSetGenerationRequest(CamelCaseModel):
     constraints: ListeningGenerationConstraints = Field(
         default_factory=ListeningGenerationConstraints
     )
-    policy_version: str = Field(default="listening-v1", min_length=1, max_length=100)
+    policy_version: str = Field(default="listening", min_length=1, max_length=100)
     model_config_version: str = Field(
-        default="listening-model-config-v1", min_length=1, max_length=100
+        default="listening-model-config", min_length=1, max_length=100
     )
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)
     language_complexity: LanguageComplexityContext | None = None
@@ -150,7 +150,7 @@ class ListeningSetGenerationResponse(CamelCaseModel):
 class ListeningVoiceSnapshot(CamelCaseModel):
     locale: str = Field(..., min_length=2, max_length=30)
     voice_key: str = Field(..., min_length=1, max_length=100)
-    version: str = Field(default="v1", min_length=1, max_length=100)
+    version: str = Field(default="current", min_length=1, max_length=100)
     accent: str = Field(default="STANDARD", pattern="^STANDARD$")
 
 
@@ -164,9 +164,9 @@ class ListeningTtsRequest(CamelCaseModel):
     learning_language: str = Field(..., min_length=2, max_length=20)
     voice: ListeningVoiceSnapshot
     playback_speed: str = Field(default="NORMAL", pattern="^(NORMAL|SLOW)$")
-    policy_version: str = Field(default="listening-v1", min_length=1, max_length=100)
+    policy_version: str = Field(default="listening", min_length=1, max_length=100)
     model_config_version: str = Field(
-        default="listening-model-config-v1", min_length=1, max_length=100
+        default="listening-model-config", min_length=1, max_length=100
     )
     automatic_retry_limit: int = Field(default=2, ge=0, le=2)
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)

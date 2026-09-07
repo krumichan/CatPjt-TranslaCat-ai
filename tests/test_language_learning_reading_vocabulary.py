@@ -27,13 +27,20 @@ class PipelineProvider:
         prescreen_reject_once: set[int] | None = None,
         prescreen_reject_always: set[int] | None = None,
         semantic_reject_rounds_by_order: dict[int, int] | None = None,
+        candidate_reject_rounds_by_order: dict[int, int] | None = None,
+        usage_metadata_drift_once: set[int] | None = None,
+        composition_invalid_ordering_once: set[int] | None = None,
+        composition_missing_target_once: set[int] | None = None,
+        reading_invalid_vocabulary_candidate_rounds_by_order: dict[int, int] | None = None,
         english_target_once: set[int] | None = None,
         english_options_once: set[int] | None = None,
     ):
         self.calls = Counter()
         self.candidate_slot_calls: list[list[int]] = []
+        self.candidate_slot_payloads: list[list[dict]] = []
         self.slot_occurrences = defaultdict(int)
         self.verification_round = 0
+        self.verification_occurrences = defaultdict(int)
         self.semantic_ambiguous_once = set(semantic_ambiguous_once or set())
         self.bad_learning_lane_once = set(bad_learning_lane_once or set())
         self.nano_bad_language_calls = nano_bad_language_calls
@@ -42,6 +49,13 @@ class PipelineProvider:
         self.prescreen_reject_once = set(prescreen_reject_once or set())
         self.prescreen_reject_always = set(prescreen_reject_always or set())
         self.semantic_reject_rounds_by_order = dict(semantic_reject_rounds_by_order or {})
+        self.candidate_reject_rounds_by_order = dict(candidate_reject_rounds_by_order or {})
+        self.usage_metadata_drift_once = set(usage_metadata_drift_once or set())
+        self.composition_invalid_ordering_once = set(composition_invalid_ordering_once or set())
+        self.composition_missing_target_once = set(composition_missing_target_once or set())
+        self.reading_invalid_vocabulary_candidate_rounds_by_order = dict(
+            reading_invalid_vocabulary_candidate_rounds_by_order or {}
+        )
         self.english_target_once = set(english_target_once or set())
         self.english_options_once = set(english_options_once or set())
         self.prescreen_round = 0
@@ -65,6 +79,7 @@ class PipelineProvider:
             payload = _practice_data(data)
             slots = payload["candidateSlots"]
             self.candidate_slot_calls.append([slot["order"] for slot in slots])
+            self.candidate_slot_payloads.append(slots)
             return {"questions": [self._candidate(payload, slot) for slot in slots]}
 
         if type_name == ReadingVocabularyGenerationService.PRESCREEN_TYPE_NAME:
@@ -96,9 +111,11 @@ class PipelineProvider:
             verdicts = []
             for question in payload["questions"]:
                 order = question["order"]
+                self.verification_occurrences[order] += 1
+                occurrence = self.verification_occurrences[order]
                 ambiguous = (
-                    (self.verification_round == 1 and order in self.semantic_ambiguous_once)
-                    or self.verification_round <= self.semantic_reject_rounds_by_order.get(order, 0)
+                    (occurrence == 1 and order in self.semantic_ambiguous_once)
+                    or occurrence <= self.semantic_reject_rounds_by_order.get(order, 0)
                 )
                 verdicts.append(
                     {
@@ -163,7 +180,10 @@ class PipelineProvider:
             correct = ["A"]
 
         prompt = "最も適切なものはどれですか。"
-        if order in self.bad_learning_lane_once and self.slot_occurrences[order] == 1:
+        if (
+            (order in self.bad_learning_lane_once and self.slot_occurrences[order] == 1)
+            or self.slot_occurrences[order] <= self.candidate_reject_rounds_by_order.get(order, 0)
+        ):
             prompt = "가장 적절한 것은 무엇입니까?"
 
         bound = slot.get("boundReviewTarget")
@@ -207,10 +227,59 @@ class PipelineProvider:
         if (
             vocab
             and payload.get("mode") == "USAGE_DISTINCTION"
+            and question_type == "SINGLE_CHOICE"
+        ):
+            retry_target = slot.get("retryTargetExpression")
+            if retry_target:
+                target_expression = retry_target
+            options[0] = {"key": "A", "text": target_expression}
+
+        skill_tag = slot["skillTag"]
+        if (
+            vocab
+            and payload.get("mode") == "USAGE_DISTINCTION"
+            and order in self.usage_metadata_drift_once
+            and self.slot_occurrences[order] == 1
+        ):
+            skill_tag = "MEANING"
+            canonical_key = "review-a"
+            review_target = True
+            correct = ["B"]
+
+        if (
+            vocab
+            and payload.get("mode") == "USAGE_DISTINCTION"
             and order in self.usage_target_leak_once
             and self.slot_occurrences[order] == 1
         ):
             prompt = f"「{target_expression}」と同じ意味で最も自然な表現はどれですか。"
+
+        if (
+            vocab
+            and payload.get("mode") == "COMPOSITION"
+            and question_type == "ORDERING"
+            and order in self.composition_invalid_ordering_once
+            and self.slot_occurrences[order] == 1
+        ):
+            correct = ["A", "B", "B", "D"]
+
+        if (
+            vocab
+            and payload.get("mode") == "COMPOSITION"
+            and question_type == "ORDERING"
+            and order in self.composition_missing_target_once
+            and self.slot_occurrences[order] >= 2
+        ):
+            target_expression = None
+            canonical_key = None
+
+        vocabulary_candidates = ["資料"] if not vocab else []
+        if (
+            not vocab
+            and self.slot_occurrences[order]
+            <= self.reading_invalid_vocabulary_candidate_rounds_by_order.get(order, 0)
+        ):
+            vocabulary_candidates = ["資料", "確認する", "", "資料", "顧客への説明"]
 
         return {
             "order": order,
@@ -222,13 +291,13 @@ class PipelineProvider:
             "prompt": prompt,
             "options": options,
             "correctAnswer": correct,
-            "skillTag": slot["skillTag"],
+            "skillTag": skill_tag,
             "evidenceText": "担当者は資料を確認しました。" if not vocab else None,
             "explanationLearning": "この答えが文脈に最も合います。",
             "targetExpression": target_expression,
             "canonicalKey": canonical_key,
             "reviewTarget": review_target,
-            "vocabularyCandidates": ["資料"] if not vocab else [],
+            "vocabularyCandidates": vocabulary_candidates,
         }
 
 
@@ -275,16 +344,56 @@ def _vocab_request(**kwargs):
 
 
 @pytest.mark.asyncio
-async def test_reading_uses_two_source_passages_small_candidate_batches_and_v3_contract():
+async def test_reading_uses_two_source_passages_and_small_candidate_batches():
     provider = PipelineProvider()
     response = await ReadingVocabularyGenerationService(provider).generate(_request())
 
     assert len(response.questions) == 5
-    assert response.prompt_version == "reading-vocabulary-generation-v5"
+    assert response.prompt_version == "reading-vocabulary-generation"
     assert provider.calls[ReadingVocabularyGenerationService.PASSAGE_TYPE_NAME] == 2
     assert provider.candidate_slot_calls == [[1, 2], [3, 4], [5]]
     assert {question.passage_id for question in response.questions} == {"p1", "p2"}
     assert all(question.explanation_origin.startswith("이 답은") for question in response.questions)
+
+
+@pytest.mark.asyncio
+async def test_reading_invalid_vocabulary_candidates_are_sanitized_without_regeneration():
+    provider = PipelineProvider(
+        reading_invalid_vocabulary_candidate_rounds_by_order={3: 99}
+    )
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _request(mode="CONTEXT_INFERENCE")
+    )
+
+    question = next(item for item in response.questions if item.order == 3)
+    assert provider.slot_occurrences[3] == 1
+    assert question.vocabulary_candidates == ["資料", "顧客への説明"]
+
+
+@pytest.mark.asyncio
+async def test_reading_generation_failures_do_not_consume_semantic_retry_budget():
+    provider = PipelineProvider(
+        candidate_reject_rounds_by_order={3: 4},
+        semantic_reject_rounds_by_order={3: 2},
+    )
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _request(mode="CONTEXT_INFERENCE")
+    )
+
+    assert len(response.questions) == 5
+    assert provider.slot_occurrences[3] == 7
+    assert provider.verification_occurrences[3] == 3
+    retry_payloads = [
+        slot
+        for slots in provider.candidate_slot_payloads
+        for slot in slots
+        if slot["order"] == 3 and "retryFeedback" in slot
+    ]
+    assert retry_payloads
+    assert any(
+        slot["retryFeedback"].startswith("REPAIR_READING_AMBIGUITY")
+        for slot in retry_payloads
+    )
 
 
 @pytest.mark.asyncio
@@ -352,10 +461,10 @@ def test_japanese_vocabulary_surface_language_allows_native_forms_and_real_ascii
 
 
 @pytest.mark.asyncio
-async def test_invalid_legacy_review_target_is_skipped_instead_of_poisoning_generation():
+async def test_invalid_review_target_is_skipped_instead_of_poisoning_generation():
     reviews = [
         {
-            "canonicalKey": "legacy-deployment",
+            "canonicalKey": "invalid-deployment",
             "expression": "deployment",
             "masteryScore": 42,
             "wrongCount": 3,
@@ -463,6 +572,54 @@ async def test_composition_question_types_are_application_planned_not_model_chos
         question.order for question in response.questions if question.question_type.value == "ORDERING"
     ]
     assert ordering_orders == [1, 3, 6, 8]
+    assert all(len(batch) == 1 for batch in provider.candidate_slot_calls)
+
+
+@pytest.mark.asyncio
+async def test_composition_ordering_repairs_invalid_answer_and_reconstructs_missing_target():
+    provider = PipelineProvider(
+        composition_invalid_ordering_once={8},
+        composition_missing_target_once={8},
+    )
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _vocab_request(mode="COMPOSITION")
+    )
+
+    question = next(item for item in response.questions if item.order == 8)
+    assert question.question_type.value == "ORDERING"
+    assert provider.slot_occurrences[8] == 2
+    assert provider.verification_occurrences[8] == 0
+    assert question.correct_answer == ["A", "B", "C", "D"]
+    assert question.target_expression == "対応を早急に検討する必要があります"
+    assert question.canonical_key == "対応を早急に検討する必要があります"
+    retry_slot = next(
+        slots[0]
+        for slots in provider.candidate_slot_payloads
+        if slots[0]["order"] == 8 and "retryFeedback" in slots[0]
+    )
+    assert retry_slot["retryFeedback"].startswith("REPAIR_ORDERING_KEYS")
+
+
+@pytest.mark.asyncio
+async def test_composition_generation_failures_do_not_consume_semantic_retry_budget():
+    provider = PipelineProvider(
+        candidate_reject_rounds_by_order={7: 4},
+        semantic_reject_rounds_by_order={7: 2},
+    )
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _vocab_request(mode="COMPOSITION")
+    )
+
+    assert len(response.questions) == 10
+    assert provider.slot_occurrences[7] == 7
+    assert provider.verification_occurrences[7] == 3
+    retry_payloads = [
+        slots[0]
+        for slots in provider.candidate_slot_payloads
+        if slots[0]["order"] == 7 and slots[0].get("retryTargetExpression")
+    ]
+    assert retry_payloads
+    assert all(slot["preserveTargetOnRetry"] is True for slot in retry_payloads)
 
 
 def test_origin_language_validation_is_per_question_not_combined():
@@ -492,7 +649,7 @@ async def test_usage_distinction_target_leak_is_rejected_deterministically_and_o
     assert len(response.questions) == 10
     assert provider.slot_occurrences[4] == 2
     assert all(provider.slot_occurrences[order] == 1 for order in range(1, 11) if order != 4)
-    assert provider.candidate_slot_calls[-1] == [4]
+    assert provider.candidate_slot_calls.count([4]) == 2
     assert all(
         (question.target_expression or "") not in question.prompt
         for question in response.questions
@@ -507,9 +664,10 @@ async def test_usage_distinction_nano_prescreen_is_soft_and_cannot_burn_candidat
     )
 
     assert len(response.questions) == 10
-    assert provider.calls[ReadingVocabularyGenerationService.PRESCREEN_TYPE_NAME] == 1
+    assert provider.calls[ReadingVocabularyGenerationService.PRESCREEN_TYPE_NAME] == 10
     assert all(provider.slot_occurrences[order] == 1 for order in range(1, 11))
-    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 1
+    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 10
+    assert all(len(payload["questions"]) == 1 for payload in provider.verification_payloads)
 
 
 @pytest.mark.asyncio
@@ -532,6 +690,47 @@ async def test_usage_distinction_prescreen_and_verifier_never_receive_hidden_tar
         for payload in provider.verification_payloads
         for question in payload["questions"]
     )
+    assert all(
+        question.get("usageIntent")
+        for payload in provider.prescreen_payloads
+        for question in payload["questions"]
+    )
+    assert all(
+        question.get("usageIntent")
+        for payload in provider.verification_payloads
+        for question in payload["questions"]
+    )
+
+
+def test_usage_distinction_requires_target_expression_to_be_the_correct_option():
+    service = ReadingVocabularyGenerationService(PipelineProvider())
+    question = {
+        "order": 1,
+        "questionType": "SINGLE_CHOICE",
+        "difficulty": "CURRENT",
+        "complexityBand": 3,
+        "passageId": None,
+        "passageText": None,
+        "prompt": "納期を早めたいので、予定を（　）必要があります。",
+        "options": [
+            {"key": "A", "text": "前倒しする"},
+            {"key": "B", "text": "延期する"},
+            {"key": "C", "text": "中止する"},
+            {"key": "D", "text": "保留する"},
+        ],
+        "correctAnswer": ["A"],
+        "skillTag": "CONTEXT_USAGE",
+        "evidenceText": None,
+        "explanationOrigin": "설명입니다.",
+        "explanationLearning": "納期を早める文脈なので「前倒しする」が自然です。",
+        "targetExpression": "延期する",
+        "canonicalKey": "postpone",
+        "reviewTarget": False,
+        "vocabularyCandidates": [],
+    }
+    parsed = PracticeGeneratedQuestion.model_validate(question)
+    with pytest.raises(ValueError, match="correct option must equal targetExpression"):
+        service._validate_usage_distinction_candidate(parsed)
 
 
 @pytest.mark.asyncio
@@ -544,7 +743,71 @@ async def test_usage_distinction_uses_single_slot_generation_and_extended_retry_
     assert len(response.questions) == 10
     assert provider.slot_occurrences[3] == 5
     assert all(len(batch) == 1 for batch in provider.candidate_slot_calls)
-    assert provider.candidate_slot_calls[-1] == [3]
+    assert provider.candidate_slot_calls.count([3]) == 5
+    assert provider.verification_occurrences[3] == 5
+
+
+@pytest.mark.asyncio
+async def test_usage_distinction_candidate_failures_do_not_consume_semantic_retry_budget():
+    provider = PipelineProvider(
+        candidate_reject_rounds_by_order={3: 4},
+        semantic_reject_rounds_by_order={3: 4},
+    )
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _vocab_request(mode="USAGE_DISTINCTION")
+    )
+
+    assert len(response.questions) == 10
+    assert provider.slot_occurrences[3] == 9
+    assert provider.verification_occurrences[3] == 5
+    assert provider.candidate_slot_calls.count([3]) == 9
+
+
+@pytest.mark.asyncio
+async def test_usage_distinction_normalizes_application_owned_metadata_without_retry():
+    reviews = [
+        {
+            "canonicalKey": "review-a",
+            "expression": "見直す",
+            "masteryScore": 42,
+            "wrongCount": 3,
+            "previousQuestionTypes": ["SINGLE_CHOICE"],
+        }
+    ]
+    provider = PipelineProvider(usage_metadata_drift_once={4})
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _vocab_request(
+            mode="USAGE_DISTINCTION",
+            review_targets=reviews,
+            review_question_count=1,
+        )
+    )
+
+    question = response.questions[3]
+    assert provider.slot_occurrences[4] == 1
+    assert question.skill_tag == "CONTEXT_USAGE"
+    assert question.review_target is False
+    assert question.correct_answer == ["A"]
+    assert question.canonical_key == question.target_expression.casefold()
+
+
+@pytest.mark.asyncio
+async def test_usage_distinction_semantic_retry_preserves_target_expression():
+    provider = PipelineProvider(semantic_ambiguous_once={2})
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _vocab_request(mode="USAGE_DISTINCTION")
+    )
+
+    order_two_payloads = [
+        slots[0]
+        for slots in provider.candidate_slot_payloads
+        if len(slots) == 1 and slots[0]["order"] == 2
+    ]
+    assert len(order_two_payloads) == 2
+    assert "retryTargetExpression" not in order_two_payloads[0]
+    assert order_two_payloads[1]["retryTargetExpression"] == response.questions[1].target_expression
+    assert order_two_payloads[1]["preserveTargetOnRetry"] is True
+    assert order_two_payloads[1]["retryFeedback"].startswith("REPAIR_AMBIGUITY")
 
 
 @pytest.mark.asyncio
@@ -577,7 +840,7 @@ def test_usage_distinction_rejects_meaning_relation_stem_even_without_exact_targ
         "evidenceText": None,
         "explanationOrigin": "설명입니다.",
         "explanationLearning": "文脈に合う表現です。",
-        "targetExpression": "予定を前倒しする",
+        "targetExpression": "前倒しする",
         "canonicalKey": "maedaoshi",
         "reviewTarget": False,
         "vocabularyCandidates": [],

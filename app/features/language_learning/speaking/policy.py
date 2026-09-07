@@ -13,13 +13,13 @@ from app.schemas.language_learning_speaking import (
     SpeakingMetricType,
 )
 
-SPEAKING_SCORING_POLICY_VERSION = "speaking-scoring-policy-v1"
-SPEAKING_EVALUATION_VERSION = "speaking-evaluation-v1"
-SPEAKING_EVALUATION_PROMPT_VERSION = "speaking-evaluation-prompt-v1"
-SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation-v3"
-SPEAKING_TTS_VERSION = "speaking-tts-v1"
-AUDIO_NORMALIZATION_VERSION = "speaking-audio-normalization-v1"
-STT_HINT_VERSION = "speaking-stt-hint-v1"
+SPEAKING_SCORING_POLICY_VERSION = "speaking-scoring-policy"
+SPEAKING_EVALUATION_VERSION = "speaking-evaluation"
+SPEAKING_EVALUATION_PROMPT_VERSION = "speaking-evaluation-prompt"
+SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation"
+SPEAKING_TTS_VERSION = "speaking-tts"
+AUDIO_NORMALIZATION_VERSION = "speaking-audio-normalization"
+STT_HINT_VERSION = "speaking-stt-hint"
 
 SPEAKING_METRIC_WEIGHTS: dict[SpeakingMetricType, float] = {
     SpeakingMetricType.GRAMMAR: 0.10,

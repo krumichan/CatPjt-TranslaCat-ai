@@ -54,7 +54,7 @@ class GeminiConfigManager:
                 in {
                     "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
                     "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION",
-                    "LANGUAGE_LEARNING_LEVEL_TEST_V2_GENERATION",
+                    "LANGUAGE_LEARNING_LEVEL_TEST_GENERATION",
                     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
                     "LANGUAGE_LEARNING_LISTENING_GENERATION",
                     "LANGUAGE_LEARNING_LISTENING_EXPLANATION",
@@ -68,7 +68,7 @@ class GeminiConfigManager:
                     )
                 )
             elif (
-                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_DESIGN"
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_DESIGN"
                 and schema is not None
             ):
                 self._config_cache[cache_key] = (
@@ -78,7 +78,7 @@ class GeminiConfigManager:
                     )
                 )
             elif (
-                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_REPAIR"
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_REPAIR"
                 and schema is not None
             ):
                 self._config_cache[cache_key] = (
@@ -88,7 +88,7 @@ class GeminiConfigManager:
                     )
                 )
             elif (
-                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION"
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION"
                 and schema is not None
             ):
                 self._config_cache[cache_key] = (
@@ -98,7 +98,7 @@ class GeminiConfigManager:
                     )
                 )
             elif (
-                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_V2_TASK_SUFFICIENCY_VERIFICATION"
+                type_name == "LANGUAGE_LEARNING_LEVEL_TEST_TASK_SUFFICIENCY_VERIFICATION"
                 and schema is not None
             ):
                 self._config_cache[cache_key] = (
@@ -114,7 +114,7 @@ class GeminiConfigManager:
                     "LANGUAGE_LEARNING_SPEAKING_EVALUATION",
                     "LANGUAGE_LEARNING_LISTENING_INTERPRETATION",
                     "LANGUAGE_LEARNING_LISTENING_SUMMARY_EVALUATION",
-                    "LANGUAGE_LEARNING_LEVEL_TEST_V2_SPEAKING_EVALUATION",
+                    "LANGUAGE_LEARNING_LEVEL_TEST_SPEAKING_EVALUATION",
                 }
                 and schema is not None
             ):

@@ -10,7 +10,7 @@ from app.schemas.language_learning_listening import (
 )
 
 LISTENING_GENERATION_SYSTEM_PROMPT = """
-You generate TranslaCat Phase 3 listening items in the requested learning language.
+You generate TranslaCat current listening items in the requested learning language.
 
 Rules:
 1. All items share the requested topic, but every sentence and situation must differ.
@@ -35,7 +35,7 @@ Rules:
    originLanguage and learningLanguage are the same.
 9. Avoid ambiguous omissions and references so the intended meaning converges.
 10. Do not reproduce recentSimilaritySummaries or content represented by recent hashes.
-    When contentDiversityPolicyVersion=language-learning-diversity-v1, also avoid all diversityContext
+    When contentDiversityPolicyVersion=language-learning-diversity, also avoid all diversityContext
     entries and return languageComplexityBand plus diversityMetadata for every item. The metadata must
     include scenarioCategory, communicativeIntent, taskArchetype, grammarFocusCodes, lexicalFocusCodes,
     semanticSummary, and requiresBackgroundKnowledge=false. Same topic does NOT mean same situation,

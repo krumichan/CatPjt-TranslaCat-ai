@@ -4,13 +4,13 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from app.schemas.language_learning_level_test import LevelTestDomain, LevelTestItemType
 
-LEVEL_TEST_ASSESSMENT_VERSION = "level-test-v2-multiskill"
-LEVEL_TEST_GENERATION_VERSION = "level-test-generation-v2"
-LEVEL_TEST_EVALUATION_VERSION = "level-test-evaluation-v2"
-LEVEL_TEST_SPEAKING_EVALUATION_VERSION = "level-test-speaking-eval-v2"
-LEVEL_TEST_SCORING_POLICY_VERSION = "level-test-scoring-v2"
-LEVEL_TEST_PROMPT_VERSION = "level-test-multiskill-prompt-v9"
-LEVEL_TEST_SPEAKING_PROMPT_VERSION = "level-test-speaking-eval-prompt-v2"
+LEVEL_TEST_ASSESSMENT_VERSION = "level-test-multiskill"
+LEVEL_TEST_GENERATION_VERSION = "level-test-generation"
+LEVEL_TEST_EVALUATION_VERSION = "level-test-evaluation"
+LEVEL_TEST_SPEAKING_EVALUATION_VERSION = "level-test-speaking-evaluation"
+LEVEL_TEST_SCORING_POLICY_VERSION = "level-test-scoring"
+LEVEL_TEST_PROMPT_VERSION = "level-test-multiskill-prompt"
+LEVEL_TEST_SPEAKING_PROMPT_VERSION = "level-test-speaking-evaluation-prompt"
 
 LEVEL_TEST_RECIPE: dict[int, tuple[LevelTestDomain, LevelTestItemType]] = {
     1: (LevelTestDomain.VOCABULARY, LevelTestItemType.VOCAB_CONTEXT_CHOICE),

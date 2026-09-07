@@ -21,8 +21,6 @@ from app.features.language_learning.listening.policy import (
     DIFFICULTY_DURATION_RANGES,
     LISTENING_GENERATION_PROMPT_VERSION,
     LISTENING_GENERATION_VERSION,
-    LISTENING_GENERATION_V35_PROMPT_VERSION,
-    LISTENING_GENERATION_V35_VERSION,
 )
 from app.features.language_learning.quality import (
     CONTENT_DIVERSITY_POLICY_VERSION,
@@ -113,25 +111,16 @@ class ListeningGenerationService:
             request.model_config_version,
         )
         self._validate_manual_retry(request.manual_retry_attempt)
-        phase35 = (
-            request.content_diversity_policy_version
-            == CONTENT_DIVERSITY_POLICY_VERSION
-        )
-        generation_version = (
-            LISTENING_GENERATION_V35_VERSION if phase35 else LISTENING_GENERATION_VERSION
-        )
         key = "|".join(
             [
                 request.idempotency_key,
-                generation_version,
                 request.policy_version,
                 request.model_config_version,
-                request.content_diversity_policy_version or "legacy",
             ]
         )
         response, cache_hit = await self.idempotency_store.execute(
             key,
-            lambda: self._generate_v35(request) if phase35 else self._generate_once(request),
+            lambda: self._generate_diverse(request),
         )
         logger.info(
             "Listening generation request completed. request_id=%s cache_hit=%s items=%d",
@@ -141,7 +130,7 @@ class ListeningGenerationService:
         )
         return response.model_copy(deep=True, update={"request_id": request.request_id})
 
-    async def _generate_v35(
+    async def _generate_diverse(
         self,
         request: ListeningSetGenerationRequest,
     ) -> ListeningSetGenerationResponse:
@@ -256,7 +245,7 @@ class ListeningGenerationService:
                     "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
                     False,
                 )
-            candidates, _ = self._salvage_phase35_candidates(
+            candidates, _ = self._salvage_candidates(
                 result.data,
                 request_id=request.request_id,
                 provider_attempt=provider_attempt + 1,
@@ -274,7 +263,7 @@ class ListeningGenerationService:
             validator = DiversityValidator(effective_context)
             for candidate in candidates:
                 all_candidates.append(candidate)
-                finalized = self._phase35_candidate(request, candidate)
+                finalized = self._finalize_candidate(request, candidate)
                 if finalized is None:
                     continue
                 assert candidate.diversity_metadata is not None
@@ -302,7 +291,7 @@ class ListeningGenerationService:
             fallback_used = True
             validator = DiversityValidator(effective_context, relaxed_history=True)
             for candidate in all_candidates:
-                finalized = self._phase35_candidate(request, candidate)
+                finalized = self._finalize_candidate(request, candidate)
                 if finalized is None or candidate.diversity_metadata is None:
                     continue
                 if any(item.content_hash == finalized.content_hash for item in accepted_items):
@@ -338,7 +327,7 @@ class ListeningGenerationService:
         ]
         return ListeningSetGenerationResponse(
             request_id=request.request_id,
-            generation_version=LISTENING_GENERATION_V35_VERSION,
+            generation_version=LISTENING_GENERATION_VERSION,
             policy_version=request.policy_version,
             model_config_version=request.model_config_version,
             items=finalized_items,
@@ -349,7 +338,7 @@ class ListeningGenerationService:
                     output_tokens=total_output_tokens,
                     provider=last_provider,
                     model=last_model,
-                    prompt_version=LISTENING_GENERATION_V35_PROMPT_VERSION,
+                    prompt_version=LISTENING_GENERATION_PROMPT_VERSION,
                 )
             ),
             content_diversity_policy_version=CONTENT_DIVERSITY_POLICY_VERSION,
@@ -367,7 +356,7 @@ class ListeningGenerationService:
         )
 
     @classmethod
-    def _salvage_phase35_candidates(
+    def _salvage_candidates(
         cls,
         data: dict,
         *,
@@ -377,7 +366,7 @@ class ListeningGenerationService:
         raw_items = data.get("items")
         if not isinstance(raw_items, list) or not raw_items:
             logger.warning(
-                "Phase 3.5 Listening candidate schema salvage. request_id=%s "
+                "Listening candidate schema salvage. request_id=%s "
                 "attempt=%d/3 validCandidates=0 rejectedCandidates=1 "
                 "reasons=%s",
                 request_id,
@@ -406,7 +395,7 @@ class ListeningGenerationService:
 
         if reasons:
             logger.info(
-                "Phase 3.5 Listening candidate schema salvage. request_id=%s "
+                "Listening candidate schema salvage. request_id=%s "
                 "attempt=%d/3 validCandidates=%d rejectedCandidates=%d reasons=%s",
                 request_id,
                 provider_attempt,
@@ -442,7 +431,7 @@ class ListeningGenerationService:
             reasons.append(reason)
         return reasons
 
-    def _phase35_candidate(
+    def _finalize_candidate(
         self,
         request: ListeningSetGenerationRequest,
         item,
@@ -506,244 +495,6 @@ class ListeningGenerationService:
             },
         )
 
-    async def _generate_once(
-        self,
-        request: ListeningSetGenerationRequest,
-    ) -> ListeningSetGenerationResponse:
-        prompt = build_generation_prompt(request)
-        schema = ListeningGenerationPayload.model_json_schema()
-        started = time.perf_counter()
-        provider_attempt = 0
-
-        async def operation():
-            nonlocal provider_attempt
-            provider_attempt += 1
-            attempt_started = time.perf_counter()
-            provider_data: object | None = None
-            logger.info(
-                "Listening generation provider call started. request_id=%s attempt=%d/%d "
-                "timeout_seconds=%s schema_top_level_keys=%s",
-                request.request_id,
-                provider_attempt,
-                self.automatic_retries + 1,
-                self.timeout_seconds,
-                sorted(schema.keys()),
-            )
-            try:
-                result = await asyncio.wait_for(
-                    self.provider.call_with_metadata(
-                        type_name=self.TYPE_NAME,
-                        data=prompt,
-                        schema=schema,
-                    ),
-                    timeout=self.timeout_seconds,
-                )
-                provider_data = result.data
-                provider_elapsed_ms = int(
-                    (time.perf_counter() - attempt_started) * 1000
-                )
-                logger.info(
-                    "Listening generation provider call completed. request_id=%s attempt=%d/%d "
-                    "latency_ms=%d provider=%s model=%s input_tokens=%d output_tokens=%d "
-                    "data_type=%s",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    provider_elapsed_ms,
-                    result.provider,
-                    result.model,
-                    result.input_tokens,
-                    result.output_tokens,
-                    type(result.data).__name__,
-                )
-                if not isinstance(result.data, dict):
-                    raise ValueError("Listening generation response must be an object")
-                payload = ListeningGenerationPayload.model_validate(result.data)
-                items = self._finalize_items(request, payload)
-                logger.info(
-                    "Listening generation response validated. request_id=%s attempt=%d/%d items=%d",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    len(items),
-                )
-                return result, items
-            except (TimeoutError, asyncio.TimeoutError) as exc:
-                logger.warning(
-                    "Listening generation provider timed out. request_id=%s attempt=%d/%d "
-                    "timeout_seconds=%s",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    self.timeout_seconds,
-                )
-                raise ListeningStageException(
-                    ListeningErrorCode.PROVIDER_TIMEOUT,
-                    ListeningStage.GENERATION,
-                    "Listening 문항 생성 Provider 응답 시간이 초과되었습니다.",
-                    True,
-                ) from exc
-            except ListeningStageException as exc:
-                logger.warning(
-                    "Listening generation stage validation failed. request_id=%s attempt=%d/%d "
-                    "code=%s stage=%s retryable=%s message=%s",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    exc.code.value,
-                    exc.stage.value,
-                    exc.retryable,
-                    exc.message,
-                )
-                raise
-            except ValidationError as exc:
-                logger.error(
-                    "Listening generation response schema validation failed. request_id=%s "
-                    "attempt=%d/%d validation_errors=%s provider_payload=%s",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    exc.errors(include_url=False, include_input=False),
-                    _provider_payload_preview(provider_data),
-                )
-                raise ListeningStageException(
-                    ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
-                    ListeningStage.GENERATION,
-                    "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
-                    False,
-                ) from exc
-            except ValueError as exc:
-                logger.error(
-                    "Listening generation response business validation failed. request_id=%s "
-                    "attempt=%d/%d error=%s provider_payload=%s",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    exc,
-                    _provider_payload_preview(provider_data),
-                )
-                raise ListeningStageException(
-                    ListeningErrorCode.INVALID_RESPONSE_SCHEMA,
-                    ListeningStage.GENERATION,
-                    "Listening 문항 생성 응답 Schema가 유효하지 않습니다.",
-                    False,
-                ) from exc
-            except Exception as exc:
-                mapped = map_provider_exception(
-                    exc,
-                    stage=ListeningStage.GENERATION,
-                    fallback_code=ListeningErrorCode.GENERATION_FAILED,
-                    fallback_message="Listening 문항 생성에 실패했습니다.",
-                )
-                logger.exception(
-                    "Listening generation provider call failed. request_id=%s attempt=%d/%d "
-                    "mapped_code=%s mapped_stage=%s retryable=%s",
-                    request.request_id,
-                    provider_attempt,
-                    self.automatic_retries + 1,
-                    mapped.code.value,
-                    mapped.stage.value,
-                    mapped.retryable,
-                )
-                raise mapped from exc
-
-        result, items = await run_with_stage_retry(
-            operation,
-            max_retries=self.automatic_retries,
-            context=f"generation request_id={request.request_id}",
-        )
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return ListeningSetGenerationResponse(
-            request_id=request.request_id,
-            generation_version=LISTENING_GENERATION_VERSION,
-            policy_version=request.policy_version,
-            model_config_version=request.model_config_version,
-            items=items,
-            usage=ListeningUsage(
-                generation=StageUsage(
-                    latency_ms=elapsed_ms,
-                    input_tokens=result.input_tokens,
-                    output_tokens=result.output_tokens,
-                    provider=result.provider,
-                    model=result.model,
-                    prompt_version=LISTENING_GENERATION_PROMPT_VERSION,
-                )
-            ),
-        )
-
-    def _finalize_items(
-        self,
-        request: ListeningSetGenerationRequest,
-        payload: ListeningGenerationPayload,
-    ) -> list[ListeningItem]:
-        expected_count = request.set_context.item_count
-        if len(payload.items) != expected_count:
-            raise ValueError("생성 Item 수가 itemCount와 일치하지 않습니다.")
-        indexes = [item.item_index for item in payload.items]
-        if sorted(indexes) != list(range(1, expected_count + 1)):
-            raise ValueError("itemIndex는 1부터 itemCount까지 중복 없이 필요합니다.")
-
-        minimum, maximum = self._duration_range(request)
-        recent_hashes = set(request.constraints.recent_content_hashes)
-        recent_keys = [
-            similarity_key(summary, request.user_context.learning_language)
-            for summary in request.constraints.recent_similarity_summaries
-        ]
-        seen_keys: list[str] = []
-        finalized: list[ListeningItem] = []
-        for item in sorted(payload.items, key=lambda candidate: candidate.item_index):
-            if not item.safety.passed:
-                raise ListeningStageException(
-                    ListeningErrorCode.UNSAFE_CONTENT,
-                    ListeningStage.GENERATION,
-                    "안전 정책을 통과하지 못한 Listening 문항이 생성되었습니다.",
-                    True,
-                )
-            if not minimum <= item.estimated_audio_seconds <= maximum:
-                raise ValueError(
-                    f"estimatedAudioSeconds는 {minimum:g}~{maximum:g}초여야 합니다."
-                )
-            if not self._valid_mode_payload(request, item):
-                raise ValueError("learningMode에 맞지 않는 Listening 문항이 생성되었습니다.")
-            normalized = normalize_text(
-                item.source_text,
-                request.user_context.learning_language,
-            )
-            content_hash = hashlib.sha256(normalized.text.encode("utf-8")).hexdigest()
-            key = similarity_key(
-                item.source_text, request.user_context.learning_language
-            )
-            if content_hash in recent_hashes or self._is_similar(
-                key, recent_keys + seen_keys
-            ):
-                raise ListeningStageException(
-                    ListeningErrorCode.DUPLICATE_CONTENT,
-                    ListeningStage.GENERATION,
-                    "최근 또는 현재 Set과 중복되는 Listening 문항이 생성되었습니다.",
-                    True,
-                )
-            seen_keys.append(key)
-            finalized.append(
-                ListeningItem(
-                    item_index=item.item_index,
-                    source_text=item.source_text,
-                    normalized_source_text=normalized.text,
-                    reference_meanings=item.reference_meanings,
-                    key_meaning_units=item.key_meaning_units,
-                    target_keywords=item.target_keywords,
-                    estimated_audio_seconds=item.estimated_audio_seconds,
-                    content_hash=content_hash,
-                    similarity_key=hashlib.sha256(key.encode("utf-8")).hexdigest(),
-                    safety=item.safety,
-                    question=item.question,
-                    options=item.options,
-                    correct_option_key=item.correct_option_key,
-                    comprehension_focus=item.comprehension_focus,
-                    summary_key_points=item.summary_key_points,
-                )
-            )
-        return finalized
-
     @staticmethod
     def _valid_mode_payload(request: ListeningSetGenerationRequest, item) -> bool:
         mode = request.set_context.learning_mode.value
@@ -795,16 +546,6 @@ class ListeningGenerationService:
                 False,
             )
         return minimum, maximum
-
-    @staticmethod
-    def _is_similar(candidate: str, existing: list[str]) -> bool:
-        if not candidate:
-            return True
-        return any(
-            SequenceMatcher(a=candidate, b=other).ratio() >= 0.90
-            for other in existing
-            if other
-        )
 
     @staticmethod
     def _validate_manual_retry(attempt: int) -> None:

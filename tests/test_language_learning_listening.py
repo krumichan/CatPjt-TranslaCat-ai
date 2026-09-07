@@ -202,7 +202,7 @@ def stt_result(
         segments=[SttProviderSegment(0.0, 2.0, text, logprob)],
         provider="fake-stt",
         model="fake-stt-model",
-        model_version="fake-stt-v1",
+        model_version="fake-stt",
     )
 
 
@@ -257,8 +257,10 @@ def generation_request(**overrides):
             "recentContentHashes": [],
             "recentSimilaritySummaries": [],
         },
-        "policyVersion": "listening-v1",
-        "modelConfigVersion": "model-v1",
+        "policyVersion": "listening",
+        "modelConfigVersion": "model",
+        "languageComplexity": {"baseComplexityBand": 3},
+        "contentDiversityPolicyVersion": "language-learning-diversity",
     }
     data.update(overrides)
     return ListeningSetGenerationRequest.model_validate(data)
@@ -278,6 +280,16 @@ def generation_payload(source_suffix=""):
                 "targetKeywords": ["京都", "寺"],
                 "estimatedAudioSeconds": 9.6,
                 "safety": {"passed": True, "categories": []},
+                "languageComplexityBand": 3,
+                "diversityMetadata": {
+                    "scenarioCategory": "TRAVEL",
+                    "communicativeIntent": "DESCRIBE",
+                    "taskArchetype": "TRAVEL_PLAN",
+                    "grammarFocusCodes": ["DESIRE"],
+                    "lexicalFocusCodes": ["TRAVEL"],
+                    "semanticSummary": "교토의 조용한 절을 방문하고 싶다는 여행 계획",
+                    "requiresBackgroundKnowledge": False,
+                },
             },
             {
                 "itemIndex": 2,
@@ -290,6 +302,16 @@ def generation_payload(source_suffix=""):
                 "targetKeywords": ["旅行", "予約"],
                 "estimatedAudioSeconds": 8.5,
                 "safety": {"passed": True, "categories": []},
+                "languageComplexityBand": 3,
+                "diversityMetadata": {
+                    "scenarioCategory": "TRAVEL",
+                    "communicativeIntent": "REPORT",
+                    "taskArchetype": "RESERVATION_STATUS",
+                    "grammarFocusCodes": ["PREPARATION"],
+                    "lexicalFocusCodes": ["RESERVATION"],
+                    "semanticSummary": "여행 전에 호텔 예약을 완료했다는 보고",
+                    "requiresBackgroundKnowledge": False,
+                },
             },
         ]
     }
@@ -304,8 +326,8 @@ def evaluation_base(purpose="OFFICIAL", assistance=None, answer_revealed=False):
         "evaluationPurpose": purpose,
         "answerRevealed": answer_revealed,
         "assistanceUsage": assistance or [],
-        "policyVersion": "listening-profile-v1",
-        "modelConfigVersion": "model-v1",
+        "policyVersion": "listening-profile",
+        "modelConfigVersion": "listening-model-config",
     }
 
 
@@ -471,13 +493,13 @@ def selected_task(response, task_type):
 
 
 class ListeningGenerationTest(unittest.TestCase):
-    def test_generation_returns_versioned_hashes_and_uses_profile_keyword_context(self):
+    def test_generation_returns_hashes_and_uses_profile_keyword_context(self):
         provider = FakeStructuredProvider([generation_payload()])
         service = ListeningGenerationService(provider, automatic_retries=0)
         response = asyncio.run(service.generate(generation_request()))
 
         self.assertEqual(2, len(response.items))
-        self.assertEqual("listening-generation-v1", response.generation_version)
+        self.assertEqual("listening-generation", response.generation_version)
         self.assertEqual(64, len(response.items[0].content_hash))
         self.assertEqual(64, len(response.items[0].similarity_key))
         self.assertEqual(2, len(response.items[0].reference_meanings))
@@ -522,7 +544,7 @@ class ListeningGenerationTest(unittest.TestCase):
         service = ListeningGenerationService(FakeStructuredProvider([generation_payload()]), automatic_retries=0)
         with self.assertRaises(ListeningStageException) as context:
             asyncio.run(service.generate(ListeningSetGenerationRequest.model_validate(request_data)))
-        self.assertEqual(ListeningErrorCode.INVALID_RESPONSE_SCHEMA, context.exception.code)
+        self.assertEqual(ListeningErrorCode.GENERATION_FAILED, context.exception.code)
 
     def test_generation_is_idempotent(self):
         provider = FakeStructuredProvider([generation_payload()])
@@ -552,7 +574,7 @@ class ListeningGenerationTest(unittest.TestCase):
         )
         with self.assertRaises(ListeningStageException) as context:
             asyncio.run(service.generate(request))
-        self.assertEqual(ListeningErrorCode.DUPLICATE_CONTENT, context.exception.code)
+        self.assertEqual(ListeningErrorCode.GENERATION_FAILED, context.exception.code)
 
     def test_difficulty_duration_is_enforced(self):
         payload = generation_payload()
@@ -564,7 +586,7 @@ class ListeningGenerationTest(unittest.TestCase):
         with self.assertRaises(ListeningStageException) as context:
             asyncio.run(service.generate(generation_request()))
         self.assertEqual(
-            ListeningErrorCode.INVALID_RESPONSE_SCHEMA, context.exception.code
+            ListeningErrorCode.GENERATION_FAILED, context.exception.code
         )
 
     def test_provider_429_is_retried_within_two_retry_limit(self):
@@ -588,12 +610,12 @@ class ListeningTtsTest(unittest.TestCase):
             "itemId": 301,
             "sourceText": source,
             "contentHash": hashlib.sha256(normalized.text.encode()).hexdigest(),
-            "generationVersion": "listening-generation-v1",
+            "generationVersion": "listening-generation",
             "learningLanguage": "ja",
-            "voice": {"locale": "ja-JP", "voiceKey": "standard-1", "version": "v1"},
+            "voice": {"locale": "ja-JP", "voiceKey": "standard-1", "version": "current"},
             "playbackSpeed": "SLOW",
-            "policyVersion": "listening-v1",
-            "modelConfigVersion": "model-v1",
+            "policyVersion": "listening",
+            "modelConfigVersion": "listening-model-config",
         }
         data.update(overrides)
         return ListeningTtsRequest.model_validate(data)

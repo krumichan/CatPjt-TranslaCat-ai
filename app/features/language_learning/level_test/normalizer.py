@@ -729,10 +729,10 @@ class LevelTestGenerationNormalizer:
     ) -> None:
         """Canonicalize Reading passage/question into structured reference fields.
 
-        The model is asked to return passage and question separately.  The server then
-        assembles learner-visible promptText deterministically.  For legacy/provider
-        outputs that still return only promptText, a blank-line split may recover the
-        same text without inventing any semantic content.
+        The model is asked to return passage and question separately. The server then
+        assembles learner-visible promptText deterministically. If a provider returns
+        only promptText, a conservative split may recover the same text without
+        inventing any semantic content.
         """
 
         item_type = cls._value(candidate, "itemType", "item_type")
@@ -758,7 +758,7 @@ class LevelTestGenerationNormalizer:
                 recovered_passage = "\n\n".join(blocks[:-1])
                 recovered_question = blocks[-1]
             else:
-                recovered_passage, recovered_question = cls._split_legacy_reading_prompt(str(prompt))
+                recovered_passage, recovered_question = cls._split_reading_prompt_fallback(str(prompt))
             if not cls._has_text(passage) and cls._has_text(recovered_passage):
                 payload["readingPassage"] = recovered_passage
                 passage = payload["readingPassage"]
@@ -802,12 +802,12 @@ class LevelTestGenerationNormalizer:
 
 
     @staticmethod
-    def _split_legacy_reading_prompt(value: str) -> tuple[str | None, str | None]:
-        """Recover a final learner-visible question from legacy one-block Reading text.
+    def _split_reading_prompt_fallback(value: str) -> tuple[str | None, str | None]:
+        """Recover a final learner-visible question from one-block Reading text.
 
         This only splits text that already contains an explicit interrogative ending; it
-        never invents or paraphrases a question.  New generation uses structured fields
-        and should not depend on this compatibility path.
+        never invents or paraphrases a question. Structured fields remain the preferred
+        provider contract.
         """
 
         text = value.strip()
@@ -830,11 +830,11 @@ class LevelTestGenerationNormalizer:
         candidate: dict[str, Any],
         counts: dict[str, int],
     ) -> None:
-        """Canonicalize a legacy Markdown-bold discourse target into structured metadata.
+        """Canonicalize Markdown-bold discourse emphasis into structured metadata.
 
-        Reading emphasis is presentation-critical evidence.  We keep promptText plain and
+        Reading emphasis is presentation-critical evidence. We keep promptText plain and
         expose the exact target separately so the client can underline/highlight it
-        deterministically.  This repair only extracts text already present in the prompt.
+        deterministically. This normalization only extracts text already present.
         """
 
         item_type = cls._value(candidate, "itemType", "item_type")
@@ -1130,11 +1130,11 @@ class LevelTestGenerationNormalizer:
         candidate: dict[str, Any],
         counts: dict[str, int],
     ) -> None:
-        """Migrate legacy <u> target markup into referencePayload.emphasisText.
+        """Normalize <u> target markup into referencePayload.emphasisText.
 
         The target text already exists in provider output, so extracting it is a
-        semantics-preserving compatibility repair. New v9 generation is expected to
-        return plain promptText plus structured emphasisText directly.
+        semantics-preserving formatting normalization. Plain promptText plus structured
+        emphasisText remains the preferred provider contract.
         """
 
         if cls._value(candidate, "itemType", "item_type") != "VOCAB_PARAPHRASE_CHOICE":
@@ -1175,10 +1175,10 @@ class LevelTestGenerationNormalizer:
 
     @classmethod
     def _sanitize_prompt_markup(cls, value: str, *, item_type: object = None) -> str:
-        """Return plain learner text only; emphasis is structured metadata in v9.
+        """Return plain learner text; emphasis is represented as structured metadata.
 
         ``item_type`` is retained for call-site compatibility. No Level Test prompt
-        is allowed to rely on raw HTML/XML presentation markup anymore.
+        is allowed to rely on raw HTML/XML presentation markup.
         """
 
         del item_type

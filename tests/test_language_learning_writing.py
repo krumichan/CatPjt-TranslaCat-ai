@@ -84,6 +84,8 @@ def build_daily_request(**overrides) -> DailyWritingGenerationRequest:
         },
         "generationDate": "2026-08-12",
         "snapshotId": "daily-set-snapshot-1",
+        "languageComplexity": {"baseComplexityBand": 3},
+        "contentDiversityPolicyVersion": "language-learning-diversity",
     }
     data.update(overrides)
     return DailyWritingGenerationRequest.model_validate(data)
@@ -99,6 +101,8 @@ def daily_result():
                 "keywords": ["vocab-deploy"],
                 "focusMetrics": ["GRAMMAR"],
                 "focusReason": "과거형 표현 복습",
+                "languageComplexityBand": 2,
+                "diversityMetadata": {"scenarioCategory":"WORK","communicativeIntent":"DESCRIBE","taskArchetype":"DEPLOYMENT_REVIEW","grammarFocusCodes":["PAST"],"lexicalFocusCodes":["DEPLOY"],"semanticSummary":"배포 기능 설명","requiresBackgroundKnowledge":False},
             },
             {
                 "order": 2,
@@ -107,6 +111,8 @@ def daily_result():
                 "keywords": ["topic-it"],
                 "focusMetrics": ["MEANING", "NATURALNESS"],
                 "focusReason": "업무 상황에서 자연스러운 보고 표현",
+                "languageComplexityBand": 3,
+                "diversityMetadata": {"scenarioCategory":"WORK","communicativeIntent":"REPORT","taskArchetype":"STATUS_REPORT","grammarFocusCodes":["REPORTING"],"lexicalFocusCodes":["PROJECT"],"semanticSummary":"프로젝트 진행 상황 보고","requiresBackgroundKnowledge":False},
             },
             {
                 "order": 3,
@@ -115,6 +121,8 @@ def daily_result():
                 "keywords": ["topic-it"],
                 "focusMetrics": ["VOCABULARY"],
                 "focusReason": "문제 해결 관련 어휘 강화",
+                "languageComplexityBand": 3,
+                "diversityMetadata": {"scenarioCategory":"WORK","communicativeIntent":"EXPLAIN_REASON","taskArchetype":"PROBLEM_EXPLANATION","grammarFocusCodes":["CAUSE"],"lexicalFocusCodes":["INCIDENT"],"semanticSummary":"문제 원인과 해결 방법 설명","requiresBackgroundKnowledge":False},
             },
             {
                 "order": 4,
@@ -123,6 +131,8 @@ def daily_result():
                 "keywords": ["vocab-deploy"],
                 "focusMetrics": ["NATURALNESS", "EXPRESSION"],
                 "focusReason": "정중하고 자연스러운 안내 표현",
+                "languageComplexityBand": 3,
+                "diversityMetadata": {"scenarioCategory":"SERVICE","communicativeIntent":"GIVE_INSTRUCTION","taskArchetype":"SCHEDULE_NOTICE","grammarFocusCodes":["POLITE_NOTICE"],"lexicalFocusCodes":["SCHEDULE"],"semanticSummary":"배포 일정 고객 안내","requiresBackgroundKnowledge":False},
             },
             {
                 "order": 5,
@@ -131,6 +141,8 @@ def daily_result():
                 "keywords": ["topic-it", "vocab-deploy"],
                 "focusMetrics": ["EXPRESSION", "MEANING"],
                 "focusReason": "복합적인 이유와 대책을 논리적으로 표현",
+                "languageComplexityBand": 4,
+                "diversityMetadata": {"scenarioCategory":"WORK","communicativeIntent":"EXPLAIN_REASON","taskArchetype":"DELAY_EXPLANATION","grammarFocusCodes":["CAUSE_AND_PREVENTION"],"lexicalFocusCodes":["DEPLOY"],"semanticSummary":"배포 지연 이유와 재발 방지책 설명","requiresBackgroundKnowledge":False},
             },
         ]
     }
@@ -271,7 +283,7 @@ class LanguageLearningPromptTest(unittest.TestCase):
 
 
 class ScoringPolicyTest(unittest.TestCase):
-    def test_weighted_score_v1(self):
+    def test_weighted_score(self):
         self.assertEqual(
             calculate_overall_score(
                 meaning=90,
@@ -316,7 +328,7 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
         response = await service.generate_daily(build_daily_request())
 
         self.assertEqual(len(response.items), 5)
-        self.assertEqual(response.prompt_version, "daily-writing-generation-modes-v1")
+        self.assertEqual(response.prompt_version, "writing-generation-modes-diversity")
         self.assertEqual(
             provider.calls[0]["type_name"],
             "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
@@ -335,7 +347,10 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
         response = await service.generate_daily(build_daily_request())
 
         self.assertEqual(len(provider.calls), 2)
-        self.assertEqual(response.items[0].difficulty.value, "REVIEW")
+        difficulties = [item.difficulty.value for item in response.items]
+        self.assertEqual(1, difficulties.count("REVIEW"))
+        self.assertEqual(3, difficulties.count("NORMAL"))
+        self.assertEqual(1, difficulties.count("CHALLENGE"))
 
     async def test_evaluation_computes_overall_and_versions(self):
         provider = FakeProvider(results=[evaluation_result()])
@@ -349,14 +364,14 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.scores.overall, 75)
         self.assertEqual(response.scores.expression, 50)
-        self.assertEqual(response.evaluation_rubric_version, "writing-evaluation-rubric-v1")
-        self.assertEqual(response.scoring_policy_version, "writing-scoring-policy-v1")
+        self.assertEqual(response.evaluation_rubric_version, "writing-evaluation-rubric")
+        self.assertEqual(response.scoring_policy_version, "writing-scoring-policy")
         self.assertEqual(len(response.recommended_answers), 2)
 
     async def test_generation_retries_three_times_then_succeeds(self):
         provider = FakeProvider(
             results=[daily_result()],
-            errors=[RuntimeError("1"), RuntimeError("2"), RuntimeError("3"), None],
+            errors=[ValueError("1"), ValueError("2"), None],
         )
         service = LanguageLearningWritingService(
             provider=provider,
@@ -366,7 +381,7 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
 
         response = await service.generate_daily(build_daily_request())
 
-        self.assertEqual(len(provider.calls), 4)
+        self.assertEqual(len(provider.calls), 3)
         self.assertEqual(len(response.items), 5)
 
     async def test_evaluation_retries_once_then_fails(self):
@@ -428,7 +443,7 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.question_number, 1)
         self.assertEqual(response.difficulty.value, "EASY")
-        self.assertEqual(response.prompt_version, "writing-level-test-question-v1")
+        self.assertEqual(response.prompt_version, "writing-level-test-question")
 
 
 if __name__ == "__main__":

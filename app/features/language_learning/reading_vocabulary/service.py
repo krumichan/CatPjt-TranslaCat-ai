@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,7 +36,12 @@ from app.schemas.language_learning_practice import (
 logger = logging.getLogger(__name__)
 
 _MAX_CANDIDATE_ATTEMPTS_PER_SLOT = 3
-_MAX_USAGE_DISTINCTION_ATTEMPTS_PER_SLOT = 5
+_MAX_READING_GENERATION_ATTEMPTS_PER_SLOT = 8
+_MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT = 3
+_MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT = 10
+_MAX_USAGE_DISTINCTION_SEMANTIC_ATTEMPTS_PER_SLOT = 5
+_MAX_COMPOSITION_GENERATION_ATTEMPTS_PER_SLOT = 8
+_MAX_COMPOSITION_SEMANTIC_ATTEMPTS_PER_SLOT = 3
 _MAX_PASSAGE_ATTEMPTS = 3
 _MAX_ORIGIN_EXPLANATION_ATTEMPTS = 2
 _CANDIDATE_BATCH_SIZE = 2
@@ -55,6 +61,13 @@ _ASCII_VOCABULARY_ALLOWLIST = {
     "RPA", "SRE", "TypeScript",
 }
 _ASCII_ACRONYM_RE = re.compile(r"^[A-Z0-9][A-Z0-9+./#_-]{1,11}$")
+
+_USAGE_INTENT_BY_SKILL = {
+    VocabularySkill.DISTINCTION.value: "CONTEXTUAL_NEAR_EXPRESSION_CHOICE",
+    VocabularySkill.COLLOCATION.value: "COLLOCATION_CHOICE",
+    VocabularySkill.REGISTER.value: "REGISTER_CHOICE",
+    VocabularySkill.CONTEXT_USAGE.value: "CONTEXTUAL_USAGE_CHOICE",
+}
 
 _OPTION_SCHEMA = {
     "type": "OBJECT",
@@ -198,10 +211,10 @@ class _PracticeVerificationPayload(BaseModel):
 
 class _UsagePrescreenVerdict(BaseModel):
     order: int
-    modeFit: bool
-    answerLeakage: bool
-    contextDependent: bool
-    reason: str
+    modeFit: bool = True
+    answerLeakage: bool = False
+    contextDependent: bool = True
+    reason: str = ""
 
 
 class _UsagePrescreenPayload(BaseModel):
@@ -504,12 +517,7 @@ class ReadingVocabularyGenerationService:
                         item.value for item in (review.previous_question_types if review else [])
                     ),
                     usage_intent=(
-                        {
-                            VocabularySkill.DISTINCTION.value: "CONTEXTUAL_NEAR_EXPRESSION_CHOICE",
-                            VocabularySkill.COLLOCATION.value: "COLLOCATION_CHOICE",
-                            VocabularySkill.REGISTER.value: "REGISTER_CHOICE",
-                            VocabularySkill.CONTEXT_USAGE.value: "CONTEXTUAL_USAGE_CHOICE",
-                        }.get(skill_cycle[(index - 1) % len(skill_cycle)])
+                        self._usage_intent_for_skill(skill_cycle[(index - 1) % len(skill_cycle)])
                         if request.mode == VocabularyMode.USAGE_DISTINCTION.value
                         else None
                     ),
@@ -562,6 +570,15 @@ class ReadingVocabularyGenerationService:
         request: PracticeGenerationRequest,
         slots: list[_QuestionSlot],
     ) -> list[PracticeGeneratedQuestion]:
+        if request.domain == PracticeDomain.READING:
+            return await self._generate_verified_reading_questions(request, slots)
+
+        if request.domain == PracticeDomain.VOCABULARY:
+            if request.mode == VocabularyMode.USAGE_DISTINCTION.value:
+                return await self._generate_verified_usage_distinction_questions(request, slots)
+            if request.mode == VocabularyMode.COMPOSITION.value:
+                return await self._generate_verified_composition_questions(request, slots)
+
         slot_by_order = {slot.order: slot for slot in slots}
         attempts = {slot.order: 0 for slot in slots}
         accepted: dict[int, PracticeGeneratedQuestion] = {}
@@ -664,13 +681,305 @@ class ReadingVocabularyGenerationService:
 
         return [accepted[order] for order in sorted(accepted)]
 
+    async def _generate_verified_reading_questions(
+        self,
+        request: PracticeGenerationRequest,
+        slots: list[_QuestionSlot],
+    ) -> list[PracticeGeneratedQuestion]:
+        """Generate Reading with independent structural and semantic retry budgets.
+
+        Reading candidate generation can fail for deterministic/schema/language reasons while an
+        otherwise-good question can fail Mini only for semantic quality. Those are different
+        failure classes and must not consume the same scarce retry counter. Keep successful slots,
+        regenerate only failed slots, and preserve the existing small generation batches.
+        """
+        slot_by_order = {slot.order: slot for slot in slots}
+        generation_attempts = {slot.order: 0 for slot in slots}
+        semantic_attempts = {slot.order: 0 for slot in slots}
+        accepted: dict[int, PracticeGeneratedQuestion] = {}
+        semantically_verified: set[int] = set()
+        retry_feedback: dict[int, str] = {}
+
+        while len(semantically_verified) < len(slots):
+            pending_generation = [
+                order
+                for order in sorted(slot_by_order)
+                if order not in accepted
+                and order not in semantically_verified
+                and generation_attempts[order] < _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT
+                and semantic_attempts[order] < _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT
+            ]
+            for start in range(0, len(pending_generation), _CANDIDATE_BATCH_SIZE):
+                batch_orders = pending_generation[start : start + _CANDIDATE_BATCH_SIZE]
+                batch_slots = [slot_by_order[order] for order in batch_orders]
+                for order in batch_orders:
+                    generation_attempts[order] += 1
+                candidate_failures = await self._generate_candidate_batch(
+                    request,
+                    batch_slots,
+                    accepted,
+                    retry_feedback=(retry_feedback or None),
+                )
+                for order in batch_orders:
+                    if order in accepted:
+                        retry_feedback.pop(order, None)
+                        continue
+                    reason = candidate_failures.get(
+                        order, "candidate generation did not yield an accepted item"
+                    )
+                    retry_feedback[order] = self._reading_retry_feedback(reason)
+
+            generation_exhausted = [
+                order
+                for order in sorted(slot_by_order)
+                if order not in accepted
+                and order not in semantically_verified
+                and generation_attempts[order] >= _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT
+            ]
+            if generation_exhausted:
+                raise ValueError(
+                    "reading candidate generation exhausted orders="
+                    f"{generation_exhausted}"
+                )
+
+            unverified = [
+                accepted[order]
+                for order in sorted(accepted)
+                if order not in semantically_verified
+            ]
+            if not unverified:
+                continue
+
+            for question in unverified:
+                semantic_attempts[question.order] += 1
+            semantic_failures = await self._semantic_failures(request, unverified)
+
+            semantic_exhausted: list[int] = []
+            for question in unverified:
+                failure = semantic_failures.get(question.order)
+                if failure is None:
+                    semantically_verified.add(question.order)
+                    retry_feedback.pop(question.order, None)
+                    continue
+
+                logger.warning(
+                    "Reading/Vocabulary semantic candidate rejected. request_id=%s order=%d "
+                    "generation_attempt=%d/%d semantic_attempt=%d/%d reason=%s",
+                    request.request_id,
+                    question.order,
+                    generation_attempts[question.order],
+                    _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT,
+                    semantic_attempts[question.order],
+                    _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT,
+                    failure[:300],
+                )
+                accepted.pop(question.order, None)
+                retry_feedback[question.order] = self._reading_retry_feedback(failure)
+                if semantic_attempts[question.order] >= _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT:
+                    semantic_exhausted.append(question.order)
+
+            if semantic_exhausted:
+                raise ValueError(
+                    "reading semantic verification exhausted orders="
+                    f"{sorted(semantic_exhausted)}"
+                )
+
+        return [accepted[order] for order in sorted(accepted)]
+
+    async def _generate_verified_usage_distinction_questions(
+        self,
+        request: PracticeGenerationRequest,
+        slots: list[_QuestionSlot],
+    ) -> list[PracticeGeneratedQuestion]:
+        """Run the strict usage pipeline end-to-end one slot at a time.
+
+        Generation uses one-item-per-Luna-call and previously accumulated all ten
+        candidates before asking Mini to judge them together. In production that caused
+        synchronized batch rejections and made retry feedback much less targeted. Keep
+        already-approved slots, and finish deterministic -> Nano -> Mini for one slot
+        before moving to the next.
+        """
+        accepted: dict[int, PracticeGeneratedQuestion] = {}
+
+        for slot in slots:
+            retry_feedback: str | None = None
+            retry_target_expression: str | None = None
+            generation_attempts = 0
+            semantic_attempts = 0
+            last_stage = "candidate"
+
+            while (
+                generation_attempts < _MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT
+                and semantic_attempts < _MAX_USAGE_DISTINCTION_SEMANTIC_ATTEMPTS_PER_SLOT
+            ):
+                generation_attempts += 1
+                candidate_failures = await self._generate_candidate_batch(
+                    request,
+                    [slot],
+                    accepted,
+                    retry_feedback=(
+                        {slot.order: retry_feedback} if retry_feedback else None
+                    ),
+                    retry_target_expressions=(
+                        {slot.order: retry_target_expression}
+                        if retry_target_expression
+                        else None
+                    ),
+                )
+                question = accepted.get(slot.order)
+                if question is None:
+                    retry_feedback = candidate_failures.get(
+                        slot.order, "candidate generation did not yield an accepted item"
+                    )
+                    last_stage = "candidate"
+                    continue
+
+                prescreen_flags = await self._usage_prescreen_failures(request, [question])
+                prescreen_failure = prescreen_flags.get(slot.order)
+                if prescreen_failure is not None:
+                    logger.warning(
+                        "Reading/Vocabulary Nano prescreen flagged candidate; deferring to Mini. "
+                        "request_id=%s order=%d generation_attempt=%d/%d "
+                        "semantic_attempt=%d/%d reason=%s",
+                        request.request_id,
+                        slot.order,
+                        generation_attempts,
+                        _MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT,
+                        semantic_attempts + 1,
+                        _MAX_USAGE_DISTINCTION_SEMANTIC_ATTEMPTS_PER_SLOT,
+                        prescreen_failure[:300],
+                    )
+
+                semantic_attempts += 1
+                semantic_failures = await self._semantic_failures(request, [question])
+                semantic_failure = semantic_failures.get(slot.order)
+                if semantic_failure is None:
+                    retry_feedback = None
+                    retry_target_expression = None
+                    break
+
+                logger.warning(
+                    "Reading/Vocabulary semantic candidate rejected. request_id=%s order=%d "
+                    "generation_attempt=%d/%d semantic_attempt=%d/%d reason=%s",
+                    request.request_id,
+                    slot.order,
+                    generation_attempts,
+                    _MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT,
+                    semantic_attempts,
+                    _MAX_USAGE_DISTINCTION_SEMANTIC_ATTEMPTS_PER_SLOT,
+                    semantic_failure[:300],
+                )
+                accepted.pop(slot.order, None)
+                retry_target_expression = question.target_expression
+                retry_feedback = self._usage_retry_feedback(semantic_failure)
+                last_stage = "semantic"
+
+            if slot.order not in accepted:
+                raise ValueError(
+                    f"{last_stage} verification exhausted orders={[slot.order]} "
+                    f"generationAttempts={generation_attempts}/"
+                    f"{_MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT} "
+                    f"semanticAttempts={semantic_attempts}/"
+                    f"{_MAX_USAGE_DISTINCTION_SEMANTIC_ATTEMPTS_PER_SLOT}"
+                )
+
+        return [accepted[order] for order in sorted(accepted)]
+
+    async def _generate_verified_composition_questions(
+        self,
+        request: PracticeGenerationRequest,
+        slots: list[_QuestionSlot],
+    ) -> list[PracticeGeneratedQuestion]:
+        """Generate COMPOSITION slots independently with separate structural/semantic budgets.
+
+        COMPOSITION has strict application-owned ORDERING shapes. A malformed Luna payload must
+        not consume the same three-attempt budget used for semantic quality, otherwise one slot can
+        exhaust before Mini ever gets a fair chance to judge it. ORDERING items need structural
+        validation only; SINGLE_CHOICE items still pass the independent Mini verifier.
+        """
+        accepted: dict[int, PracticeGeneratedQuestion] = {}
+
+        for slot in slots:
+            retry_feedback: str | None = None
+            retry_target_expression: str | None = None
+            generation_attempts = 0
+            semantic_attempts = 0
+            last_stage = "candidate"
+
+            while (
+                generation_attempts < _MAX_COMPOSITION_GENERATION_ATTEMPTS_PER_SLOT
+                and semantic_attempts < _MAX_COMPOSITION_SEMANTIC_ATTEMPTS_PER_SLOT
+            ):
+                generation_attempts += 1
+                candidate_failures = await self._generate_candidate_batch(
+                    request,
+                    [slot],
+                    accepted,
+                    retry_feedback=({slot.order: retry_feedback} if retry_feedback else None),
+                    retry_target_expressions=(
+                        {slot.order: retry_target_expression}
+                        if retry_target_expression
+                        else None
+                    ),
+                )
+                question = accepted.get(slot.order)
+                if question is None:
+                    retry_feedback = self._composition_retry_feedback(
+                        candidate_failures.get(
+                            slot.order, "candidate generation did not yield an accepted item"
+                        ),
+                        slot,
+                    )
+                    last_stage = "candidate"
+                    continue
+
+                if question.question_type == PracticeQuestionType.ORDERING:
+                    retry_feedback = None
+                    retry_target_expression = None
+                    break
+
+                semantic_attempts += 1
+                semantic_failures = await self._semantic_failures(request, [question])
+                semantic_failure = semantic_failures.get(slot.order)
+                if semantic_failure is None:
+                    retry_feedback = None
+                    retry_target_expression = None
+                    break
+
+                logger.warning(
+                    "Reading/Vocabulary semantic candidate rejected. request_id=%s order=%d "
+                    "generation_attempt=%d/%d semantic_attempt=%d/%d reason=%s",
+                    request.request_id,
+                    slot.order,
+                    generation_attempts,
+                    _MAX_COMPOSITION_GENERATION_ATTEMPTS_PER_SLOT,
+                    semantic_attempts,
+                    _MAX_COMPOSITION_SEMANTIC_ATTEMPTS_PER_SLOT,
+                    semantic_failure[:300],
+                )
+                accepted.pop(slot.order, None)
+                retry_target_expression = question.target_expression
+                retry_feedback = self._composition_retry_feedback(semantic_failure, slot)
+                last_stage = "semantic"
+
+            if slot.order not in accepted:
+                raise ValueError(
+                    f"{last_stage} verification exhausted orders={[slot.order]} "
+                    f"generationAttempts={generation_attempts}/"
+                    f"{_MAX_COMPOSITION_GENERATION_ATTEMPTS_PER_SLOT} "
+                    f"semanticAttempts={semantic_attempts}/"
+                    f"{_MAX_COMPOSITION_SEMANTIC_ATTEMPTS_PER_SLOT}"
+                )
+
+        return [accepted[order] for order in sorted(accepted)]
+
     @staticmethod
     def _candidate_attempt_limit(request: PracticeGenerationRequest) -> int:
         if (
             request.domain == PracticeDomain.VOCABULARY
             and request.mode == VocabularyMode.USAGE_DISTINCTION.value
         ):
-            return _MAX_USAGE_DISTINCTION_ATTEMPTS_PER_SLOT
+            return _MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT
         return _MAX_CANDIDATE_ATTEMPTS_PER_SLOT
 
     @staticmethod
@@ -684,6 +993,10 @@ class ReadingVocabularyGenerationService:
             return _USAGE_DISTINCTION_BATCH_SIZE
         return _CANDIDATE_BATCH_SIZE
 
+    @staticmethod
+    def _usage_intent_for_skill(skill_tag: str) -> str | None:
+        return _USAGE_INTENT_BY_SKILL.get(skill_tag)
+
     async def _generate_candidate_batch(
         self,
         request: PracticeGenerationRequest,
@@ -691,6 +1004,7 @@ class ReadingVocabularyGenerationService:
         accepted: dict[int, PracticeGeneratedQuestion],
         *,
         retry_feedback: dict[int, str] | None = None,
+        retry_target_expressions: dict[int, str] | None = None,
     ) -> dict[int, str]:
         expected_orders = {slot.order for slot in slots}
         excluded_keys = sorted(
@@ -717,7 +1031,10 @@ class ReadingVocabularyGenerationService:
         for slot in slots:
             payload = slot.prompt_payload()
             if retry_feedback and retry_feedback.get(slot.order):
-                payload["retryFeedback"] = retry_feedback[slot.order][:240]
+                payload["retryFeedback"] = retry_feedback[slot.order][:600]
+            if retry_target_expressions and retry_target_expressions.get(slot.order):
+                payload["retryTargetExpression"] = retry_target_expressions[slot.order]
+                payload["preserveTargetOnRetry"] = True
             slot_payloads.append(payload)
 
         failures: dict[int, str] = {}
@@ -769,10 +1086,44 @@ class ReadingVocabularyGenerationService:
                 failures[order] = "candidate missing or duplicate in provider response"
                 continue
             try:
+                normalized_item = item
+                if request.domain == PracticeDomain.READING:
+                    normalized_item = {
+                        **item,
+                        "vocabularyCandidates": self._sanitize_reading_vocabulary_candidates(
+                            item.get("vocabularyCandidates", []),
+                            slot_by_order[order].passage_text or "",
+                        ),
+                    }
                 # Placeholder is internal only and always overwritten after semantic acceptance.
                 question = PracticeGeneratedQuestion.model_validate(
-                    {**item, "explanationOrigin": "PENDING"}
+                    {**normalized_item, "explanationOrigin": "PENDING"}
                 )
+                self._normalize_reading_candidate_metadata(
+                    request,
+                    question,
+                    slot_by_order[order],
+                )
+                self._normalize_usage_distinction_candidate_metadata(
+                    request,
+                    question,
+                    slot_by_order[order],
+                )
+                self._normalize_composition_candidate_metadata(
+                    request,
+                    question,
+                    slot_by_order[order],
+                )
+                expected_retry_target = (
+                    retry_target_expressions.get(order)
+                    if retry_target_expressions
+                    else None
+                )
+                if (
+                    expected_retry_target
+                    and question.target_expression != expected_retry_target
+                ):
+                    raise ValueError("semantic retry changed targetExpression")
                 self._validate_candidate(
                     request,
                     question,
@@ -790,6 +1141,281 @@ class ReadingVocabularyGenerationService:
                     reason[:300],
                 )
         return failures
+
+    def _normalize_reading_candidate_metadata(
+        self,
+        request: PracticeGenerationRequest,
+        question: PracticeGeneratedQuestion,
+        slot: _QuestionSlot,
+    ) -> None:
+        if request.domain != PracticeDomain.READING:
+            return
+
+        # vocabularyCandidates is optional enrichment, never part of the question's correctness.
+        # Keep only useful exact surface forms from the assigned passage instead of discarding an
+        # otherwise-valid Reading question because Luna returned an inflected/paraphrased form.
+        passage_text = slot.passage_text or question.passage_text or ""
+        question.vocabulary_candidates = self._sanitize_reading_vocabulary_candidates(
+            question.vocabulary_candidates,
+            passage_text,
+        )
+        question.review_target = False
+
+    @staticmethod
+    def _sanitize_reading_vocabulary_candidates(
+        values: Any,
+        passage_text: str,
+    ) -> list[str]:
+        if not isinstance(values, list):
+            return []
+
+        sanitized: list[str] = []
+        seen: set[str] = set()
+        for raw_value in values:
+            if not isinstance(raw_value, str):
+                continue
+            value = raw_value.strip()
+            if not value or value in seen or value not in passage_text:
+                continue
+            seen.add(value)
+            sanitized.append(value)
+            if len(sanitized) == 3:
+                break
+        return sanitized
+
+    def _normalize_usage_distinction_candidate_metadata(
+        self,
+        request: PracticeGenerationRequest,
+        question: PracticeGeneratedQuestion,
+        slot: _QuestionSlot,
+    ) -> None:
+        if not (
+            request.domain == PracticeDomain.VOCABULARY
+            and request.mode == VocabularyMode.USAGE_DISTINCTION.value
+        ):
+            return
+
+        # These fields are application-owned plan metadata, not learner-authored semantics.
+        # Normalize harmless model drift instead of wasting a scarce semantic retry.
+        question.difficulty = slot.difficulty
+        question.complexity_band = slot.complexity_band
+        question.skill_tag = slot.skill_tag
+        if slot.question_type is not None:
+            question.question_type = slot.question_type
+        question.passage_id = None
+        question.passage_text = None
+        question.evidence_text = None
+        question.vocabulary_candidates = []
+
+        target = (question.target_expression or "").strip()
+        if slot.review_target:
+            question.review_target = True
+            # Only canonical metadata is repairable. A different target changes the learning item
+            # and must still be rejected by deterministic validation below.
+            if target and target == (slot.review_expression or ""):
+                question.canonical_key = slot.review_canonical_key
+        else:
+            question.review_target = False
+            if target:
+                # New mastery identity is application-owned and derived from the exact expression.
+                # Do not let an LLM hallucinated/reused key poison uniqueness or review binding.
+                question.canonical_key = self._canonical_key_for_expression(target)
+
+        # targetExpression is the trained answer by contract. If it appears exactly once, bind
+        # correctAnswer to that option deterministically; Mini still verifies whether the context
+        # actually makes that target the best answer.
+        normalized_target = self._normalize_for_leak_check(target)
+        target_option_keys = [
+            option.key
+            for option in question.options
+            if self._normalize_for_leak_check(option.text) == normalized_target
+        ]
+        if normalized_target and len(target_option_keys) == 1:
+            question.correct_answer = [target_option_keys[0]]
+
+    def _normalize_composition_candidate_metadata(
+        self,
+        request: PracticeGenerationRequest,
+        question: PracticeGeneratedQuestion,
+        slot: _QuestionSlot,
+    ) -> None:
+        if not (
+            request.domain == PracticeDomain.VOCABULARY
+            and request.mode == VocabularyMode.COMPOSITION.value
+        ):
+            return
+
+        # Difficulty/skill/question type/review flag are deterministic plan metadata. Repair model
+        # drift instead of burning a generation attempt on fields the application already owns.
+        question.difficulty = slot.difficulty
+        question.complexity_band = slot.complexity_band
+        question.skill_tag = slot.skill_tag
+        if slot.question_type is not None:
+            question.question_type = slot.question_type
+        question.passage_id = None
+        question.passage_text = None
+        question.evidence_text = None
+        question.vocabulary_candidates = []
+        question.review_target = slot.review_target
+
+        target = (question.target_expression or "").strip()
+        if slot.review_target:
+            # Review identity may never be invented. Only repair canonical metadata after the model
+            # has actually preserved the bound expression; a different target still fails below.
+            if target and target == (slot.review_expression or ""):
+                question.canonical_key = slot.review_canonical_key
+            return
+
+        # For NEW ORDERING, the trained expression is the assembled result. If Luna omitted only
+        # targetExpression/canonicalKey but returned a valid permutation, reconstruct the mastery
+        # identity deterministically instead of discarding an otherwise-good ordering task.
+        if not target and question.question_type == PracticeQuestionType.ORDERING:
+            target = self._assembled_ordering_expression(question) or ""
+            if target:
+                question.target_expression = target
+
+        if target:
+            question.canonical_key = self._canonical_key_for_expression(target)
+
+    @staticmethod
+    def _assembled_ordering_expression(question: PracticeGeneratedQuestion) -> str | None:
+        option_by_key = {option.key: option.text for option in question.options}
+        option_keys = list(option_by_key)
+        if (
+            len(option_keys) != len(set(option_keys))
+            or len(question.correct_answer) != len(option_keys)
+            or set(question.correct_answer) != set(option_keys)
+        ):
+            return None
+        return "".join(option_by_key[key] for key in question.correct_answer).strip() or None
+
+    @staticmethod
+    def _reading_retry_feedback(reason: str) -> str:
+        if reason == "ambiguous single-choice item":
+            return (
+                "REPAIR_READING_AMBIGUITY: keep the exact assigned passage. Rewrite only the "
+                "question/options so one answer is uniquely supported by a visible passage cue; "
+                "replace any rival that could also be accepted."
+            )
+        if reason == "distractors are too weak or unrelated":
+            return (
+                "REPAIR_READING_DISTRACTORS: keep the exact assigned passage and intended skill. "
+                "Use plausible passage-related distractors that require careful reading to reject, "
+                "while preserving exactly one clearly supported answer."
+            )
+        if reason == "answer is not sufficiently supported":
+            return (
+                "REPAIR_READING_SUPPORT: keep the exact assigned passage. Rebuild the prompt and "
+                "options around evidence that is explicitly present or safely inferable from that passage."
+            )
+        if reason.startswith("answer mismatch"):
+            return (
+                "REPAIR_READING_ANSWER: keep the exact assigned passage. Rebuild the question/options "
+                "so the declared answer is the single best answer under the passage evidence."
+            )
+        if reason == "question does not fit requested mode/skill":
+            return (
+                "REPAIR_READING_MODE: keep the exact assigned passage and fixed skillTag. Rebuild the "
+                "question to test that reading skill rather than vocabulary recall or outside knowledge."
+            )
+        if reason == "semantic verifier detected answer leakage":
+            return (
+                "REPAIR_READING_LEAKAGE: keep the exact assigned passage but remove wording that "
+                "directly gives away the answer; preserve the same reading skill."
+            )
+        return (
+            "REPAIR_READING_CANDIDATE: keep the exact assigned passageId/passageText and fixed slot "
+            f"metadata, then repair only this question: {reason}. vocabularyCandidates are optional; "
+            "return [] unless each value is copied exactly from passageText."
+        )
+
+    @staticmethod
+    def _composition_retry_feedback(reason: str, slot: _QuestionSlot) -> str:
+        if reason == "ordering answer must use each option exactly once":
+            return (
+                "REPAIR_ORDERING_KEYS: keep this fixed ORDERING slot. Return 3-8 unique chunks "
+                "and correctAnswer containing every option key exactly once, with no duplicate, "
+                "missing, or extra key."
+            )
+        if reason == "ordering answer length mismatch":
+            return (
+                "REPAIR_ORDERING_LENGTH: keep this fixed ORDERING slot. correctAnswer must have "
+                "exactly the same number of keys as options and use every chunk once."
+            )
+        if reason == "vocabulary question requires targetExpression/canonicalKey":
+            if slot.question_type == PracticeQuestionType.ORDERING:
+                return (
+                    "REPAIR_ORDERING_TARGET: targetExpression is mandatory. For a new ORDERING "
+                    "slot, use the exact assembled expression; for a review slot, use the exact "
+                    "bound review expression/canonicalKey."
+                )
+            return "REPAIR_TARGET: return the exact vocabulary targetExpression for this slot."
+        if reason == "ambiguous single-choice item":
+            return (
+                "REPAIR_AMBIGUITY: keep the same targetExpression and rebuild the completion/"
+                "collocation context so exactly one option is clearly best. Replace any tied rival."
+            )
+        if reason == "distractors are too weak or unrelated":
+            return (
+                "REPAIR_DISTRACTORS: keep the same targetExpression. Use plausible same-neighborhood "
+                "completion/collocation rivals that are wrong for a visible lexical or grammatical cue."
+            )
+        if reason.startswith("answer mismatch"):
+            return (
+                "REPAIR_ANSWER_MISMATCH: keep the same targetExpression and rebuild the completion "
+                "context/options until the target-aligned answer is the single best choice."
+            )
+        if "duplicate" in reason or "reused a review" in reason:
+            return (
+                "REPAIR_DUPLICATE_TARGET: generate a genuinely different targetExpression for this "
+                "new slot; do not reuse any accepted or review expression."
+            )
+        return f"REPAIR_COMPOSITION: fix this slot without changing its planned type/skill: {reason}"
+
+    @staticmethod
+    def _canonical_key_for_expression(value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().casefold()
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized[:200]
+
+    @staticmethod
+    def _usage_retry_feedback(reason: str) -> str:
+        if reason == "ambiguous single-choice item":
+            return (
+                "REPAIR_AMBIGUITY: keep the same targetExpression. Rewrite the learner-visible "
+                "context so one explicit semantic/register/collocation cue makes the target clearly "
+                "better than every rival, and replace any tied rival option."
+            )
+        if reason == "distractors are too weak or unrelated":
+            return (
+                "REPAIR_DISTRACTORS: keep the same targetExpression. Replace all weak/unrelated "
+                "distractors with same-part-of-speech competitors from the same usage neighborhood; "
+                "each should be plausible in isolation but clearly lose on a visible context cue."
+            )
+        if reason.startswith("answer mismatch"):
+            return (
+                "REPAIR_ANSWER_MISMATCH: keep the same targetExpression. The independent verifier "
+                "preferred another option, so strengthen the decisive context and/or replace that "
+                "rival until the target is unmistakably the single best answer."
+            )
+        if reason == "USAGE_DISTINCTION does not require context":
+            return (
+                "REPAIR_CONTEXT: keep the same targetExpression. Add a learner-visible cue required "
+                "to choose among plausible alternatives. For collocation the local lexical frame is "
+                "enough; for register show relationship/formality/channel; otherwise add semantic or "
+                "pragmatic situation cues."
+            )
+        if reason == "semantic verifier detected answer leakage":
+            return (
+                "REPAIR_LEAKAGE: keep the same targetExpression but remove direct quotation, "
+                "definition, synonym/paraphrase hints, or wording that gives the answer away."
+            )
+        if reason == "question does not fit requested mode/skill":
+            return (
+                "REPAIR_MODE_FIT: keep the same targetExpression and rebuild the item around the "
+                "supplied usageIntent/skillTag rather than meaning recall or generic synonym matching."
+            )
+        return f"REPAIR_SEMANTIC_QUALITY: keep the same targetExpression and fix: {reason}"
 
     def _validate_candidate(
         self,
@@ -848,6 +1474,19 @@ class ReadingVocabularyGenerationService:
         }
         if normalized_target and normalized_target in accepted_targets:
             raise ValueError("vocabulary targetExpression duplicates an accepted slot")
+
+        eligible_review_targets = self._eligible_review_targets(request, log_rejections=False)
+        review_target_expressions = {
+            self._normalize_for_leak_check(target.expression)
+            for target in eligible_review_targets
+            if target.expression.strip()
+        }
+        if (
+            not slot.review_target
+            and normalized_target
+            and normalized_target in review_target_expressions
+        ):
+            raise ValueError("new vocabulary slot reused a review targetExpression")
 
         if slot.review_target:
             if not question.review_target:
@@ -953,6 +1592,8 @@ class ReadingVocabularyGenerationService:
         option_by_key = {option.key: option.text for option in question.options}
         correct_text = option_by_key.get(question.correct_answer[0], "")
         normalized_correct = cls._normalize_for_leak_check(correct_text)
+        if target != normalized_correct:
+            raise ValueError("USAGE_DISTINCTION correct option must equal targetExpression")
         if len(normalized_correct) >= 4 and normalized_correct in stem:
             raise ValueError("USAGE_DISTINCTION stem leaks correct option text")
 
@@ -1038,6 +1679,11 @@ class ReadingVocabularyGenerationService:
                 "prompt": question.prompt,
                 "options": [option.model_dump(by_alias=True) for option in question.options],
                 "skillTag": question.skill_tag,
+                **(
+                    {"usageIntent": self._usage_intent_for_skill(question.skill_tag)}
+                    if request.mode == VocabularyMode.USAGE_DISTINCTION.value
+                    else {}
+                ),
             }
             for question in single_choice
         ]
@@ -1059,9 +1705,10 @@ class ReadingVocabularyGenerationService:
             # Nano is a cheap quality gate, not an availability dependency. If it is unavailable,
             # fail open to the Mini verifier rather than failing the whole daily set.
             logger.warning(
-                "Reading/Vocabulary Nano prescreen unavailable. request_id=%s type=%s",
+                "Reading/Vocabulary Nano prescreen unavailable. request_id=%s type=%s reason=%s",
                 request.request_id,
                 type(exc).__name__,
+                str(exc)[:300],
             )
             return {}
 
@@ -1093,6 +1740,11 @@ class ReadingVocabularyGenerationService:
                 "prompt": question.prompt,
                 "options": [option.model_dump(by_alias=True) for option in question.options],
                 "skillTag": question.skill_tag,
+                **(
+                    {"usageIntent": self._usage_intent_for_skill(question.skill_tag)}
+                    if request.mode == VocabularyMode.USAGE_DISTINCTION.value
+                    else {}
+                ),
             }
             for question in single_choice
         ]

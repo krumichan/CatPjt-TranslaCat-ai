@@ -59,10 +59,10 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_LEVEL_TEST_QUESTION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),
-    "LANGUAGE_LEARNING_LEVEL_TEST_V2_GENERATION": AiTaskModelPolicy(
+    "LANGUAGE_LEARNING_LEVEL_TEST_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 8192
     ),
-    "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_DESIGN": AiTaskModelPolicy(
+    "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_DESIGN": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),
     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION": AiTaskModelPolicy(
@@ -78,13 +78,13 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
         AiModelTier.LUNA, "none", 4096
     ),
     # Quality-critical repair / verification / evaluation -> Mini.
-    "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_REPAIR": AiTaskModelPolicy(
+    "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_REPAIR": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 4096
     ),
-    "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION": AiTaskModelPolicy(
+    "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 2048
     ),
-    "LANGUAGE_LEARNING_LEVEL_TEST_V2_TASK_SUFFICIENCY_VERIFICATION": AiTaskModelPolicy(
+    "LANGUAGE_LEARNING_LEVEL_TEST_TASK_SUFFICIENCY_VERIFICATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 2048
     ),
     "LANGUAGE_LEARNING_WRITING_EVALUATION": AiTaskModelPolicy(
@@ -99,7 +99,7 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_LISTENING_SUMMARY_EVALUATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 8192
     ),
-    "LANGUAGE_LEARNING_LEVEL_TEST_V2_SPEAKING_EVALUATION": AiTaskModelPolicy(
+    "LANGUAGE_LEARNING_LEVEL_TEST_SPEAKING_EVALUATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 8192
     ),
 }

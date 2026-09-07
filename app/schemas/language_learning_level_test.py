@@ -113,8 +113,8 @@ class LevelTestQuestionGenerationRequest(CamelCaseModel):
     previous_results: list[LevelTestPreviousResult] = Field(default_factory=list, max_length=19)
     diversity_context: DiversityContext = Field(default_factory=DiversityContext)
     preferred_scenario_categories: list[ScenarioCategory] = Field(default_factory=list, max_length=4)
-    policy_version: str = Field(default="level-test-v2-multiskill", min_length=1, max_length=100)
-    model_config_version: str = Field(default="level-test-model-config-v1", min_length=1, max_length=100)
+    policy_version: str = Field(default="level-test-multiskill", min_length=1, max_length=100)
+    model_config_version: str = Field(default="level-test-model-config", min_length=1, max_length=100)
     reference_audio_upload: LevelTestReferenceAudioUpload | None = None
 
     @model_validator(mode="after")
@@ -147,8 +147,8 @@ class LevelTestScoredInternalAnswerKey(LevelTestInternalAnswerKey):
 
 
 class LevelTestChoiceQualityAudit(CamelCaseModel):
-    # Legacy generation-side self-audit. Kept for backward compatibility only.
-    # Server acceptance does not trust this field; semantic verification is independent.
+    # Provider-side self-audit metadata. Server acceptance does not trust this field;
+    # semantic verification remains independent.
     unique_correct_option: bool
     directly_compatible_option_keys: list[str] = Field(default_factory=list, max_length=4)
 

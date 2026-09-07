@@ -75,9 +75,9 @@ class EvaluationBaseRequest(CamelCaseModel):
     evaluation_purpose: EvaluationPurpose
     answer_revealed: bool = False
     assistance_usage: list[AssistanceUsage] = Field(default_factory=list, max_length=20)
-    policy_version: str = Field(default="listening-profile-v1", max_length=100)
+    policy_version: str = Field(default="listening-profile", max_length=100)
     model_config_version: str = Field(
-        default="listening-model-config-v1", max_length=100
+        default="listening-model-config", max_length=100
     )
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)
 
@@ -194,7 +194,7 @@ class ListeningProfileSignal(CamelCaseModel):
     evidence_weight: float = Field(..., gt=0, le=1)
     evidence_ids: list[str] = Field(default_factory=list, max_length=50)
     source_task: ListeningTaskType
-    policy_version: str = "listening-profile-v1"
+    policy_version: str = "listening-profile"
 
 
 class ListeningTaskResult(CamelCaseModel):
@@ -310,9 +310,9 @@ class RecommendationExplanationRequest(CamelCaseModel):
     recommended_task: str = Field(..., min_length=1, max_length=100)
     evidence_summary: RecommendationEvidenceSummary
     origin_language: str = Field(..., min_length=2, max_length=20)
-    policy_version: str = Field(default="listening-profile-v1", max_length=100)
+    policy_version: str = Field(default="listening-profile", max_length=100)
     model_config_version: str = Field(
-        default="listening-model-config-v1", max_length=100
+        default="listening-model-config", max_length=100
     )
 
 

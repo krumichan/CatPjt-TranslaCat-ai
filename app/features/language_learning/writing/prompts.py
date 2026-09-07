@@ -8,10 +8,9 @@ from app.schemas.language_learning import (
     WritingEvaluationRequest,
 )
 
-DAILY_WRITING_GENERATION_PROMPT_VERSION = "daily-writing-generation-modes-v1"
-DAILY_WRITING_GENERATION_V35_PROMPT_VERSION = "writing-generation-modes-diversity-v1"
-WRITING_EVALUATION_PROMPT_VERSION = "writing-evaluation-v2"
-LEVEL_TEST_QUESTION_PROMPT_VERSION = "writing-level-test-question-v1"
+DAILY_WRITING_GENERATION_PROMPT_VERSION = "writing-generation-modes-diversity"
+WRITING_EVALUATION_PROMPT_VERSION = "writing-evaluation"
+LEVEL_TEST_QUESTION_PROMPT_VERSION = "writing-level-test-question"
 
 DAILY_WRITING_GENERATION_SYSTEM_PROMPT = """
 You are the Adaptive Daily Writing generation engine for TranslaCat Language Learning.
@@ -68,8 +67,8 @@ Use writingType exactly. Never blend the three modes in one Daily Set.
 - A keyword is a learning signal/material, not a question template. The same keyword may appear across
   items only when scenario, communicative intent, task archetype, and grammar focus are meaningfully different.
 
-# Phase 3.5 diversity metadata
-When contentDiversityPolicyVersion is language-learning-diversity-v1, EVERY returned item MUST include:
+# Diversity metadata
+EVERY returned item MUST include:
 - languageComplexityBand as an integer 1..5 matching the item difficulty and request languageComplexity.
 - diversityMetadata as a non-null object containing ALL of: scenarioCategory, communicativeIntent,
   taskArchetype, grammarFocusCodes, lexicalFocusCodes, semanticSummary, and
@@ -86,8 +85,8 @@ Use the supplied data as signals, not rigid quotas. Aim roughly for:
 - new expressions / challenge: 10%
 
 # Output
-Return only fields required by the response schema. For Phase 3.5 requests, remember that
-languageComplexityBand and diversityMetadata are required fields even if older examples omitted them.
+Return only fields required by the response schema.
+languageComplexityBand and diversityMetadata are required fields.
 - order: 1-based order, unique and contiguous.
 - difficulty: REVIEW, NORMAL, or CHALLENGE.
 - originText: TRANSLATION source text, or GUIDED/FREE prompt text, in originLanguage.
@@ -134,7 +133,7 @@ Score ONLY the following five raw metrics from 0 to 100:
 - NATURALNESS: how natural the sentence is in real usage.
 - EXPRESSION: suitable variety/complexity of structure and expression.
 
-Do NOT calculate or return an overall score. The AI Server calculates OVERALL deterministically using the versioned Scoring Policy.
+Do NOT calculate or return an overall score. The AI Server calculates OVERALL deterministically using the server Scoring Policy.
 Spelling and punctuation should be reflected in relevant detailed feedback rather than becoming separate core metrics.
 
 # Feedback

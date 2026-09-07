@@ -137,12 +137,12 @@ class _GenerationTelemetryAggregate:
 
 
 class LevelTestService:
-    GENERATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_V2_GENERATION"
-    VOCAB_CONTEXT_DESIGN_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_DESIGN"
-    VOCAB_CONTEXT_REPAIR_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_REPAIR"
-    CHOICE_VERIFICATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION"
-    TASK_SUFFICIENCY_VERIFICATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_V2_TASK_SUFFICIENCY_VERIFICATION"
-    SPEAKING_EVALUATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_V2_SPEAKING_EVALUATION"
+    GENERATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_GENERATION"
+    VOCAB_CONTEXT_DESIGN_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_DESIGN"
+    VOCAB_CONTEXT_REPAIR_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_REPAIR"
+    CHOICE_VERIFICATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION"
+    TASK_SUFFICIENCY_VERIFICATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_TASK_SUFFICIENCY_VERIFICATION"
+    SPEAKING_EVALUATION_TYPE = "LANGUAGE_LEARNING_LEVEL_TEST_SPEAKING_EVALUATION"
 
     def __init__(
         self,
@@ -1482,8 +1482,8 @@ class LevelTestService:
                 source_text=request.source_text,
                 answer=request.answer,
                 learning_language=request.learning_language,
-                policy_version="level-test-v2-multiskill",
-                model_config_version="level-test-model-config-v1",
+                policy_version="level-test-multiskill",
+                model_config_version="level-test-model-config",
                 manual_retry_attempt=request.manual_retry_attempt,
             )
         )
@@ -1525,8 +1525,8 @@ class LevelTestService:
                 answer=request.answer,
                 origin_language=request.origin_language,
                 learning_language=request.learning_language,
-                policy_version="level-test-v2-multiskill",
-                model_config_version="level-test-model-config-v1",
+                policy_version="level-test-multiskill",
+                model_config_version="level-test-model-config",
                 manual_retry_attempt=request.manual_retry_attempt,
             )
         )

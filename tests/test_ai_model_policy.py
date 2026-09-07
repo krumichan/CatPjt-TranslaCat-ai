@@ -11,7 +11,7 @@ def test_generation_uses_luna_and_evaluation_uses_mini():
         == AiModelTier.MINI
     )
     assert (
-        get_task_model_policy("LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION").tier
+        get_task_model_policy("LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION").tier
         == AiModelTier.MINI
     )
     assert (

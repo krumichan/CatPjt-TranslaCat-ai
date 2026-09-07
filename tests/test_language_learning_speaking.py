@@ -229,7 +229,7 @@ def evaluation_request(turns=None):
             "learningLanguage": "ja",
             "userTurns": turns or [evaluation_turn(i) for i in range(1, 6)],
             "assistantTurns": [],
-            "evaluationPolicyVersion": "speaking-evaluation-policy-v1",
+            "evaluationPolicyVersion": "speaking-evaluation-policy",
         }
     )
 
@@ -277,7 +277,7 @@ class SpeakingKeywordPromptPolicyTest(unittest.TestCase):
         )
         self.assertEqual(
             SPEAKING_CONVERSATION_PROMPT_VERSION,
-            "speaking-conversation-v3",
+            "speaking-conversation",
         )
 
     def test_conversation_payload_keeps_both_keyword_types_flat(self):
@@ -766,7 +766,7 @@ class SpeakingEvaluationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status.value, "EVALUATED")
         self.assertEqual(response.overall_score, 80)
         self.assertEqual(len(response.metrics), 8)
-        self.assertEqual(response.scoring_policy_version, "speaking-scoring-policy-v1")
+        self.assertEqual(response.scoring_policy_version, "speaking-scoring-policy")
         self.assertEqual(len(response.profile_signals), 1)
 
     async def test_precheck_insufficient_evidence_skips_provider(self):
@@ -949,8 +949,8 @@ class FakeSttServiceForTurn:
                         "sampleRate": 16000,
                         "channels": 1,
                     },
-                    normalizationVersion="v1",
-                    sttHintVersion="v1",
+                    normalizationVersion="speaking-audio-normalization",
+                    sttHintVersion="speaking-stt-hint",
                 ),
             ),
             usage=SpeakingUsage(stt=StageUsage(latencyMs=1, audioSeconds=1.2)),
@@ -1219,7 +1219,7 @@ class SpeakingTurnServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.stt.last_kwargs["phrase_hints"], ["会議"])
 
 
-class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
+class SpeakingCoverageTest(unittest.IsolatedAsyncioTestCase):
     def test_audio_too_long_and_corrupted_are_distinguished(self):
         processor = SpeakingAudioProcessor()
         with self.assertRaises(SpeakingStageException) as too_long:
@@ -1316,7 +1316,7 @@ class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(eligibility.valid_user_speech_seconds, 72)
         self.assertAlmostEqual(eligibility.valid_stt_turn_ratio, 5 / 6, places=4)
 
-    def test_weighted_overall_policy_v1(self):
+    def test_weighted_overall_policy(self):
         scores = {
             "GRAMMAR": 50,
             "VOCABULARY": 60,
@@ -1348,7 +1348,7 @@ class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
             conversation_request(
                 persona="친근한 일본인 동료",
                 learningProfileSummary={
-                    "profileVersion": "p2",
+                    "profileVersion": "profile-current",
                     "strengths": ["meaning"],
                     "weaknesses": ["fluency"],
                 },
@@ -1367,7 +1367,7 @@ class SpeakingPhase2CoverageTest(unittest.IsolatedAsyncioTestCase):
         )
         prompt = provider.calls[0][1]
         self.assertIn('"persona":"친근한 일본인 동료"', prompt)
-        self.assertIn('"profileVersion":"p2"', prompt)
+        self.assertIn('"profileVersion":"profile-current"', prompt)
         self.assertIn('"text":"会議"', prompt)
         self.assertIn('"focusSignals":["fluency.pause"]', prompt)
         self.assertIn("old-19", prompt)

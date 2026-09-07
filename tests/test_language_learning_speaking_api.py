@@ -84,8 +84,8 @@ class FakeTurnService:
                         "sampleRate": 16000,
                         "channels": 1,
                     },
-                    normalizationVersion="v1",
-                    sttHintVersion="v1",
+                    normalizationVersion="speaking-audio-normalization",
+                    sttHintVersion="speaking-stt-hint",
                 ),
             ),
             usage=SpeakingUsage(),
@@ -195,9 +195,9 @@ class FakeEvaluationService:
                 eligibleBeforeAi=False,
                 missingRequirements=["VALID_USER_TURNS", "VALID_SPEECH_SECONDS"],
             ),
-            evaluationVersion="speaking-evaluation-v1",
-            scoringPolicyVersion="speaking-scoring-policy-v1",
-            promptVersion="speaking-evaluation-prompt-v1",
+            evaluationVersion="speaking-evaluation",
+            scoringPolicyVersion="speaking-scoring-policy",
+            promptVersion="speaking-evaluation-prompt",
             usage=SpeakingUsage(),
         )
 
@@ -404,7 +404,7 @@ class LanguageLearningSpeakingApiTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "INSUFFICIENT_EVIDENCE")
         self.assertIsNone(body["overallScore"])
-        self.assertEqual(body["scoringPolicyVersion"], "speaking-scoring-policy-v1")
+        self.assertEqual(body["scoringPolicyVersion"], "speaking-scoring-policy")
 
     def test_audio_reference_endpoint(self):
         response = self.client.get(

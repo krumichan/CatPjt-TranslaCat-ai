@@ -8,38 +8,38 @@ from app.features.language_learning.level_test.normalizer import LevelTestGenera
 from app.features.language_learning.level_test.service import LevelTestService
 from app.features.language_learning.writing.service import (
     LanguageLearningWritingService,
-    _DAILY_WRITING_V35_GENERATION_SCHEMA,
+    _DAILY_WRITING_CANDIDATE_SCHEMA,
 )
 from app.schemas.language_learning_level_test import (
     LevelTestQuestionGenerationPayload,
     LevelTestSpeakingEvaluationContext,
 )
-from tests.test_language_learning_phase35 import (
+from tests.test_language_learning_current import (
     QueueProvider,
     diversity_metadata,
     level_generation_payload,
     level_question_request,
     writing_candidate_payload,
-    writing_phase35_request,
-    Phase35LevelTestTest as _Phase35LevelTestTest,
+    writing_current_request,
+    CurrentLevelTestTest as _CurrentLevelTestTest,
 )
 
 
-def test_daily_v35_provider_schema_requires_quality_metadata():
-    item_schema = _DAILY_WRITING_V35_GENERATION_SCHEMA["properties"]["items"]["items"]
+def test_daily_current_provider_schema_requires_quality_metadata():
+    item_schema = _DAILY_WRITING_CANDIDATE_SCHEMA["properties"]["items"]["items"]
     required = item_schema["required"]
     assert required.count("languageComplexityBand") == 1
     assert required.count("diversityMetadata") == 1
     assert len(required) == len(set(required))
 
 
-def test_daily_v35_salvages_valid_sibling_when_one_candidate_is_malformed():
+def test_daily_current_salvages_valid_sibling_when_one_candidate_is_malformed():
     payload = writing_candidate_payload()
     payload["items"][1].pop("diversityMetadata")
     provider = QueueProvider(plain=[payload])
     service = LanguageLearningWritingService(provider=provider)
 
-    request = writing_phase35_request().model_copy(
+    request = writing_current_request().model_copy(
         deep=True,
         update={"sentence_count": 2},
     )
@@ -51,14 +51,14 @@ def test_daily_v35_salvages_valid_sibling_when_one_candidate_is_malformed():
     assert all(item.diversity_metadata is not None for item in batch.items)
 
 
-def test_daily_v35_retries_after_an_unusable_batch_and_still_builds_set():
+def test_daily_current_retries_after_an_unusable_batch_and_still_builds_set():
     unusable = copy.deepcopy(writing_candidate_payload())
     for item in unusable["items"]:
         item.pop("diversityMetadata")
     provider = QueueProvider(plain=[unusable, writing_candidate_payload()])
     service = LanguageLearningWritingService(provider=provider)
 
-    response = asyncio.run(service.generate_daily(writing_phase35_request()))
+    response = asyncio.run(service.generate_daily(writing_current_request()))
 
     assert len(response.items) == 2
     assert {item.difficulty.value for item in response.items} == {"NORMAL", "CHALLENGE"}
@@ -73,7 +73,7 @@ def test_vocab_context_rejects_exact_correct_answer_leak_in_prompt():
             "「変更したいです」という意味の表現を選んでください。"
         )
     provider = QueueProvider(structured=[copy.deepcopy(payload) for _ in range(3)])
-    helper = _Phase35LevelTestTest()
+    helper = _CurrentLevelTestTest()
 
     with pytest.raises(HTTPException) as raised:
         asyncio.run(helper._service(provider).generate_question(level_question_request()))
@@ -182,7 +182,7 @@ def _valid_speaking_payload() -> dict:
 def test_speaking_schema_failure_retries_and_normalizes_safe_format_drift():
     invalid = {"evaluationConfidence": 0.8, "metrics": []}
     provider = QueueProvider(structured=[invalid, _valid_speaking_payload()])
-    helper = _Phase35LevelTestTest()
+    helper = _CurrentLevelTestTest()
 
     response = asyncio.run(
         helper._service(provider).evaluate_speaking(

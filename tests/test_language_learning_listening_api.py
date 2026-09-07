@@ -33,7 +33,7 @@ class FakeGenerationService:
         return ListeningSetGenerationResponse.model_validate(
             {
                 "requestId": request.request_id,
-                "generationVersion": "listening-generation-v1",
+                "generationVersion": "listening-generation",
                 "policyVersion": request.policy_version,
                 "modelConfigVersion": request.model_config_version,
                 "items": [
@@ -123,7 +123,7 @@ class FakeExplanationService:
                 "recommendedTask": request.recommended_task,
                 "explanation": "따라 말하기로 명료도를 다듬어 보세요.",
                 "ctaLabel": "따라 말하기",
-                "explanationVersion": "listening-explanation-v1",
+                "explanationVersion": "listening-explanation",
                 "usage": ListeningUsage(),
             }
         )
@@ -243,8 +243,8 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
             "evaluationPurpose": "OFFICIAL",
             "answerRevealed": False,
             "assistanceUsage": [],
-            "policyVersion": "listening-profile-v1",
-            "modelConfigVersion": "model-v1",
+            "policyVersion": "listening-profile",
+            "modelConfigVersion": "listening-model-config",
         }
 
     def test_dictation_api_returns_all_task_camel_case_contract(self):
@@ -266,7 +266,7 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
         self.assertEqual(5, len(body["tasks"]))
         self.assertEqual("DICTATION", body["tasks"][0]["taskType"])
         self.assertEqual(100, body["tasks"][0]["score"])
-        self.assertEqual("listening-profile-v1", body["profilePolicyVersion"])
+        self.assertEqual("listening-profile", body["profilePolicyVersion"])
 
     def test_repeat_api_accepts_multipart_and_returns_structured_not_evaluable(self):
         context = self.evaluation_base()
@@ -302,11 +302,11 @@ class LanguageLearningListeningApiTest(unittest.TestCase):
                 "itemId": 301,
                 "sourceText": "hello",
                 "contentHash": "generated-hash",
-                "generationVersion": "listening-generation-v1",
+                "generationVersion": "listening-generation",
                 "learningLanguage": "en",
-                "voice": {"locale": "en-US", "voiceKey": "standard-1", "version": "v1"},
-                "policyVersion": "listening-v1",
-                "modelConfigVersion": "model-v1",
+                "voice": {"locale": "en-US", "voiceKey": "standard-1", "version": "current"},
+                "policyVersion": "listening",
+                "modelConfigVersion": "listening-model-config",
             },
         )
         self.assertEqual(200, response.status_code)

@@ -85,7 +85,7 @@ class LanguageComplexityContext(CamelCaseModel):
     base_level_score: float | None = Field(default=None, ge=0, le=100)
     base_complexity_band: int = Field(default=3, ge=1, le=5)
     target_complexity_band: int | None = Field(default=None, ge=1, le=5)
-    policy_version: str = Field(default="language-complexity-v1", min_length=1, max_length=100)
+    policy_version: str = Field(default="language-complexity", min_length=1, max_length=100)
 
 
 class DiversityMetadata(CamelCaseModel):
@@ -124,7 +124,7 @@ class DiversityContext(CamelCaseModel):
 
 
 class DiversitySummary(CamelCaseModel):
-    policy_version: str = "language-learning-diversity-v1"
+    policy_version: str = "language-learning-diversity"
     candidate_count: int = Field(default=0, ge=0)
     accepted_count: int = Field(default=0, ge=0)
     rejected_exact: int = Field(default=0, ge=0)

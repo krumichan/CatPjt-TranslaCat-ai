@@ -19,7 +19,7 @@ class FakeWritingService:
     async def generate_daily(self, request):
         return DailyWritingGenerationResponse(
             request_id=request.request_id,
-            prompt_version="daily-writing-generation-v1",
+            prompt_version="writing-generation-modes-diversity",
             items=[
                 DailyWritingItem(
                     order=1,
@@ -62,9 +62,9 @@ class FakeWritingService:
                     "meaningPatterns": [],
                     "recommendedFocus": [],
                 },
-                "evaluationRubricVersion": "writing-evaluation-rubric-v1",
-                "scoringPolicyVersion": "writing-scoring-policy-v1",
-                "promptVersion": "writing-evaluation-v1",
+                "evaluationRubricVersion": "writing-evaluation-rubric",
+                "scoringPolicyVersion": "writing-scoring-policy",
+                "promptVersion": "writing-evaluation",
             }
         )
 
@@ -77,7 +77,7 @@ class FakeWritingService:
             origin_text="자기소개를 해 주세요.",
             focus_metrics=["MEANING"],
             focus_reason="기초 표현 확인",
-            prompt_version="writing-level-test-question-v1",
+            prompt_version="writing-level-test-question",
         )
 
 
@@ -155,8 +155,8 @@ class LanguageLearningWritingApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["scores"]["overall"], 80)
-        self.assertEqual(body["evaluationRubricVersion"], "writing-evaluation-rubric-v1")
-        self.assertEqual(body["scoringPolicyVersion"], "writing-scoring-policy-v1")
+        self.assertEqual(body["evaluationRubricVersion"], "writing-evaluation-rubric")
+        self.assertEqual(body["scoringPolicyVersion"], "writing-scoring-policy")
 
     def test_level_test_question_contract(self):
         response = self.client.post(

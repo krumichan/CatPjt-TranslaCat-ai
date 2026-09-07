@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from app.schemas.language_learning_quality import LanguageComplexityContext
 
-LANGUAGE_COMPLEXITY_POLICY_VERSION = "language-complexity-v1"
-CONTENT_DIVERSITY_POLICY_VERSION = "language-learning-diversity-v1"
+LANGUAGE_COMPLEXITY_POLICY_VERSION = "language-complexity"
+CONTENT_DIVERSITY_POLICY_VERSION = "language-learning-diversity"
 
 
 def _base_band(context: LanguageComplexityContext | None) -> int:

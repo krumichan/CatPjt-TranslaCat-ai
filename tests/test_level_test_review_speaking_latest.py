@@ -160,7 +160,7 @@ def test_repeat_speaking_payload_defaults_model_answer_list_without_fabricating_
     assert normalized["metrics"][4]["type"] == "TASK_FULFILLMENT"
 
 
-def test_daily_writing_schema_requires_quality_metadata_used_by_phase35_filter():
+def test_daily_writing_schema_requires_quality_metadata_used_by_current_filter():
     item_schema = _DAILY_WRITING_GENERATION_SCHEMA["properties"]["items"]["items"]
     assert "languageComplexityBand" in item_schema["required"]
     assert "diversityMetadata" in item_schema["required"]

@@ -133,9 +133,9 @@ class FakeWritingEvaluationService:
                     "meaningPatterns": [],
                     "recommendedFocus": [],
                 },
-                "evaluationRubricVersion": "writing-evaluation-rubric-v1",
-                "scoringPolicyVersion": "writing-scoring-policy-v1",
-                "promptVersion": "writing-evaluation-v1",
+                "evaluationRubricVersion": "writing-evaluation-rubric",
+                "scoringPolicyVersion": "writing-scoring-policy",
+                "promptVersion": "writing-evaluation",
             }
         )
 
@@ -196,8 +196,8 @@ class FakeSttService:
                     low_confidence_threshold=0.55,
                     audio_duration=3.0,
                     audio_quality_signals=quality,
-                    normalization_version="v1",
-                    stt_hint_version="v1",
+                    normalization_version="speaking-audio-normalization",
+                    stt_hint_version="speaking-stt-hint",
                 ),
             ),
             usage=SpeakingUsage(
@@ -218,7 +218,7 @@ def diversity_metadata(scenario="WORK", intent="REQUEST", archetype="SCENARIO_RE
     }
 
 
-def writing_phase35_request():
+def writing_current_request():
     return DailyWritingGenerationRequest.model_validate(
         {
             "requestId": "w35-1",
@@ -229,7 +229,7 @@ def writing_phase35_request():
             "selectedKeywords": [],
             "generationDate": "2026-08-27",
             "languageComplexity": {"baseComplexityBand": 3},
-            "contentDiversityPolicyVersion": "language-learning-diversity-v1",
+            "contentDiversityPolicyVersion": "language-learning-diversity",
         }
     )
 
@@ -281,7 +281,7 @@ def writing_candidate_payload():
     }
 
 
-def listening_phase35_request():
+def listening_current_request():
     return ListeningSetGenerationRequest.model_validate(
         {
             "requestId": "l35-1",
@@ -301,7 +301,7 @@ def listening_phase35_request():
             },
             "constraints": {"audioSecondsMin": 8, "audioSecondsMax": 20},
             "languageComplexity": {"baseComplexityBand": 3},
-            "contentDiversityPolicyVersion": "language-learning-diversity-v1",
+            "contentDiversityPolicyVersion": "language-learning-diversity",
         }
     )
 
@@ -360,8 +360,8 @@ def listening_candidate_payload():
 def level_question_request():
     return LevelTestQuestionGenerationRequest.model_validate(
         {
-            "requestId": "level35-q1",
-            "idempotencyKey": "level35-q1-idem",
+            "requestId": "level-test-q1",
+            "idempotencyKey": "level-test-q1-idem",
             "sessionId": 100,
             "questionNumber": 1,
             "totalQuestions": 20,
@@ -400,10 +400,6 @@ def level_generation_payload():
                 {"key": "D", "text": "寝ています"},
             ],
             "internalAnswerKey": {"correctOptionKey": "A", "correctOrder": []},
-            "choiceQualityAudit": {
-                "uniqueCorrectOption": True,
-                "directlyCompatibleOptionKeys": ["A"],
-            },
             "referencePayload": {},
             "diversityMetadata": diversity_metadata(scenario, intent, "VOCAB_CONTEXT"),
         }
@@ -504,7 +500,7 @@ def repaired_vocab_candidate():
     return {"candidate": candidate}
 
 
-class Phase35QualityPolicyTest(unittest.TestCase):
+class CurrentQualityPolicyTest(unittest.TestCase):
     def test_character_ngram_and_structural_duplicate_guards(self):
         metadata = DiversityMetadata.model_validate(diversity_metadata())
         validator = DiversityValidator()
@@ -543,18 +539,18 @@ class Phase35QualityPolicyTest(unittest.TestCase):
         self.assertEqual(5, resolve_listening_complexity_band("MY_LEVEL", context))
 
 
-class Phase35GenerationTest(unittest.TestCase):
-    def test_writing_phase35_returns_diversity_metadata_and_exact_distribution(self):
+class CurrentGenerationTest(unittest.TestCase):
+    def test_writing_current_returns_diversity_metadata_and_exact_distribution(self):
         provider = QueueProvider(plain=[writing_candidate_payload()])
         service = LanguageLearningWritingService(provider=provider)
-        response = asyncio.run(service.generate_daily(writing_phase35_request()))
+        response = asyncio.run(service.generate_daily(writing_current_request()))
         self.assertEqual(2, len(response.items))
-        self.assertEqual("writing-generation-modes-diversity-v1", response.prompt_version)
-        self.assertEqual("language-learning-diversity-v1", response.content_diversity_policy_version)
+        self.assertEqual("writing-generation-modes-diversity", response.prompt_version)
+        self.assertEqual("language-learning-diversity", response.content_diversity_policy_version)
         self.assertEqual({"NORMAL", "CHALLENGE"}, {item.difficulty.value for item in response.items})
         self.assertTrue(all(item.diversity_metadata for item in response.items))
 
-    def test_writing_candidate_pool_never_exceeds_phase35_cap(self):
+    def test_writing_candidate_pool_never_exceeds_current_cap(self):
         distribution = LanguageLearningWritingService._expanded_distribution(
             {"REVIEW": 18, "NORMAL": 4, "CHALLENGE": 3}
         )
@@ -563,18 +559,18 @@ class Phase35GenerationTest(unittest.TestCase):
         self.assertGreaterEqual(distribution.normal, 4)
         self.assertGreaterEqual(distribution.challenge, 3)
 
-    def test_listening_phase35_uses_candidate_pool_and_returns_two_distinct_items(self):
+    def test_listening_current_uses_candidate_pool_and_returns_two_distinct_items(self):
         provider = QueueProvider(structured=[listening_candidate_payload()])
         service = ListeningGenerationService(provider, automatic_retries=0)
-        response = asyncio.run(service.generate(listening_phase35_request()))
+        response = asyncio.run(service.generate(listening_current_request()))
         self.assertEqual(2, len(response.items))
-        self.assertEqual("listening-generation-diversity-v2", response.generation_version)
-        self.assertEqual("language-learning-diversity-v1", response.content_diversity_policy_version)
+        self.assertEqual("listening-generation", response.generation_version)
+        self.assertEqual("language-learning-diversity", response.content_diversity_policy_version)
         self.assertNotEqual(response.items[0].content_hash, response.items[1].content_hash)
         self.assertTrue(all(item.diversity_metadata for item in response.items))
 
-    def test_listening_phase35_salvages_invalid_comprehension_focus_candidate(self):
-        request_data = listening_phase35_request().model_dump(by_alias=True, mode="json")
+    def test_listening_current_salvages_invalid_comprehension_focus_candidate(self):
+        request_data = listening_current_request().model_dump(by_alias=True, mode="json")
         request_data["setContext"]["learningMode"] = "COMPREHENSION"
         payload = listening_candidate_payload()
         focuses = ["MAIN_IDEA", "next-action", "GIST", "DETAIL"]
@@ -612,7 +608,7 @@ class Phase35GenerationTest(unittest.TestCase):
             self.assertIn(value, schema_text)
 
 
-class Phase35BenchmarkTest(unittest.TestCase):
+class CurrentBenchmarkTest(unittest.TestCase):
     def test_level_test_human_benchmark_requires_all_segments_to_pass(self):
         samples = [
             LevelTestBenchmarkSample.model_validate(
@@ -649,7 +645,7 @@ class Phase35BenchmarkTest(unittest.TestCase):
         self.assertEqual(1.0, result.agreement_rate)
 
 
-class Phase35LevelTestTest(unittest.TestCase):
+class CurrentLevelTestTest(unittest.TestCase):
     def _service(
         self,
         provider,
@@ -683,8 +679,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertEqual(20, response.total_questions)
         self.assertEqual("VOCABULARY", response.domain.value)
         self.assertIn("ホテル", response.prompt_text)
-        self.assertEqual("level-test-generation-v2", response.generation_version)
-        self.assertEqual("level-test-multiskill-prompt-v9", response.prompt_version)
+        self.assertEqual("level-test-generation", response.generation_version)
+        self.assertEqual("level-test-multiskill-prompt", response.prompt_version)
         self.assertEqual(2, response.complexity_band)
 
     def test_blank_prompt_text_is_not_fabricated_from_generic_instruction(self):
@@ -698,44 +694,6 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertEqual("", normalized["candidates"][0]["promptText"])
         self.assertEqual(0, stats.prompt_text_fallbacks)
 
-    def test_vocab_paraphrase_migrates_legacy_underline_to_structured_emphasis(self):
-        payload = level_generation_payload()
-        for candidate in payload["candidates"]:
-            candidate["itemType"] = "VOCAB_PARAPHRASE_CHOICE"
-            candidate["instruction"] = "밑줄 친 표현과 가장 의미가 가까운 것을 고르세요."
-        payload["candidates"][0]["promptText"] = (
-            '現在の状況を鑑み、<strong>新製品</strong>の発表は一時的に'
-            '<u>見合わせる</u><script>alert(1)</script>ことになりました。'
-        )
-        payload["candidates"][1]["promptText"] = (
-            'ホテルで<u class="target">チェックアウト</u>時間を確認してください。'
-        )
-        provider = QueueProvider(structured=[payload])
-        request = LevelTestQuestionGenerationRequest.model_validate(
-            {
-                "requestId": "level35-vocab-paraphrase",
-                "idempotencyKey": "level35-vocab-paraphrase-idem",
-                "sessionId": 100,
-                "questionNumber": 3,
-                "totalQuestions": 20,
-                "domain": "VOCABULARY",
-                "itemType": "VOCAB_PARAPHRASE_CHOICE",
-                "originLanguage": "ko",
-                "learningLanguage": "ja",
-                "targetComplexityBand": 2,
-            }
-        )
-
-        response = asyncio.run(self._service(provider).generate_question(request))
-
-        self.assertNotIn("<strong>", response.prompt_text)
-        self.assertNotIn("<script>", response.prompt_text)
-        self.assertNotIn("<u class=", response.prompt_text)
-        self.assertNotIn("<u>", response.prompt_text)
-        self.assertNotIn("</u>", response.prompt_text)
-        self.assertIn("見合わせる", response.prompt_text)
-        self.assertEqual("見合わせる", response.reference_payload["emphasisText"])
-
     def test_vocab_paraphrase_without_recoverable_emphasis_is_rejected(self):
         payload = level_generation_payload()
         for candidate in payload["candidates"]:
@@ -746,8 +704,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[copy.deepcopy(payload) for _ in range(3)])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-vocab-paraphrase-bad-markup",
-                "idempotencyKey": "level35-vocab-paraphrase-bad-markup-idem",
+                "requestId": "level-test-vocab-paraphrase-bad-markup",
+                "idempotencyKey": "level-test-vocab-paraphrase-bad-markup-idem",
                 "sessionId": 100,
                 "questionNumber": 3,
                 "totalQuestions": 20,
@@ -795,8 +753,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-reading-gist",
-                "idempotencyKey": "level35-reading-gist-idem",
+                "requestId": "level-test-reading-gist",
+                "idempotencyKey": "level-test-reading-gist-idem",
                 "sessionId": 100,
                 "questionNumber": 7,
                 "totalQuestions": 20,
@@ -839,8 +797,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-reading-instruction",
-                "idempotencyKey": "level35-reading-instruction-idem",
+                "requestId": "level-test-reading-instruction",
+                "idempotencyKey": "level-test-reading-instruction-idem",
                 "sessionId": 100,
                 "questionNumber": 7,
                 "totalQuestions": 20,
@@ -884,8 +842,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-reading-no-underline",
-                "idempotencyKey": "level35-reading-no-underline-idem",
+                "requestId": "level-test-reading-no-underline",
+                "idempotencyKey": "level-test-reading-no-underline-idem",
                 "sessionId": 100,
                 "questionNumber": 8,
                 "totalQuestions": 20,
@@ -933,8 +891,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-order-shuffle",
-                "idempotencyKey": "level35-order-shuffle-idem",
+                "requestId": "level-test-order-shuffle",
+                "idempotencyKey": "level-test-order-shuffle-idem",
                 "sessionId": 100,
                 "questionNumber": 6,
                 "totalQuestions": 20,
@@ -986,8 +944,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-order-key-normalization",
-                "idempotencyKey": "level35-order-key-normalization-idem",
+                "requestId": "level-test-order-key-normalization",
+                "idempotencyKey": "level-test-order-key-normalization-idem",
                 "sessionId": 100,
                 "questionNumber": 6,
                 "totalQuestions": 20,
@@ -1064,7 +1022,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertIn("ホテル", response.prompt_text)
         self.assertEqual(3, len(provider.calls))
         self.assertEqual(
-            "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION",
+            "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION",
             provider.calls[1][0],
         )
         self.assertNotIn("correctOptionKey", provider.calls[1][1])
@@ -1110,27 +1068,6 @@ class Phase35LevelTestTest(unittest.TestCase):
             any("실질적으로 동일한 표현" in reason for reason in raised.exception.detail["reasons"])
         )
 
-    def test_choice_quality_audit_keys_are_remapped_with_provider_option_keys(self):
-        payload = level_generation_payload()
-        for candidate in payload["candidates"]:
-            candidate["options"] = [
-                {"key": "1", "text": "変更したいです"},
-                {"key": "2", "text": "食べたいです"},
-                {"key": "3", "text": "見ました"},
-                {"key": "4", "text": "寝ています"},
-            ]
-            candidate["internalAnswerKey"] = {"correctOptionKey": "1", "correctOrder": []}
-            candidate["choiceQualityAudit"] = {
-                "uniqueCorrectOption": True,
-                "directlyCompatibleOptionKeys": ["1"],
-            }
-        provider = QueueProvider(structured=[payload])
-
-        response = asyncio.run(self._service(provider).generate_question(level_question_request()))
-
-        self.assertEqual("A", response.internal_answer_key.correct_option_key)
-        self.assertEqual(["A", "B", "C", "D"], [option.key for option in response.options])
-
     def test_vocab_context_multistage_design_generate_verify_accepts_without_repair(self):
         generated = staged_vocab_generation_payload()
         generated["candidates"][0]["promptText"] = (
@@ -1164,12 +1101,12 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertEqual("B", response.internal_answer_key.correct_option_key)
         self.assertEqual(3, len(provider.calls))
         self.assertEqual(
-            "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_DESIGN",
+            "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_DESIGN",
             provider.calls[0][0],
         )
-        self.assertEqual("LANGUAGE_LEARNING_LEVEL_TEST_V2_GENERATION", provider.calls[1][0])
+        self.assertEqual("LANGUAGE_LEARNING_LEVEL_TEST_GENERATION", provider.calls[1][0])
         self.assertEqual(
-            "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION",
+            "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION",
             provider.calls[2][0],
         )
         self.assertIn("vocabContextDesigns", provider.calls[1][1])
@@ -1201,7 +1138,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertIn("複数の案を比較", response.prompt_text)
         self.assertEqual(5, len(provider.calls))
         self.assertEqual(
-            "LANGUAGE_LEARNING_LEVEL_TEST_V2_VOCAB_CONTEXT_REPAIR",
+            "LANGUAGE_LEARNING_LEVEL_TEST_VOCAB_CONTEXT_REPAIR",
             provider.calls[3][0],
         )
         self.assertNotIn("correctOptionKey", provider.calls[2][1])
@@ -1239,7 +1176,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertIn("チェックアウト", response.prompt_text)
         self.assertEqual(3, len(provider.calls))
         self.assertEqual(
-            "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION",
+            "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION",
             provider.calls[2][0],
         )
 
@@ -1352,8 +1289,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         )
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-grammar-best",
-                "idempotencyKey": "level35-grammar-best-idem",
+                "requestId": "level-test-grammar-best",
+                "idempotencyKey": "level-test-grammar-best-idem",
                 "sessionId": 100,
                 "questionNumber": 4,
                 "totalQuestions": 20,
@@ -1612,8 +1549,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         uploader = FakePresignedAudioUploader()
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-best",
-                "idempotencyKey": "level35-listening-best-idem",
+                "requestId": "level-test-listening-best",
+                "idempotencyKey": "level-test-listening-best-idem",
                 "sessionId": 100,
                 "questionNumber": 12,
                 "totalQuestions": 20,
@@ -1641,7 +1578,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(response.reference_audio)
-        self.assertEqual(2, sum(call[0] == "LANGUAGE_LEARNING_LEVEL_TEST_V2_CHOICE_VERIFICATION" for call in provider.calls))
+        self.assertEqual(2, sum(call[0] == "LANGUAGE_LEARNING_LEVEL_TEST_CHOICE_VERIFICATION" for call in provider.calls))
         verifier_prompt = provider.calls[1][1]
         self.assertIn(source_text, verifier_prompt)
         self.assertIn('"selectionPolicy":"BEST_ANSWER"', verifier_prompt)
@@ -1654,8 +1591,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         first = level_question_request()
         second = first.model_copy(
             update={
-                "request_id": "level35-q1-second",
-                "idempotency_key": "level35-q1-second-idem",
+                "request_id": "level-test-q1-second",
+                "idempotency_key": "level-test-q1-second-idem",
             }
         )
 
@@ -1729,8 +1666,8 @@ class Phase35LevelTestTest(unittest.TestCase):
     def test_listening_provider_schema_requires_non_nullable_source_text(self):
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-schema",
-                "idempotencyKey": "level35-listening-schema-idem",
+                "requestId": "level-test-listening-schema",
+                "idempotencyKey": "level-test-listening-schema-idem",
                 "sessionId": 100,
                 "questionNumber": 11,
                 "totalQuestions": 20,
@@ -1751,8 +1688,8 @@ class Phase35LevelTestTest(unittest.TestCase):
     def test_writing_translation_provider_schema_requires_source_text(self):
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-writing-translation-schema",
-                "idempotencyKey": "level35-writing-translation-schema-idem",
+                "requestId": "level-test-writing-translation-schema",
+                "idempotencyKey": "level-test-writing-translation-schema-idem",
                 "sessionId": 100,
                 "questionNumber": 15,
                 "totalQuestions": 20,
@@ -1772,8 +1709,8 @@ class Phase35LevelTestTest(unittest.TestCase):
     def test_guided_writing_provider_schema_requires_sufficient_guidance_lists(self):
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-guided-writing-schema",
-                "idempotencyKey": "level35-guided-writing-schema-idem",
+                "requestId": "level-test-guided-writing-schema",
+                "idempotencyKey": "level-test-guided-writing-schema-idem",
                 "sessionId": 100,
                 "questionNumber": 17,
                 "totalQuestions": 20,
@@ -1884,8 +1821,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-script-alias",
-                "idempotencyKey": "level35-listening-script-alias-idem",
+                "requestId": "level-test-listening-script-alias",
+                "idempotencyKey": "level-test-listening-script-alias-idem",
                 "sessionId": 100,
                 "questionNumber": 11,
                 "totalQuestions": 20,
@@ -1919,8 +1856,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-top-level-alias",
-                "idempotencyKey": "level35-listening-top-level-alias-idem",
+                "requestId": "level-test-listening-top-level-alias",
+                "idempotencyKey": "level-test-listening-top-level-alias-idem",
                 "sessionId": 100,
                 "questionNumber": 12,
                 "totalQuestions": 20,
@@ -1952,8 +1889,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[copy.deepcopy(payload) for _ in range(3)])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-source-missing",
-                "idempotencyKey": "level35-listening-source-missing-idem",
+                "requestId": "level-test-listening-source-missing",
+                "idempotencyKey": "level-test-listening-source-missing-idem",
                 "sessionId": 100,
                 "questionNumber": 11,
                 "totalQuestions": 20,
@@ -1994,8 +1931,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-structured-question",
-                "idempotencyKey": "level35-listening-structured-question-idem",
+                "requestId": "level-test-listening-structured-question",
+                "idempotencyKey": "level-test-listening-structured-question-idem",
                 "sessionId": 100,
                 "questionNumber": 11,
                 "totalQuestions": 20,
@@ -2031,8 +1968,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[copy.deepcopy(payload) for _ in range(3)])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-script-leak",
-                "idempotencyKey": "level35-listening-script-leak-idem",
+                "requestId": "level-test-listening-script-leak",
+                "idempotencyKey": "level-test-listening-script-leak-idem",
                 "sessionId": 100,
                 "questionNumber": 11,
                 "totalQuestions": 20,
@@ -2088,8 +2025,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[copy.deepcopy(payload) for _ in range(3)])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-grammar-form-boundary",
-                "idempotencyKey": "level35-grammar-form-boundary-idem",
+                "requestId": "level-test-grammar-form-boundary",
+                "idempotencyKey": "level-test-grammar-form-boundary-idem",
                 "sessionId": 100,
                 "questionNumber": 4,
                 "totalQuestions": 20,
@@ -2154,8 +2091,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-interpretation",
-                "idempotencyKey": "level35-listening-interpretation-idem",
+                "requestId": "level-test-listening-interpretation",
+                "idempotencyKey": "level-test-listening-interpretation-idem",
                 "sessionId": 100,
                 "questionNumber": 14,
                 "totalQuestions": 20,
@@ -2191,8 +2128,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-listening-dictation",
-                "idempotencyKey": "level35-listening-dictation-idem",
+                "requestId": "level-test-listening-dictation",
+                "idempotencyKey": "level-test-listening-dictation-idem",
                 "sessionId": 100,
                 "questionNumber": 13,
                 "totalQuestions": 20,
@@ -2233,8 +2170,8 @@ class Phase35LevelTestTest(unittest.TestCase):
         provider = QueueProvider(structured=[payload])
         request = LevelTestQuestionGenerationRequest.model_validate(
             {
-                "requestId": "level35-q20",
-                "idempotencyKey": "level35-q20-idem",
+                "requestId": "level-test-q20",
+                "idempotencyKey": "level-test-q20-idem",
                 "sessionId": 100,
                 "questionNumber": 20,
                 "totalQuestions": 20,
@@ -2443,7 +2380,7 @@ class Phase35LevelTestTest(unittest.TestCase):
             candidate,
         )
 
-    def test_level_test_recipe_has_exact_phase35_domain_distribution(self):
+    def test_level_test_recipe_has_exact_current_domain_distribution(self):
         self.assertEqual(20, len(LEVEL_TEST_RECIPE))
         self.assertEqual(LevelTestItemType.WRITING_TRANSLATION, LEVEL_TEST_RECIPE[15][1])
         self.assertEqual(LevelTestItemType.WRITING_TRANSLATION, LEVEL_TEST_RECIPE[16][1])
@@ -2487,7 +2424,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertTrue(response.evaluable)
         self.assertEqual(82, response.score)
         self.assertEqual(5, len(response.metrics))
-        self.assertEqual("level-test-evaluation-v2", response.evaluation_version)
+        self.assertEqual("level-test-evaluation", response.evaluation_version)
         forwarded = writing_service.requests[0]
         self.assertEqual("WRITING_SHORT_PARAGRAPH", forwarded.task_type)
         self.assertEqual(request.provided_facts, forwarded.provided_facts)
@@ -2566,7 +2503,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertTrue(response.evaluable)
         self.assertEqual(5, len(response.metrics))
         self.assertEqual("自己紹介をします。東京で働いています。", response.transcript)
-        self.assertEqual("level-test-speaking-eval-v2", response.evaluation_version)
+        self.assertEqual("level-test-speaking-evaluation", response.evaluation_version)
         prompt = provider.calls[-1][1]
         self.assertIn('"providedFacts":["이름과 직업을 말한다"]', prompt)
         self.assertIn('"requiredIntents":["자기소개"]', prompt)
@@ -2660,7 +2597,7 @@ class Phase35LevelTestTest(unittest.TestCase):
         self.assertEqual(10, response.score)
         self.assertEqual(transcript, response.transcript)
         self.assertIsNone(response.reason_code)
-        self.assertEqual("level-test-speaking-eval-v2", response.evaluation_version)
+        self.assertEqual("level-test-speaking-evaluation", response.evaluation_version)
 
 
 if __name__ == "__main__":
@@ -2668,7 +2605,7 @@ if __name__ == "__main__":
 
 
 class LevelTestRouteContractTest(unittest.TestCase):
-    def test_level_test_routes_use_integrated_path_without_v2_segment(self):
+    def test_level_test_routes_use_integrated_path(self):
         import importlib.util
         import sys
         import types
@@ -2713,7 +2650,6 @@ class LevelTestRouteContractTest(unittest.TestCase):
             "/language-learning/level-test/evaluate/speaking",
             paths,
         )
-        self.assertFalse(any("/level-test/v2/" in path for path in paths))
 
 
 class LevelTestDiversityContextContractTest(unittest.TestCase):

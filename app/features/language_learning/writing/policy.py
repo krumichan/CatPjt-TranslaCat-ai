@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 
-EVALUATION_RUBRIC_VERSION = "writing-evaluation-rubric-v1"
-SCORING_POLICY_VERSION = "writing-scoring-policy-v1"
+EVALUATION_RUBRIC_VERSION = "writing-evaluation-rubric"
+SCORING_POLICY_VERSION = "writing-scoring-policy"
 
 SCORING_WEIGHTS: dict[str, Decimal] = {
     "meaning": Decimal("0.30"),

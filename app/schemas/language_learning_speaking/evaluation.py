@@ -60,7 +60,7 @@ class SpeakingEvaluationRequest(CamelCaseModel):
     )
     session_summary: str | None = Field(default=None, max_length=6000)
     prior_profile_summary: LearningProfileSummary | None = None
-    evaluation_policy_version: str = Field(default="speaking-evaluation-policy-v1")
+    evaluation_policy_version: str = Field(default="speaking-evaluation-policy")
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)
 
     @model_validator(mode="after")

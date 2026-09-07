@@ -28,7 +28,6 @@ from app.features.language_learning.writing.policy import (
 )
 from app.features.language_learning.writing.prompts import (
     DAILY_WRITING_GENERATION_PROMPT_VERSION,
-    DAILY_WRITING_GENERATION_V35_PROMPT_VERSION,
     LEVEL_TEST_QUESTION_PROMPT_VERSION,
     WRITING_EVALUATION_PROMPT_VERSION,
     build_daily_writing_generation_prompt,
@@ -143,7 +142,7 @@ _DAILY_WRITING_GENERATION_SCHEMA: dict[str, Any] = {
     "required": ["items"],
 }
 
-_DAILY_WRITING_V35_GENERATION_SCHEMA = copy.deepcopy(_DAILY_WRITING_GENERATION_SCHEMA)
+_DAILY_WRITING_CANDIDATE_SCHEMA = copy.deepcopy(_DAILY_WRITING_GENERATION_SCHEMA)
 
 _BILINGUAL_MESSAGE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -303,33 +302,9 @@ class LanguageLearningWritingService:
         self,
         request: DailyWritingGenerationRequest,
     ) -> DailyWritingGenerationResponse:
-        if (
-            request.content_diversity_policy_version
-            == CONTENT_DIVERSITY_POLICY_VERSION
-        ):
-            return await self._generate_daily_v35(request)
+        return await self._generate_daily_with_diversity(request)
 
-        prompt = build_daily_writing_generation_prompt(request)
-
-        payload = await self._call_and_validate(
-            request_id=request.request_id,
-            operation="daily writing generation",
-            type_name="LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
-            prompt=prompt,
-            schema=_DAILY_WRITING_GENERATION_SCHEMA,
-            model_type=_DailyWritingPayload,
-            timeout_seconds=self.generation_timeout_seconds,
-            max_retries=self.generation_max_retries,
-            post_validate=lambda value: self._validate_daily_items(request, value.items),
-        )
-
-        return DailyWritingGenerationResponse(
-            request_id=request.request_id,
-            prompt_version=DAILY_WRITING_GENERATION_PROMPT_VERSION,
-            items=payload.items,
-        )
-
-    async def _generate_daily_v35(
+    async def _generate_daily_with_diversity(
         self,
         request: DailyWritingGenerationRequest,
     ) -> DailyWritingGenerationResponse:
@@ -408,10 +383,10 @@ class LanguageLearningWritingService:
                 difficulty = candidate.difficulty.value
                 if remaining.get(difficulty, 0) <= 0:
                     continue
-                rejection_reason = self._phase35_daily_candidate_rejection_reason(request, candidate)
+                rejection_reason = self._daily_candidate_rejection_reason(request, candidate)
                 if rejection_reason is not None:
                     logger.info(
-                        "Phase 3.5 daily writing candidate rejected by deterministic contract. request_id=%s attempt=%d/3 reason=%s difficulty=%s",
+                        "daily writing candidate rejected by deterministic contract. request_id=%s attempt=%d/3 reason=%s difficulty=%s",
                         request.request_id,
                         provider_attempt + 1,
                         rejection_reason,
@@ -447,7 +422,7 @@ class LanguageLearningWritingService:
                 difficulty = candidate.difficulty.value
                 if remaining.get(difficulty, 0) <= 0:
                     continue
-                if self._phase35_daily_candidate_rejection_reason(request, candidate) is not None:
+                if self._daily_candidate_rejection_reason(request, candidate) is not None:
                     continue
                 assert candidate.diversity_metadata is not None
                 decision = validator.validate(
@@ -485,7 +460,7 @@ class LanguageLearningWritingService:
         self._validate_daily_items(request, ordered)
         return DailyWritingGenerationResponse(
             request_id=request.request_id,
-            prompt_version=DAILY_WRITING_GENERATION_V35_PROMPT_VERSION,
+            prompt_version=DAILY_WRITING_GENERATION_PROMPT_VERSION,
             items=ordered,
             content_diversity_policy_version=CONTENT_DIVERSITY_POLICY_VERSION,
             language_complexity_policy_version=LANGUAGE_COMPLEXITY_POLICY_VERSION,
@@ -507,7 +482,7 @@ class LanguageLearningWritingService:
         *,
         provider_attempt: int,
     ) -> _DailyWritingPayload:
-        """Generate one Phase 3.5 candidate batch and salvage valid siblings.
+        """Generate one candidate batch and salvage valid siblings.
 
         OpenAI structured output can occasionally violate one nested candidate even
         when other candidates are usable.  Rejecting the entire response multiplies
@@ -522,14 +497,14 @@ class LanguageLearningWritingService:
                 self.provider.call(
                     type_name="LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
                     data=prompt,
-                    schema=_DAILY_WRITING_V35_GENERATION_SCHEMA,
+                    schema=_DAILY_WRITING_CANDIDATE_SCHEMA,
                 ),
                 timeout=self.generation_timeout_seconds,
             )
         except (TimeoutError, asyncio.TimeoutError) as exc:
             if provider_attempt < 2:
                 logger.warning(
-                    "Phase 3.5 daily writing generation timed out. request_id=%s attempt=%d/3",
+                    "daily writing generation timed out. request_id=%s attempt=%d/3",
                     request.request_id,
                     provider_attempt + 1,
                 )
@@ -545,7 +520,7 @@ class LanguageLearningWritingService:
             retryable_output_failure = isinstance(exc, ValueError)
             if (status in {408, 409, 429, 500, 502, 503, 504} or retryable_output_failure) and provider_attempt < 2:
                 logger.warning(
-                    "Phase 3.5 daily writing transient provider failure. request_id=%s attempt=%d/3 errorType=%s",
+                    "daily writing transient provider failure. request_id=%s attempt=%d/3 errorType=%s",
                     request.request_id,
                     provider_attempt + 1,
                     type(exc).__name__,
@@ -558,7 +533,7 @@ class LanguageLearningWritingService:
 
         if not isinstance(result, dict):
             logger.warning(
-                "Phase 3.5 daily writing response is not an object. request_id=%s attempt=%d/3 dataType=%s",
+                "daily writing response is not an object. request_id=%s attempt=%d/3 dataType=%s",
                 request.request_id,
                 provider_attempt + 1,
                 type(result).__name__,
@@ -567,7 +542,7 @@ class LanguageLearningWritingService:
         raw_items = result.get("items")
         if not isinstance(raw_items, list):
             logger.warning(
-                "Phase 3.5 daily writing response items missing. request_id=%s attempt=%d/3",
+                "daily writing response items missing. request_id=%s attempt=%d/3",
                 request.request_id,
                 provider_attempt + 1,
             )
@@ -579,7 +554,7 @@ class LanguageLearningWritingService:
             if not isinstance(raw_item, dict):
                 rejected_reasons.append(f"items.{index}:not_object")
                 continue
-            contract_reason = self._phase35_raw_candidate_contract_reason(raw_item)
+            contract_reason = self._raw_candidate_contract_reason(raw_item)
             if contract_reason is not None:
                 rejected_reasons.append(f"items.{index}:{contract_reason}")
                 continue
@@ -596,7 +571,7 @@ class LanguageLearningWritingService:
         if rejected_reasons:
             log = logger.info if valid_items else logger.warning
             log(
-                "Phase 3.5 daily writing candidate schema salvage. request_id=%s attempt=%d/3 validCandidates=%d rejectedCandidates=%d reasons=%s",
+                "daily writing candidate schema salvage. request_id=%s attempt=%d/3 validCandidates=%d rejectedCandidates=%d reasons=%s",
                 request.request_id,
                 provider_attempt + 1,
                 len(valid_items),
@@ -604,7 +579,7 @@ class LanguageLearningWritingService:
                 rejected_reasons[:12],
             )
         logger.info(
-            "Phase 3.5 daily writing candidate batch completed. request_id=%s attempt=%d/3 candidates=%d latency_ms=%d",
+            "daily writing candidate batch completed. request_id=%s attempt=%d/3 candidates=%d latency_ms=%d",
             request.request_id,
             provider_attempt + 1,
             len(valid_items),
@@ -613,7 +588,7 @@ class LanguageLearningWritingService:
         return _DailyWritingPayload(items=valid_items)
 
     @staticmethod
-    def _phase35_raw_candidate_contract_reason(item: dict[str, Any]) -> str | None:
+    def _raw_candidate_contract_reason(item: dict[str, Any]) -> str | None:
         if item.get("languageComplexityBand") is None and item.get("language_complexity_band") is None:
             return "languageComplexityBand:missing"
         diversity = item.get("diversityMetadata", item.get("diversity_metadata"))
@@ -701,7 +676,7 @@ class LanguageLearningWritingService:
         )
 
     @staticmethod
-    def _phase35_daily_candidate_rejection_reason(
+    def _daily_candidate_rejection_reason(
         request: DailyWritingGenerationRequest,
         item: DailyWritingItem,
     ) -> str | None:
@@ -770,12 +745,12 @@ class LanguageLearningWritingService:
         ]
 
     @staticmethod
-    def _valid_phase35_daily_candidate(
+    def _valid_daily_candidate(
         request: DailyWritingGenerationRequest,
         item: DailyWritingItem,
     ) -> bool:
         return (
-            LanguageLearningWritingService._phase35_daily_candidate_rejection_reason(
+            LanguageLearningWritingService._daily_candidate_rejection_reason(
                 request, item
             )
             is None

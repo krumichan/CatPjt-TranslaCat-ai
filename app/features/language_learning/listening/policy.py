@@ -20,23 +20,21 @@ from app.schemas.language_learning_listening import (
     SummaryMetricType,
 )
 
-LISTENING_GENERATION_VERSION = "listening-generation-v1"
-LISTENING_GENERATION_PROMPT_VERSION = "listening-generation-prompt-v1"
-LISTENING_GENERATION_V35_VERSION = "listening-generation-diversity-v2"
-LISTENING_GENERATION_V35_PROMPT_VERSION = "listening-generation-diversity-v2"
-LISTENING_TTS_VERSION = "listening-tts-v1"
-LISTENING_NORMALIZATION_VERSION = "listening-normalization-v1"
-LISTENING_ALIGNMENT_VERSION = "listening-alignment-v1"
-LISTENING_EVALUATION_VERSION = "listening-eval-v1"
-LISTENING_SCORING_POLICY_VERSION = "listening-scoring-v1-half-up"
-LISTENING_PROFILE_POLICY_VERSION = "listening-profile-v1"
-LISTENING_INTERPRETATION_PROMPT_VERSION = "listening-interpretation-prompt-v4"
-LISTENING_SUMMARY_PROMPT_VERSION = "listening-summary-prompt-v1"
-LISTENING_REPEAT_EVALUATOR_VERSION = "listening-repeat-acoustic-v1"
-LISTENING_EXPLANATION_VERSION = "listening-explanation-v1"
-LISTENING_EXPLANATION_PROMPT_VERSION = "listening-explanation-prompt-v1"
-LISTENING_AUDIO_NORMALIZATION_VERSION = "listening-audio-normalization-v1"
-LISTENING_STT_HINT_VERSION = "listening-stt-hint-v1"
+LISTENING_GENERATION_VERSION = "listening-generation"
+LISTENING_GENERATION_PROMPT_VERSION = "listening-generation-prompt"
+LISTENING_TTS_VERSION = "listening-tts"
+LISTENING_NORMALIZATION_VERSION = "listening-normalization"
+LISTENING_ALIGNMENT_VERSION = "listening-alignment"
+LISTENING_EVALUATION_VERSION = "listening-evaluation"
+LISTENING_SCORING_POLICY_VERSION = "listening-scoring-half-up"
+LISTENING_PROFILE_POLICY_VERSION = "listening-profile"
+LISTENING_INTERPRETATION_PROMPT_VERSION = "listening-interpretation-prompt"
+LISTENING_SUMMARY_PROMPT_VERSION = "listening-summary-prompt"
+LISTENING_REPEAT_EVALUATOR_VERSION = "listening-repeat-acoustic"
+LISTENING_EXPLANATION_VERSION = "listening-explanation"
+LISTENING_EXPLANATION_PROMPT_VERSION = "listening-explanation-prompt"
+LISTENING_AUDIO_NORMALIZATION_VERSION = "listening-audio-normalization"
+LISTENING_STT_HINT_VERSION = "listening-stt-hint"
 
 CONFIDENCE_THRESHOLD = settings.AI_LISTENING_EVALUATION_CONFIDENCE_THRESHOLD
 

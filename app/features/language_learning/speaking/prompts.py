@@ -176,7 +176,7 @@ def build_evaluation_prompt(request: SpeakingEvaluationRequest) -> str:
         "Evaluate this speaking evidence using the required eight metrics. "
         "When evaluationScope=READ_ALOUD_PROBLEM, compare the repeated attempts for the same script "
         "and prioritize pronunciation, fluency, and script accuracy consistency.\n"
-        "Do not calculate the final overall score; the server applies the versioned scoring policy.\n\n"
+        "Do not calculate the final overall score; the server applies the server scoring policy.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 
