@@ -342,9 +342,27 @@ class ReadingVocabularyGenerationService:
         if request.domain != PracticeDomain.READING:
             return {}
 
-        passages: dict[str, str] = {}
-        for passage_number in (1, 2):
+        passages = {
+            question.passage_id: question.passage_text
+            for question in request.previous_questions
+            if question.passage_id and question.passage_text
+        }
+        required_passages = {
+            1 if index <= 3 else 2
+            for index in range(
+                request.question_offset + 1,
+                request.question_offset + request.question_count + 1,
+            )
+        }
+        for passage_number in sorted(required_passages):
             passage_id = f"p{passage_number}"
+            if passage_id in passages:
+                self._assert_language_lane(
+                    request.learning_language,
+                    [passages[passage_id]],
+                    reason="Reading passage is not in learningLanguage",
+                )
+                continue
             last_error: Exception | None = None
             for attempt in range(1, _MAX_PASSAGE_ATTEMPTS + 1):
                 try:
@@ -408,8 +426,17 @@ class ReadingVocabularyGenerationService:
     ) -> list[PracticeReviewTarget]:
         if request.domain != PracticeDomain.VOCABULARY:
             return []
+        committed_keys = {question.canonical_key for question in request.previous_questions}
+        committed_expressions = {
+            self._normalize_for_leak_check(question.target_expression or "")
+            for question in request.previous_questions
+        }
         eligible = []
         for target in request.review_targets:
+            if target.canonical_key in committed_keys or self._normalize_for_leak_check(
+                target.expression
+            ) in committed_expressions:
+                continue
             try:
                 self._assert_vocabulary_surface_language(
                     request.learning_language,
@@ -467,9 +494,11 @@ class ReadingVocabularyGenerationService:
                     order=index,
                     difficulty=difficulty,
                     complexity_band=self._band_for(request, difficulty),
-                    skill_tag=skill_cycle[index - 1],
-                    passage_id="p1" if index <= 3 else "p2",
-                    passage_text=passages["p1" if index <= 3 else "p2"],
+                    skill_tag=skill_cycle[request.question_offset + index - 1],
+                    passage_id="p1" if request.question_offset + index <= 3 else "p2",
+                    passage_text=passages[
+                        "p1" if request.question_offset + index <= 3 else "p2"
+                    ],
                 )
                 for index, difficulty in enumerate(difficulties, 1)
             ]
@@ -499,16 +528,17 @@ class ReadingVocabularyGenerationService:
         review_targets = list(eligible_review_targets[: request.review_question_count])
         slots: list[_QuestionSlot] = []
         for index, difficulty in enumerate(difficulties, 1):
+            global_index = request.question_offset + index
             review = review_targets[index - 1] if index <= len(review_targets) else None
             slots.append(
                 _QuestionSlot(
                     order=index,
                     difficulty=difficulty,
                     complexity_band=self._band_for(request, difficulty),
-                    skill_tag=skill_cycle[(index - 1) % len(skill_cycle)],
+                    skill_tag=skill_cycle[(global_index - 1) % len(skill_cycle)],
                     question_type=(
                         PracticeQuestionType.ORDERING
-                        if index in ordering_orders
+                        if global_index in ordering_orders
                         else PracticeQuestionType.SINGLE_CHOICE
                     ),
                     review_canonical_key=review.canonical_key if review else None,
@@ -517,7 +547,7 @@ class ReadingVocabularyGenerationService:
                         item.value for item in (review.previous_question_types if review else [])
                     ),
                     usage_intent=(
-                        self._usage_intent_for_skill(skill_cycle[(index - 1) % len(skill_cycle)])
+                        self._usage_intent_for_skill(skill_cycle[(global_index - 1) % len(skill_cycle)])
                         if request.mode == VocabularyMode.USAGE_DISTINCTION.value
                         else None
                     ),
@@ -1010,7 +1040,7 @@ class ReadingVocabularyGenerationService:
         excluded_keys = sorted(
             {
                 question.canonical_key
-                for question in accepted.values()
+                for question in [*request.previous_questions, *accepted.values()]
                 if question.canonical_key
             }
             | {target.canonical_key for target in request.review_targets}
@@ -1018,7 +1048,7 @@ class ReadingVocabularyGenerationService:
         excluded_target_expressions = sorted(
             {
                 question.target_expression.strip()
-                for question in accepted.values()
+                for question in [*request.previous_questions, *accepted.values()]
                 if question.target_expression and question.target_expression.strip()
             }
             | {
@@ -1462,7 +1492,7 @@ class ReadingVocabularyGenerationService:
 
         accepted_keys = {
             item.canonical_key for item in accepted.values() if item.canonical_key and item.order != question.order
-        }
+        } | {item.canonical_key for item in request.previous_questions if item.canonical_key}
         if question.canonical_key in accepted_keys:
             raise ValueError("vocabulary canonicalKey duplicates an accepted slot")
 
@@ -1471,6 +1501,10 @@ class ReadingVocabularyGenerationService:
             self._normalize_for_leak_check(item.target_expression or "")
             for item in accepted.values()
             if item.order != question.order and item.target_expression
+        } | {
+            self._normalize_for_leak_check(item.target_expression)
+            for item in request.previous_questions
+            if item.target_expression
         }
         if normalized_target and normalized_target in accepted_targets:
             raise ValueError("vocabulary targetExpression duplicates an accepted slot")
@@ -1997,16 +2031,23 @@ class ReadingVocabularyGenerationService:
 
         if request.domain == PracticeDomain.READING:
             passage_text_by_id: dict[str, str] = {}
-            for question in questions:
+            for question in [*request.previous_questions, *questions]:
                 assert question.passage_id is not None
                 assert question.passage_text is not None
                 previous = passage_text_by_id.setdefault(question.passage_id, question.passage_text)
                 if previous != question.passage_text:
                     raise ValueError("same passageId must reuse identical passageText")
-            if set(passage_text_by_id) != {"p1", "p2"}:
-                raise ValueError("reading set must use planned p1/p2 passages")
+            expected_passages = (
+                {"p1", "p2"}
+                if request.question_offset + request.question_count > 3
+                else {"p1"}
+            )
+            if set(passage_text_by_id) != expected_passages:
+                raise ValueError("reading set must use planned passages")
         else:
-            canonical_keys = [q.canonical_key for q in questions]
+            canonical_keys = [
+                q.canonical_key for q in [*request.previous_questions, *questions]
+            ]
             if len(canonical_keys) != len(set(canonical_keys)):
                 raise ValueError("vocabulary set must use unique canonicalKey values")
             review_count = sum(1 for q in questions if q.review_target)
@@ -2024,8 +2065,15 @@ class ReadingVocabularyGenerationService:
                 ordering_count = sum(
                     1 for q in questions if q.question_type == PracticeQuestionType.ORDERING
                 )
-                if ordering_count < 4:
-                    raise ValueError("composition requires at least four ordering questions")
+                expected_ordering_count = sum(
+                    index in {1, 3, 6, 8}
+                    for index in range(
+                        request.question_offset + 1,
+                        request.question_offset + request.question_count + 1,
+                    )
+                )
+                if ordering_count < expected_ordering_count:
+                    raise ValueError("composition requires its planned ordering questions")
 
     @staticmethod
     def _assert_language_lane(

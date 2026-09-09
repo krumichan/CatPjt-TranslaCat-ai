@@ -540,6 +540,87 @@ class CurrentQualityPolicyTest(unittest.TestCase):
 
 
 class CurrentGenerationTest(unittest.TestCase):
+    def test_progressive_writing_generates_one_local_item_and_honors_committed_history(self):
+        for writing_type in ("TRANSLATION", "GUIDED", "FREE"):
+            with self.subTest(writing_type=writing_type):
+                request_data = writing_current_request().model_dump(by_alias=True, mode="json")
+                request_data.update(
+                    sentenceCount=1,
+                    difficultyDistribution={"review": 0, "normal": 1, "challenge": 0},
+                    writingType=writing_type,
+                )
+                payload = writing_candidate_payload()
+                if writing_type == "GUIDED":
+                    for candidate in payload["items"]:
+                        candidate.update(
+                            providedFacts=["회의는 금요일 오후 세 시입니다."],
+                            requiredIntents=["참석 가능 여부를 답하세요."],
+                            responseConstraints=["정중한 일본어 두 문장으로 작성하세요."],
+                        )
+                request_data["diversityContext"] = {
+                    "currentSession": [{
+                        "sourceType": "WRITING",
+                        "content": payload["items"][0]["originText"],
+                    }]
+                }
+                provider = QueueProvider(plain=[payload])
+                response = asyncio.run(LanguageLearningWritingService(provider).generate_daily(
+                    DailyWritingGenerationRequest.model_validate(request_data)
+                ))
+                self.assertEqual(1, len(response.items))
+                self.assertEqual(1, response.items[0].order)
+                self.assertEqual(payload["items"][1]["originText"], response.items[0].origin_text)
+                self.assertEqual(1, len(provider.calls))
+
+    def test_progressive_listening_uses_existing_item_count_and_per_slot_idempotency(self):
+        for learning_mode in ("DICTATION", "COMPREHENSION", "SUMMARY"):
+            with self.subTest(learning_mode=learning_mode):
+                request_data = listening_current_request().model_dump(by_alias=True, mode="json")
+                request_data["setContext"].update(itemCount=1, learningMode=learning_mode)
+                payload = listening_candidate_payload()
+                for candidate in payload["items"]:
+                    if learning_mode == "COMPREHENSION":
+                        candidate.update(
+                            question="話者について最も適切な説明はどれですか。",
+                            options=[
+                                {"key": "A", "text": "予定について案内しています。"},
+                                {"key": "B", "text": "商品を注文しています。"},
+                                {"key": "C", "text": "会議を中止しています。"},
+                                {"key": "D", "text": "休暇を申請しています。"},
+                            ],
+                            correctOptionKey="A",
+                            comprehensionFocus="GIST",
+                        )
+                    elif learning_mode == "SUMMARY":
+                        candidate["summaryKeyPoints"] = candidate["keyMeaningUnits"][:2]
+                provider = QueueProvider(structured=[payload, payload])
+                service = ListeningGenerationService(provider)
+                first_request = ListeningSetGenerationRequest.model_validate(request_data)
+
+                async def generate_slots():
+                    first = await service.generate(first_request)
+                    replay = await service.generate(first_request)
+                    self.assertEqual(first.items, replay.items)
+                    self.assertEqual(1, len(provider.calls))
+                    second_data = first_request.model_dump(by_alias=True, mode="json")
+                    second_data.update(requestId="listening-slot-2", idempotencyKey="listening-slot-2")
+                    second_data["diversityContext"] = {
+                        "currentSession": [{
+                            "sourceType": "LISTENING",
+                            "content": first.items[0].source_text,
+                            "contentHash": first.items[0].content_hash,
+                        }]
+                    }
+                    second = await service.generate(ListeningSetGenerationRequest.model_validate(second_data))
+                    return first, second
+
+                first, second = asyncio.run(generate_slots())
+                self.assertEqual([1], [item.item_index for item in first.items])
+                self.assertEqual([1], [item.item_index for item in second.items])
+                self.assertNotEqual(first.items[0].content_hash, second.items[0].content_hash)
+                self.assertEqual(2, len(provider.calls))
+                self.assertNotIn("startItemIndex", first_request.model_dump(by_alias=True))
+
     def test_writing_current_returns_diversity_metadata_and_exact_distribution(self):
         provider = QueueProvider(plain=[writing_candidate_payload()])
         service = LanguageLearningWritingService(provider=provider)

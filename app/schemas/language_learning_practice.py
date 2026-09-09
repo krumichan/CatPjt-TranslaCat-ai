@@ -97,6 +97,19 @@ class PracticeGenerationRequest(CamelCaseModel):
     review_targets: list[PracticeReviewTarget] = Field(default_factory=list, max_length=30)
     review_question_count: int = Field(default=0, ge=0, le=20)
     generation_date: date
+    previous_questions: list[PracticeGeneratedQuestion] = Field(
+        default_factory=list,
+        max_length=9,
+        description=(
+            "Previously committed questions in global order. For single-question requests, "
+            "this prefix preserves the daily skill plan, passages and vocabulary uniqueness. "
+            "The generated response still uses local order starting at 1."
+        ),
+    )
+
+    @property
+    def question_offset(self) -> int:
+        return len(self.previous_questions)
 
     @model_validator(mode="after")
     def validate_contract(self) -> "PracticeGenerationRequest":
@@ -104,14 +117,37 @@ class PracticeGenerationRequest(CamelCaseModel):
             raise ValueError("difficulty mix must equal questionCount")
         if self.domain == PracticeDomain.READING:
             ReadingMode(self.mode)
-            if self.question_count != 5:
-                raise ValueError("Reading questionCount must be 5")
+            if self.question_count not in (1, 5):
+                raise ValueError("Reading questionCount must be 1 or 5")
+            target_count = 5
         else:
             VocabularyMode(self.mode)
-            if self.question_count != 10:
-                raise ValueError("Vocabulary questionCount must be 10")
+            if self.question_count not in (1, 10):
+                raise ValueError("Vocabulary questionCount must be 1 or 10")
+            target_count = 10
             if self.review_question_count > min(self.question_count, len(self.review_targets)):
                 raise ValueError("reviewQuestionCount exceeds available reviewTargets")
+        if self.previous_questions and self.question_count != 1:
+            raise ValueError("previousQuestions requires single-question generation")
+        if self.question_offset + self.question_count > target_count:
+            raise ValueError("previousQuestions exceeds the daily question target")
+        if [question.order for question in self.previous_questions] != list(
+            range(1, self.question_offset + 1)
+        ):
+            raise ValueError("previousQuestions must be a contiguous global-order prefix")
+        if self.domain == PracticeDomain.READING:
+            passages: dict[str, str] = {}
+            for question in self.previous_questions:
+                expected_passage = "p1" if question.order <= 3 else "p2"
+                if question.passage_id != expected_passage or not question.passage_text:
+                    raise ValueError("previousQuestions must retain the planned Reading passages")
+                if passages.setdefault(expected_passage, question.passage_text) != question.passage_text:
+                    raise ValueError("previousQuestions must reuse identical passageText")
+        elif any(
+            not question.canonical_key or not question.target_expression
+            for question in self.previous_questions
+        ):
+            raise ValueError("previousQuestions requires vocabulary identities")
         return self
 
 

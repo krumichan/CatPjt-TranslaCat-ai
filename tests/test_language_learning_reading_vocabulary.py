@@ -3,6 +3,8 @@ import re
 from collections import Counter, defaultdict
 
 import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.features.language_learning.reading_vocabulary.service import ReadingVocabularyGenerationService
 from app.schemas.language_learning_practice import PracticeGeneratedQuestion, PracticeGenerationRequest
@@ -341,6 +343,217 @@ def _vocab_request(**kwargs):
         challenge=kwargs.pop("challenge", 2),
         **kwargs,
     )
+
+
+class ProgressiveProvider(PipelineProvider):
+    """Use distinct vocabulary for successive calls while returning local order 1."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.generation_payloads = []
+
+    def _candidate(self, payload, slot):
+        self.generation_payloads.append(payload)
+        global_order = len(payload["previousQuestions"]) + slot["order"]
+        candidate = super()._candidate(payload, {**slot, "order": global_order})
+        candidate["order"] = slot["order"]
+        return candidate
+
+
+def _single_request(base, previous=(), **updates):
+    payload = base.model_dump(mode="json", by_alias=True)
+    payload.update(
+        requestId=f"progressive-{len(previous) + 1}",
+        questionCount=1,
+        easierCount=0,
+        currentCount=1,
+        challengeCount=0,
+        previousQuestions=[question.model_dump(mode="json", by_alias=True) for question in previous],
+    )
+    payload.update(updates)
+    return PracticeGenerationRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["COMPREHENSION", "STRUCTURE", "CONTEXT_INFERENCE"])
+async def test_progressive_reading_reuses_passages_and_continues_global_skill_plan(mode):
+    provider = ProgressiveProvider()
+    service = ReadingVocabularyGenerationService(provider)
+    base = _request(mode=mode)
+    expected = service._build_slots(base, {"p1": "仮の本文です。", "p2": "別の本文です。"})
+    previous = []
+
+    for global_order in range(1, 6):
+        response = await service.generate(_single_request(base, previous))
+        assert len(response.questions) == 1
+        question = response.questions[0]
+        assert question.order == 1
+        assert question.passage_id == expected[global_order - 1].passage_id
+        assert question.skill_tag == expected[global_order - 1].skill_tag
+        assert provider.calls[service.PASSAGE_TYPE_NAME] == (1 if global_order <= 3 else 2)
+        previous.append(question.model_copy(update={"order": global_order}))
+
+    assert provider.calls[service.TYPE_NAME] == 5
+    assert provider.calls[service.VERIFICATION_TYPE_NAME] == 5
+    assert provider.calls[service.ORIGIN_EXPLANATION_TYPE_NAME] == 5
+    assert previous[0].passage_text == previous[2].passage_text
+    assert previous[3].passage_text == previous[4].passage_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["MEANING_RELATION", "USAGE_DISTINCTION", "COMPOSITION"])
+async def test_progressive_vocabulary_preserves_skill_cycle_ordering_and_uniqueness(mode):
+    provider = ProgressiveProvider()
+    service = ReadingVocabularyGenerationService(provider)
+    base = _vocab_request(mode=mode)
+    expected = service._build_slots(base, {})
+    previous = []
+
+    for global_order in range(1, 11):
+        response = await service.generate(_single_request(base, previous))
+        assert len(response.questions) == 1
+        question = response.questions[0]
+        assert question.order == 1
+        assert question.question_type == expected[global_order - 1].question_type
+        assert question.skill_tag == expected[global_order - 1].skill_tag
+        payload = provider.generation_payloads[-1]
+        assert {q.canonical_key for q in previous} <= set(payload["excludedCanonicalKeys"])
+        assert {q.target_expression for q in previous} <= set(payload["excludedTargetExpressions"])
+        previous.append(question.model_copy(update={"order": global_order}))
+
+    assert len({q.canonical_key for q in previous}) == 10
+    assert len({q.target_expression for q in previous}) == 10
+    assert provider.calls[service.TYPE_NAME] == 10
+    assert provider.calls[service.ORIGIN_EXPLANATION_TYPE_NAME] == 10
+    for payload in provider.verification_payloads + provider.prescreen_payloads:
+        assert "previousQuestions" not in payload
+        for question in payload["questions"]:
+            assert "targetExpression" not in question
+            assert "correctAnswer" not in question
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duplicate_field", ["canonicalKey", "targetExpression"])
+async def test_progressive_vocabulary_rejects_identity_from_previous_request(duplicate_field):
+    base = _vocab_request()
+    first = (await ReadingVocabularyGenerationService(ProgressiveProvider()).generate(
+        _single_request(base)
+    )).questions[0]
+
+    class DuplicatePreviousProvider(ProgressiveProvider):
+        def _candidate(self, payload, slot):
+            candidate = super()._candidate(payload, slot)
+            if len(self.generation_payloads) == 1:
+                candidate[duplicate_field] = first.model_dump(by_alias=True)[duplicate_field]
+            return candidate
+
+    provider = DuplicatePreviousProvider()
+    response = await ReadingVocabularyGenerationService(provider).generate(
+        _single_request(base, [first])
+    )
+    assert provider.calls[ReadingVocabularyGenerationService.TYPE_NAME] == 2
+    assert response.questions[0].canonical_key != first.canonical_key
+    assert response.questions[0].target_expression != first.target_expression
+
+
+@pytest.mark.asyncio
+async def test_progressive_reading_failed_slot_can_resume_without_regenerating_previous_passage():
+    base = _request()
+    service = ReadingVocabularyGenerationService(ProgressiveProvider())
+    previous = []
+    for order in (1, 2):
+        question = (await service.generate(_single_request(base, previous))).questions[0]
+        previous.append(question.model_copy(update={"order": order}))
+    snapshot = [question.model_dump() for question in previous]
+    failing = ProgressiveProvider(candidate_reject_rounds_by_order={3: 20})
+    with pytest.raises(HTTPException) as error:
+        await ReadingVocabularyGenerationService(failing).generate(_single_request(base, previous))
+    assert error.value.status_code == 502
+    assert [question.model_dump() for question in previous] == snapshot
+    assert failing.calls[service.PASSAGE_TYPE_NAME] == 0
+
+    resumed = ProgressiveProvider()
+    response = await ReadingVocabularyGenerationService(resumed).generate(
+        _single_request(base, previous)
+    )
+    assert response.questions[0].passage_text == previous[0].passage_text
+    assert resumed.calls[service.PASSAGE_TYPE_NAME] == 0
+    assert resumed.calls[service.TYPE_NAME] == 1
+
+
+@pytest.mark.asyncio
+async def test_progressive_vocabulary_review_slot_retains_bound_identity():
+    base = _vocab_request(mode="USAGE_DISTINCTION")
+    service = ReadingVocabularyGenerationService(ProgressiveProvider())
+    previous = (await service.generate(_single_request(base))).questions
+    request = _single_request(
+        base,
+        previous,
+        reviewTargets=[{"canonicalKey": "ja-確認", "expression": "確認"}],
+        reviewQuestionCount=1,
+    )
+    question = (await service.generate(request)).questions[0]
+    assert question.order == 1
+    assert question.skill_tag == "COLLOCATION"
+    assert question.review_target
+    assert question.canonical_key == "ja-確認"
+    assert question.target_expression == "確認"
+
+
+@pytest.mark.asyncio
+async def test_progressive_review_planning_skips_committed_and_invalid_review_targets():
+    base = _vocab_request(mode="USAGE_DISTINCTION")
+    service = ReadingVocabularyGenerationService(ProgressiveProvider())
+    first = (await service.generate(_single_request(
+        base,
+        reviewTargets=[{"canonicalKey": "ja-確認", "expression": "確認"}],
+        reviewQuestionCount=1,
+    ))).questions[0]
+    request = _single_request(
+        base,
+        [first],
+        reviewTargets=[
+            {"canonicalKey": "deployment", "expression": "deployment"},
+            {"canonicalKey": "ja-確認", "expression": "確認"},
+            {"canonicalKey": "ja-連絡", "expression": "連絡"},
+        ],
+        reviewQuestionCount=1,
+    )
+    question = (await service.generate(request)).questions[0]
+    assert question.review_target
+    assert question.canonical_key == "ja-連絡"
+    assert question.target_expression == "連絡"
+
+
+@pytest.mark.asyncio
+async def test_progressive_contract_rejects_non_contiguous_or_overflowing_prefix():
+    base = _request()
+    first = (await ReadingVocabularyGenerationService(ProgressiveProvider()).generate(
+        _single_request(base)
+    )).questions[0]
+    for previous in (
+        [first.model_copy(update={"order": 2})],
+        [first, first],
+        [first.model_copy(update={"order": index}) for index in range(1, 6)],
+    ):
+        with pytest.raises(ValidationError):
+            _single_request(base, previous)
+
+    with pytest.raises(ValidationError, match="single-question"):
+        _single_request(base, [first], questionCount=5, currentCount=5)
+    with pytest.raises(ValidationError, match="planned Reading passages"):
+        _single_request(base, [first.model_copy(update={"passage_id": "p2"})])
+
+
+@pytest.mark.asyncio
+async def test_progressive_reading_contract_rejects_conflicting_committed_passages():
+    base = _request()
+    first = (await ReadingVocabularyGenerationService(ProgressiveProvider()).generate(
+        _single_request(base)
+    )).questions[0]
+    second = first.model_copy(update={"order": 2, "passage_text": "異なる内容です。"})
+    with pytest.raises(ValidationError, match="identical passageText"):
+        _single_request(base, [first, second])
 
 
 @pytest.mark.asyncio
