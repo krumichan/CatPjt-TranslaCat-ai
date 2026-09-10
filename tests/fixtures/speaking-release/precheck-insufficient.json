@@ -1,0 +1,186 @@
+{
+  "request": {
+    "requestId": "eval-1",
+    "idempotencyKey": "eval-idem-1",
+    "sessionId": "session-1",
+    "topic": "일상",
+    "practiceMode": "FREE",
+    "evaluationScope": "SESSION",
+    "goal": null,
+    "targetLevel": "A2",
+    "originLanguage": "ko",
+    "learningLanguage": "ja",
+    "userTurns": [
+      {
+        "turnId": "turn-1",
+        "turnIndex": 1,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.2,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.2
+          }
+        ],
+        "audioReference": "audio-1",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-2",
+        "turnIndex": 2,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.2,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.2
+          }
+        ],
+        "audioReference": "audio-2",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-3",
+        "turnIndex": 3,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.2,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.2
+          }
+        ],
+        "audioReference": "audio-3",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-4",
+        "turnIndex": 4,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.2,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.2
+          }
+        ],
+        "audioReference": "audio-4",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-5",
+        "turnIndex": 5,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.2,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.2
+          }
+        ],
+        "audioReference": "audio-5",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      }
+    ],
+    "assistantTurns": [],
+    "sessionSummary": null,
+    "priorProfileSummary": null,
+    "evaluationPolicyVersion": "speaking-evaluation-policy",
+    "manualRetryAttempt": 0
+  },
+  "response": {
+    "requestId": "eval-1",
+    "sessionId": "session-1",
+    "status": "INSUFFICIENT_EVIDENCE",
+    "overallScore": null,
+    "evaluationConfidence": null,
+    "metrics": [],
+    "strengths": [],
+    "improvements": [],
+    "recommendedExpressions": [],
+    "pronunciationPractice": [],
+    "profileSignals": [],
+    "eligibility": {
+      "validUserTurns": 5,
+      "validUserSpeechSeconds": 60.0,
+      "validSttTurnRatio": 0.0,
+      "requiredUserTurns": 5,
+      "requiredSpeechSeconds": 60.0,
+      "requiredSttTurnRatio": 0.8,
+      "requiredEvaluationConfidence": 0.7,
+      "eligibleBeforeAi": false,
+      "missingRequirements": [
+        "VALID_STT_TURN_RATIO"
+      ]
+    },
+    "evaluationVersion": "speaking-evaluation",
+    "scoringPolicyVersion": "speaking-scoring-policy",
+    "promptVersion": "speaking-evaluation-prompt",
+    "usage": {
+      "stt": null,
+      "conversation": null,
+      "tts": null,
+      "evaluation": null
+    }
+  }
+}

@@ -182,6 +182,11 @@ class SpeakingEvaluationService:
             if status == SpeakingEvaluationStatus.EVALUATED
             else None
         )
+        # A confident "not evaluable" judgement still has no numerical score.
+        # Never emit EVALUATED/overallScore=null across the BE contract.
+        if status == SpeakingEvaluationStatus.EVALUATED and overall is None:
+            status = SpeakingEvaluationStatus.INSUFFICIENT_EVIDENCE
+
         profile_signals = (
             payload.profile_signals
             if status == SpeakingEvaluationStatus.EVALUATED

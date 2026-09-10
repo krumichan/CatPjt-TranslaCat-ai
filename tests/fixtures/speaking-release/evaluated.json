@@ -1,0 +1,340 @@
+{
+  "request": {
+    "requestId": "eval-1",
+    "idempotencyKey": "eval-idem-1",
+    "sessionId": "session-1",
+    "topic": "일상",
+    "practiceMode": "FREE",
+    "evaluationScope": "SESSION",
+    "goal": null,
+    "targetLevel": "A2",
+    "originLanguage": "ko",
+    "learningLanguage": "ja",
+    "userTurns": [
+      {
+        "turnId": "turn-1",
+        "turnIndex": 1,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.9,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.9
+          }
+        ],
+        "audioReference": "audio-1",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-2",
+        "turnIndex": 2,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.9,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.9
+          }
+        ],
+        "audioReference": "audio-2",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-3",
+        "turnIndex": 3,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.9,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.9
+          }
+        ],
+        "audioReference": "audio-3",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-4",
+        "turnIndex": 4,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.9,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.9
+          }
+        ],
+        "audioReference": "audio-4",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      },
+      {
+        "turnId": "turn-5",
+        "turnIndex": 5,
+        "transcript": "今日は仕事をしました。",
+        "sttConfidence": 0.9,
+        "durationSeconds": 12.0,
+        "segments": [
+          {
+            "startMs": 0,
+            "endMs": 12000,
+            "text": "今日は仕事をしました。",
+            "confidence": 0.9
+          }
+        ],
+        "audioReference": "audio-5",
+        "audioAvailable": true,
+        "audioQualitySignals": {
+          "rms": 0.1,
+          "peak": 0.5,
+          "silenceRatio": 0.1,
+          "sampleRate": 16000,
+          "channels": 1
+        },
+        "excludedFromEvaluation": false,
+        "assistanceUsage": []
+      }
+    ],
+    "assistantTurns": [],
+    "sessionSummary": null,
+    "priorProfileSummary": null,
+    "evaluationPolicyVersion": "speaking-evaluation-policy",
+    "manualRetryAttempt": 0
+  },
+  "response": {
+    "requestId": "eval-1",
+    "sessionId": "session-1",
+    "status": "EVALUATED",
+    "overallScore": 80,
+    "evaluationConfidence": 0.9,
+    "metrics": [
+      {
+        "type": "GRAMMAR",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "VOCABULARY",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "NATURALNESS",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "MEANING",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "EXPRESSIVENESS",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "FLUENCY",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "PRONUNCIATION",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      },
+      {
+        "type": "INTERACTION",
+        "state": "EVALUATED",
+        "score": 80.0,
+        "confidence": 0.9,
+        "summary": "요약",
+        "evidence": [
+          {
+            "turnId": "turn-1",
+            "startMs": 0,
+            "endMs": 1000,
+            "message": "근거"
+          }
+        ],
+        "notEvaluableReason": null
+      }
+    ],
+    "strengths": [
+      "대화를 유지했습니다."
+    ],
+    "improvements": [
+      "조금 더 자연스럽게 연결해 보세요."
+    ],
+    "recommendedExpressions": [],
+    "pronunciationPractice": [],
+    "profileSignals": [
+      {
+        "metricType": "FLUENCY",
+        "source": "SPEAKING",
+        "direction": "IMPROVING",
+        "confidence": 0.9,
+        "evidenceTurnIds": [
+          "turn-1"
+        ],
+        "patternKey": "fluency.pause",
+        "recommendedFocus": "짧은 연결 표현 연습"
+      }
+    ],
+    "eligibility": {
+      "validUserTurns": 5,
+      "validUserSpeechSeconds": 60.0,
+      "validSttTurnRatio": 1.0,
+      "requiredUserTurns": 5,
+      "requiredSpeechSeconds": 60.0,
+      "requiredSttTurnRatio": 0.8,
+      "requiredEvaluationConfidence": 0.7,
+      "eligibleBeforeAi": true,
+      "missingRequirements": []
+    },
+    "evaluationVersion": "speaking-evaluation",
+    "scoringPolicyVersion": "speaking-scoring-policy",
+    "promptVersion": "speaking-evaluation-prompt",
+    "usage": {
+      "stt": null,
+      "conversation": null,
+      "tts": null,
+      "evaluation": {
+        "latencyMs": 0,
+        "inputTokens": 12,
+        "outputTokens": 8,
+        "audioSeconds": 0.0,
+        "ttsCharacters": 0,
+        "ttsAudioSeconds": 0.0,
+        "provider": "fake",
+        "model": "fake-model",
+        "promptVersion": "speaking-evaluation-prompt",
+        "evaluationVersion": "speaking-evaluation"
+      }
+    }
+  }
+}

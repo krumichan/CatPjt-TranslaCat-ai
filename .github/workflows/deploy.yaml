@@ -1,56 +1,81 @@
-name: AI Server Deploy to OCI
+name: AI verified release
 
 on:
+  pull_request:
+    branches: [ main ]
   push:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Do not interrupt a deployment between stop and rollback/start.
+concurrency:
+  group: ai-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-    
-      - name: Deploy via SSH
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libgomp1
+          python -m pip install -r requirements.txt -r requirements-test.txt
+      - name: Verify fail-fast and rollback with fake external commands
+        run: python3 scripts/check_deploy_release.py
+      - name: Run regression tests (no production secrets or model warm-up)
+        env:
+          AI_VOICE_ENABLED: 'false'
+          OCR_WARM_UP: 'false'
+        run: python -m pytest -q --junitxml=test-results/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-test-results
+          path: test-results/
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Encode runtime environment without evaluating its contents as shell code
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE_CONTENT }}
+        run: |
+          set -euo pipefail
+          test -n "$ENV_FILE_CONTENT"
+          encoded="$(printf '%s' "$ENV_FILE_CONTENT" | base64 -w 0)"
+          echo "::add-mask::$encoded"
+          printf 'DEPLOY_ENV_B64=%s\n' "$encoded" >> "$GITHUB_ENV"
+      - name: Deploy exact tested SHA via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.OCI_HOST }}
           username: ${{ secrets.OCI_USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA,DEPLOY_ENV_B64
           command_timeout: 30m
+          script_stop: true
           script: |
+            bash -se <<'RELEASE'
+            set -Eeuo pipefail
             cd ~/CatPjt-TranslaCat-ai
-            git pull origin main
-
-            echo "${{ secrets.ENV_FILE_CONTENT }}" > .env
-
-            docker build -t translacat-ai .
-            docker stop fastapi-app || true
-            docker rm fastapi-app || true
-
-            docker run -d \
-              --name fastapi-app \
-              --restart unless-stopped \
-              --env-file .env \
-              -v translacat-ai-model-cache:/root/.cache/huggingface \
-              -p 8000:8000 \
-              translacat-ai
-
-            echo "Waiting for AI readiness (Max 5 minutes)..."
-            SUCCESS=false
-            for i in {1..60}; do
-              HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' fastapi-app 2>/dev/null || true)
-              if [ "$HEALTH_STATUS" = "healthy" ]; then
-                echo "Success!"
-                SUCCESS=true
-                break
-              fi
-
-              echo "Attempt $i: AI models are not ready yet... waiting 5 seconds."
-              sleep 5
-            done
-
-            if [ "$SUCCESS" = false ]; then
-              echo "Error..."
-              docker logs fastapi-app
-              exit 1
-            fi
+            exec 9>.deploy.lock
+            flock -n 9 || { echo "Another release is running" >&2; exit 1; }
+            [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git diff --quiet
+            git diff --cached --quiet
+            git fetch --no-tags origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            bash scripts/deploy-release.sh "$DEPLOY_SHA"
+            RELEASE
