@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.features.language_learning.difficulty.contracts import DifficultyTarget
+from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
+    ReadingDifficultyRecipe,
+)
 
 
 READING_DIFFICULTY_SPEC_VERSION = "reading-difficulty-contract-v1"
@@ -18,6 +21,7 @@ class ReadingPassageDifficultyTargetValue:
 class ReadingPassageDifficultySpec:
     target: DifficultyTarget[ReadingPassageDifficultyTargetValue]
     passage_id: str
+    recipe: ReadingDifficultyRecipe
     version: str = READING_DIFFICULTY_SPEC_VERSION
 
 
@@ -32,4 +36,5 @@ class ReadingQuestionDifficultyTargetValue:
 class ReadingQuestionDifficultySpec:
     target: DifficultyTarget[ReadingQuestionDifficultyTargetValue]
     passage_id: str
+    recipe: ReadingDifficultyRecipe
     version: str = READING_DIFFICULTY_SPEC_VERSION

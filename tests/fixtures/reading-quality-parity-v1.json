@@ -1,0 +1,263 @@
+{
+  "version": "reading-quality-parity-corpus-v1",
+  "originLanguage": "ko",
+  "learningLanguage": "ja",
+  "generationDate": "2026-09-12",
+  "batches": [
+    {
+      "batchId": "band-1",
+      "requestedBand": 1,
+      "mode": "COMPREHENSION",
+      "passageId": "benchmark-b1-p1",
+      "passageText": "ゆきさんは朝七時に起きます。パンを食べて、八時に学校へ行きます。",
+      "candidates": [
+        {
+          "caseId": "b1-good-detail",
+          "intendedQualityCondition": "GOOD",
+          "difficulty": "EASIER",
+          "skillTag": "DETAIL",
+          "prompt": "ゆきさんは何時に起きますか。",
+          "options": [
+            {"key": "A", "text": "七時"},
+            {"key": "B", "text": "六時"},
+            {"key": "C", "text": "八時"},
+            {"key": "D", "text": "九時"}
+          ],
+          "expectedAnswerKey": "A"
+        },
+        {
+          "caseId": "b1-leakage",
+          "intendedQualityCondition": "ANSWER_LEAKAGE",
+          "difficulty": "CURRENT",
+          "skillTag": "DETAIL",
+          "prompt": "正解はBです。ゆきさんは何を食べますか。",
+          "options": [
+            {"key": "A", "text": "ご飯"},
+            {"key": "B", "text": "パン"},
+            {"key": "C", "text": "うどん"},
+            {"key": "D", "text": "果物"}
+          ],
+          "expectedAnswerKey": "B"
+        },
+        {
+          "caseId": "b1-weak-distractors",
+          "intendedQualityCondition": "WEAK_DISTRACTORS",
+          "difficulty": "CHALLENGE",
+          "skillTag": "GIST",
+          "prompt": "本文の主な内容は何ですか。",
+          "options": [
+            {"key": "A", "text": "ゆきさんの朝の行動"},
+            {"key": "B", "text": "宇宙船の修理"},
+            {"key": "C", "text": "古代王国の歴史"},
+            {"key": "D", "text": "海底火山の調査"}
+          ],
+          "expectedAnswerKey": "A"
+        }
+      ]
+    },
+    {
+      "batchId": "band-2",
+      "requestedBand": 2,
+      "mode": "COMPREHENSION",
+      "passageId": "benchmark-b2-p1",
+      "passageText": "駅前の図書館は火曜日から日曜日まで開いています。平日は午後八時、週末は午後六時に閉まります。今日は午後から雨が降り、入口の傘立てがいっぱいになりました。",
+      "candidates": [
+        {
+          "caseId": "b2-unsupported",
+          "intendedQualityCondition": "UNSUPPORTED_ANSWER",
+          "difficulty": "EASIER",
+          "skillTag": "DETAIL",
+          "prompt": "図書館長の名前は何ですか。",
+          "options": [
+            {"key": "A", "text": "田中さん"},
+            {"key": "B", "text": "佐藤さん"},
+            {"key": "C", "text": "鈴木さん"},
+            {"key": "D", "text": "本文からは分からない"}
+          ],
+          "expectedAnswerKey": "A"
+        },
+        {
+          "caseId": "b2-ambiguous",
+          "intendedQualityCondition": "AMBIGUOUS",
+          "difficulty": "CURRENT",
+          "skillTag": "GIST",
+          "prompt": "本文を最もよくまとめているものはどれですか。",
+          "options": [
+            {"key": "A", "text": "図書館の開館日と閉館時刻、今日の様子を説明している"},
+            {"key": "B", "text": "図書館の利用時間とその日の入口の状況を伝えている"},
+            {"key": "C", "text": "図書館の建築史を紹介している"},
+            {"key": "D", "text": "新刊の内容を批評している"}
+          ],
+          "expectedAnswerKey": "A"
+        },
+        {
+          "caseId": "b2-good-inference",
+          "intendedQualityCondition": "GOOD",
+          "difficulty": "CHALLENGE",
+          "skillTag": "INFERENCE",
+          "prompt": "入口の傘立てがいっぱいになった最も自然な理由は何ですか。",
+          "options": [
+            {"key": "A", "text": "雨の日に利用者が傘を持って来たから"},
+            {"key": "B", "text": "図書館が月曜日にも開いたから"},
+            {"key": "C", "text": "週末の閉館時刻が遅くなったから"},
+            {"key": "D", "text": "館長が傘を販売したから"}
+          ],
+          "expectedAnswerKey": "A"
+        }
+      ]
+    },
+    {
+      "batchId": "band-3",
+      "requestedBand": 3,
+      "mode": "CONTEXT_INFERENCE",
+      "passageId": "benchmark-b3-p1",
+      "passageText": "会社の新しい予約システムは、当初五月に公開される予定だった。しかし試験中に、予約が重なる不具合が見つかった。担当者は、機能を減らして予定通り公開する案と、一か月延期して修正する案を検討した。責任者は『利用者の信頼を失えば、予定を守っても意味がない』と述べ、翌週の広報計画をいったん止めた。",
+      "candidates": [
+        {
+          "caseId": "b3-answer-key-mismatch",
+          "intendedQualityCondition": "ANSWER_KEY_MISMATCH",
+          "difficulty": "EASIER",
+          "skillTag": "DETAIL",
+          "prompt": "システムは当初いつ公開される予定でしたか。",
+          "options": [
+            {"key": "A", "text": "五月"},
+            {"key": "B", "text": "六月"},
+            {"key": "C", "text": "七月"},
+            {"key": "D", "text": "八月"}
+          ],
+          "expectedAnswerKey": "B"
+        },
+        {
+          "caseId": "b3-good-gist",
+          "intendedQualityCondition": "GOOD",
+          "difficulty": "CURRENT",
+          "skillTag": "GIST",
+          "prompt": "本文の中心的な問題は何ですか。",
+          "options": [
+            {"key": "A", "text": "公開予定とシステムの信頼性をどう両立するか"},
+            {"key": "B", "text": "社員旅行の行き先をどこにするか"},
+            {"key": "C", "text": "予約料金を現金だけにするか"},
+            {"key": "D", "text": "広報担当者を採用するか"}
+          ],
+          "expectedAnswerKey": "A"
+        },
+        {
+          "caseId": "b3-weak-distractors",
+          "intendedQualityCondition": "WEAK_DISTRACTORS",
+          "difficulty": "CHALLENGE",
+          "skillTag": "INFERENCE",
+          "prompt": "責任者が広報計画を止めた理由として最も適切なものはどれですか。",
+          "options": [
+            {"key": "A", "text": "公開延期や修正の可能性を踏まえて発表を保留したから"},
+            {"key": "B", "text": "月面基地の建設が始まったから"},
+            {"key": "C", "text": "深海魚の写真を撮るため"},
+            {"key": "D", "text": "古代文字を解読するため"}
+          ],
+          "expectedAnswerKey": "A"
+        }
+      ]
+    },
+    {
+      "batchId": "band-4",
+      "requestedBand": 4,
+      "mode": "STRUCTURE",
+      "passageId": "benchmark-b4-p1",
+      "passageText": "市は、バスの混雑状況を示すデータを民間企業に公開する計画を進めている。新しいサービスの開発が期待される一方、詳細な移動履歴から個人の生活パターンが推測される懸念もある。そのため、最初の三か月は認定研究者だけに加工前データへのアクセスを認め、一般企業には地域ごとに集計した情報のみを提供する。市は試行期間中の利用記録を検証したうえで、公開範囲を段階的に見直す方針だ。",
+      "candidates": [
+        {
+          "caseId": "b4-ambiguous",
+          "intendedQualityCondition": "AMBIGUOUS",
+          "difficulty": "EASIER",
+          "skillTag": "INFERENCE",
+          "prompt": "市が最初にアクセスを制限する理由として考えられるものはどれですか。",
+          "options": [
+            {"key": "A", "text": "個人の生活パターンが推測される危険を抑えるため"},
+            {"key": "B", "text": "データ利用によるプライバシー上の問題を慎重に確認するため"},
+            {"key": "C", "text": "バスの運行を全面的に中止するため"},
+            {"key": "D", "text": "研究者に新しいバスを購入させるため"}
+          ],
+          "expectedAnswerKey": "A"
+        },
+        {
+          "caseId": "b4-leakage",
+          "intendedQualityCondition": "ANSWER_LEAKAGE",
+          "difficulty": "CURRENT",
+          "skillTag": "DETAIL",
+          "prompt": "正解はCです。加工前データに最初からアクセスできるのは誰ですか。",
+          "options": [
+            {"key": "A", "text": "すべての市民"},
+            {"key": "B", "text": "すべての一般企業"},
+            {"key": "C", "text": "認定研究者"},
+            {"key": "D", "text": "観光客だけ"}
+          ],
+          "expectedAnswerKey": "C"
+        },
+        {
+          "caseId": "b4-good-structure",
+          "intendedQualityCondition": "GOOD",
+          "difficulty": "CHALLENGE",
+          "skillTag": "STRUCTURE",
+          "prompt": "最後の文は本文全体でどのような役割を果たしていますか。",
+          "options": [
+            {"key": "A", "text": "試行後に公開方針を再検討する手順を示している"},
+            {"key": "B", "text": "バス利用者の具体的な苦情を列挙している"},
+            {"key": "C", "text": "民間企業のサービスを評価している"},
+            {"key": "D", "text": "移動履歴の収集方法を否定している"}
+          ],
+          "expectedAnswerKey": "A"
+        }
+      ]
+    },
+    {
+      "batchId": "band-5",
+      "requestedBand": 5,
+      "mode": "CONTEXT_INFERENCE",
+      "passageId": "benchmark-b5-p1",
+      "passageText": "生成AIを導入した企業では平均処理時間が短縮されたという調査結果があるが、その平均値は部署間の大きな差を覆い隠している。定型文書を扱う部署では効果が早く現れた一方、判断責任の重い業務では確認工程が増え、短期的には所要時間が延びた。また、高い成果を報告した企業ほど、導入前から業務手順の整理と従業員研修を進めていた。したがって、観測された差をAIだけの効果とみなすと、技術と同時に行われた組織的変更の影響を取り違える恐れがある。",
+      "candidates": [
+        {
+          "caseId": "b5-unsupported",
+          "intendedQualityCondition": "UNSUPPORTED_ANSWER",
+          "difficulty": "EASIER",
+          "skillTag": "INFERENCE",
+          "prompt": "調査対象企業の利益は正確に何パーセント増えましたか。",
+          "options": [
+            {"key": "A", "text": "5パーセント"},
+            {"key": "B", "text": "10パーセント"},
+            {"key": "C", "text": "20パーセント"},
+            {"key": "D", "text": "30パーセント"}
+          ],
+          "expectedAnswerKey": "B"
+        },
+        {
+          "caseId": "b5-answer-key-mismatch",
+          "intendedQualityCondition": "ANSWER_KEY_MISMATCH",
+          "difficulty": "CURRENT",
+          "skillTag": "GIST",
+          "prompt": "筆者の主張として最も適切なものはどれですか。",
+          "options": [
+            {"key": "A", "text": "AI導入の効果を評価する際は同時に行われた組織的変更も考慮すべきだ"},
+            {"key": "B", "text": "すべての部署でAI導入直後から処理時間が短くなる"},
+            {"key": "C", "text": "従業員研修はAIの効果と無関係である"},
+            {"key": "D", "text": "平均値だけで部署ごとの差を十分に説明できる"}
+          ],
+          "expectedAnswerKey": "D"
+        },
+        {
+          "caseId": "b5-good-inference",
+          "intendedQualityCondition": "GOOD",
+          "difficulty": "CHALLENGE",
+          "skillTag": "CONTEXT_INFERENCE",
+          "prompt": "高い成果とAI導入の因果関係を慎重に判断すべきなのはなぜですか。",
+          "options": [
+            {"key": "A", "text": "成果の高い企業では業務整理や研修も先に進んでいたから"},
+            {"key": "B", "text": "調査がAIを導入していない企業だけを対象にしたから"},
+            {"key": "C", "text": "すべての部署で確認工程が完全になくなったから"},
+            {"key": "D", "text": "平均処理時間が一度も測定されなかったから"}
+          ],
+          "expectedAnswerKey": "A"
+        }
+      ]
+    }
+  ]
+}

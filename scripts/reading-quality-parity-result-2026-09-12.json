@@ -1,0 +1,1676 @@
+{
+  "benchmarkVersion": "reading-quality-parity-v1",
+  "corpusVersion": "reading-quality-parity-corpus-v1",
+  "generatedAt": "2026-09-12T13:54:44.227855+00:00",
+  "provider": "openai",
+  "model": "gpt-5-mini",
+  "rounds": 2,
+  "candidateCount": 15,
+  "purpose": "Measure whether adding the Reading difficulty task perturbs the existing semantic-quality gate. Difficulty observations are never acceptance labels.",
+  "summary": {
+    "comparisonCount": 30,
+    "agreementRates": {
+      "bestAnswerKey": 1.0,
+      "ambiguous": 0.9333,
+      "supported": 1.0,
+      "modeFit": 1.0,
+      "answerLeakage": 1.0,
+      "distractorsPlausible": 0.8667,
+      "qualityAction": 0.9
+    },
+    "qualityActionConfusion": {
+      "ACCEPT": {
+        "ACCEPT": 4
+      },
+      "REJECT": {
+        "REJECT": 23,
+        "ACCEPT": 3
+      }
+    },
+    "qualityActionAgreementByIntendedCondition": {
+      "AMBIGUOUS": 0.75,
+      "ANSWER_KEY_MISMATCH": 1.0,
+      "ANSWER_LEAKAGE": 1.0,
+      "GOOD": 0.8,
+      "UNSUPPORTED_ANSWER": 1.0,
+      "WEAK_DISTRACTORS": 1.0
+    },
+    "calls": {
+      "QUALITY_ONLY": {
+        "callCount": 10,
+        "latencyMs": {
+          "mean": 7569.71,
+          "median": 7528.873,
+          "min": 5572.978,
+          "max": 9752.112
+        },
+        "inputTokens": {
+          "total": 10964,
+          "meanPerCall": 1096.4
+        },
+        "outputTokens": {
+          "total": 5741,
+          "meanPerCall": 574.1
+        }
+      },
+      "QUALITY_AND_DIFFICULTY": {
+        "callCount": 10,
+        "latencyMs": {
+          "mean": 13411.004,
+          "median": 12354.231,
+          "min": 10095.927,
+          "max": 21917.799
+        },
+        "inputTokens": {
+          "total": 21942,
+          "meanPerCall": 2194.2
+        },
+        "outputTokens": {
+          "total": 10628,
+          "meanPerCall": 1062.8
+        }
+      }
+    },
+    "combinedDifficultyObservations": {
+      "goldLabelDisclaimer": "Model classifications are observations only and are not difficulty gold labels.",
+      "questionStatusCounts": {
+        "ASSESSED": 29,
+        "UNSURE": 1
+      },
+      "questionConfidenceMean": 0.8533,
+      "questionRequestedVsObserved": {
+        "1": {
+          "1": 5,
+          "2": 1
+        },
+        "2": {
+          "1": 2,
+          "2": 2,
+          "3": 2
+        },
+        "3": {
+          "1": 2,
+          "3": 3,
+          "2": 1
+        },
+        "4": {
+          "UNSURE": 1,
+          "1": 2,
+          "2": 2,
+          "3": 1
+        },
+        "5": {
+          "1": 2,
+          "3": 4
+        }
+      },
+      "passageRequestedVsObserved": {
+        "1": {
+          "NOT_ASSESSED": 1,
+          "1": 1
+        },
+        "2": {
+          "NOT_ASSESSED": 2
+        },
+        "3": {
+          "NOT_ASSESSED": 2
+        },
+        "4": {
+          "2": 1,
+          "3": 1
+        },
+        "5": {
+          "NOT_ASSESSED": 2
+        }
+      }
+    },
+    "thresholds": {
+      "pass": {
+        "qualityActionAgreementAtLeast": 0.9,
+        "everyQualityFieldAgreementAtLeast": 0.9
+      },
+      "conditional": {
+        "qualityActionAgreementAtLeast": 0.8,
+        "everyQualityFieldAgreementAtLeast": 0.8
+      }
+    },
+    "verdict": "QUALITY-PARITY-WITH-CONDITIONS"
+  },
+  "calls": [
+    {
+      "round": 1,
+      "batchId": "band-1",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 9752.112,
+      "inputTokens": 791,
+      "outputTokens": 547
+    },
+    {
+      "round": 1,
+      "batchId": "band-1",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 21917.799,
+      "inputTokens": 1809,
+      "outputTokens": 1096
+    },
+    {
+      "round": 1,
+      "batchId": "band-2",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 7864.138,
+      "inputTokens": 954,
+      "outputTokens": 670
+    },
+    {
+      "round": 1,
+      "batchId": "band-2",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 13803.673,
+      "inputTokens": 2029,
+      "outputTokens": 1112
+    },
+    {
+      "round": 1,
+      "batchId": "band-3",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 7046.801,
+      "inputTokens": 1108,
+      "outputTokens": 581
+    },
+    {
+      "round": 1,
+      "batchId": "band-3",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 13093.543,
+      "inputTokens": 2240,
+      "outputTokens": 1138
+    },
+    {
+      "round": 1,
+      "batchId": "band-4",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 8782.391,
+      "inputTokens": 1265,
+      "outputTokens": 746
+    },
+    {
+      "round": 1,
+      "batchId": "band-4",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 11283.816,
+      "inputTokens": 2397,
+      "outputTokens": 971
+    },
+    {
+      "round": 1,
+      "batchId": "band-5",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 7861.676,
+      "inputTokens": 1364,
+      "outputTokens": 489
+    },
+    {
+      "round": 1,
+      "batchId": "band-5",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 10095.927,
+      "inputTokens": 2496,
+      "outputTokens": 955
+    },
+    {
+      "round": 2,
+      "batchId": "band-1",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 6167.551,
+      "inputTokens": 791,
+      "outputTokens": 522
+    },
+    {
+      "round": 2,
+      "batchId": "band-1",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 11204.098,
+      "inputTokens": 1809,
+      "outputTokens": 841
+    },
+    {
+      "round": 2,
+      "batchId": "band-2",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 7196.069,
+      "inputTokens": 954,
+      "outputTokens": 622
+    },
+    {
+      "round": 2,
+      "batchId": "band-2",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 13086.08,
+      "inputTokens": 2029,
+      "outputTokens": 1176
+    },
+    {
+      "round": 2,
+      "batchId": "band-3",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 5798.347,
+      "inputTokens": 1108,
+      "outputTokens": 415
+    },
+    {
+      "round": 2,
+      "batchId": "band-3",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 11622.382,
+      "inputTokens": 2240,
+      "outputTokens": 1007
+    },
+    {
+      "round": 2,
+      "batchId": "band-4",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 9655.039,
+      "inputTokens": 1265,
+      "outputTokens": 670
+    },
+    {
+      "round": 2,
+      "batchId": "band-4",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 16593.205,
+      "inputTokens": 2397,
+      "outputTokens": 1294
+    },
+    {
+      "round": 2,
+      "batchId": "band-5",
+      "condition": "QUALITY_ONLY",
+      "latencyMs": 5572.978,
+      "inputTokens": 1364,
+      "outputTokens": 479
+    },
+    {
+      "round": 2,
+      "batchId": "band-5",
+      "condition": "QUALITY_AND_DIFFICULTY",
+      "latencyMs": 11409.519,
+      "inputTokens": 2496,
+      "outputTokens": 1038
+    }
+  ],
+  "passageDifficultyObservations": [
+    {
+      "round": 1,
+      "batchId": "band-1",
+      "requestedBand": 1,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-2",
+      "requestedBand": 2,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-3",
+      "requestedBand": 3,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-4",
+      "requestedBand": 4,
+      "difficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-5",
+      "requestedBand": 5,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-1",
+      "requestedBand": 1,
+      "difficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.95
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-2",
+      "requestedBand": 2,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-3",
+      "requestedBand": 3,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-4",
+      "requestedBand": 4,
+      "difficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.78
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-5",
+      "requestedBand": 5,
+      "difficulty": {
+        "difficultyStatus": "NOT_ASSESSED",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "round": 1,
+      "batchId": "band-1",
+      "caseId": "b1-good-detail",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 1,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.95
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-1",
+      "caseId": "b1-leakage",
+      "intendedQualityCondition": "ANSWER_LEAKAGE",
+      "requestedBand": 1,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "B",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "B",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.9
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-1",
+      "caseId": "b1-weak-distractors",
+      "intendedQualityCondition": "WEAK_DISTRACTORS",
+      "requestedBand": 1,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.85
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-2",
+      "caseId": "b2-unsupported",
+      "intendedQualityCondition": "UNSUPPORTED_ANSWER",
+      "requestedBand": 2,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "D",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "D",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-2",
+      "caseId": "b2-ambiguous",
+      "intendedQualityCondition": "AMBIGUOUS",
+      "requestedBand": 2,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": false
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-2",
+      "caseId": "b2-good-inference",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 2,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": false
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-3",
+      "caseId": "b3-answer-key-mismatch",
+      "intendedQualityCondition": "ANSWER_KEY_MISMATCH",
+      "requestedBand": 3,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.85
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-3",
+      "caseId": "b3-good-gist",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 3,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.8
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-3",
+      "caseId": "b3-weak-distractors",
+      "intendedQualityCondition": "WEAK_DISTRACTORS",
+      "requestedBand": 3,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.8
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-4",
+      "caseId": "b4-ambiguous",
+      "intendedQualityCondition": "AMBIGUOUS",
+      "requestedBand": 4,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "UNSURE",
+        "observedBand": null,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-4",
+      "caseId": "b4-leakage",
+      "intendedQualityCondition": "ANSWER_LEAKAGE",
+      "requestedBand": 4,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "C",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "C",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-4",
+      "caseId": "b4-good-structure",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 4,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "STRUCTURE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-5",
+      "caseId": "b5-unsupported",
+      "intendedQualityCondition": "UNSUPPORTED_ANSWER",
+      "requestedBand": 5,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": false,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": false,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-5",
+      "caseId": "b5-answer-key-mismatch",
+      "intendedQualityCondition": "ANSWER_KEY_MISMATCH",
+      "requestedBand": 5,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 1,
+      "batchId": "band-5",
+      "caseId": "b5-good-inference",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 5,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "CONTEXT_INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": false
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-1",
+      "caseId": "b1-good-detail",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 1,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.92
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-1",
+      "caseId": "b1-leakage",
+      "intendedQualityCondition": "ANSWER_LEAKAGE",
+      "requestedBand": 1,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "B",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "B",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.92
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-1",
+      "caseId": "b1-weak-distractors",
+      "intendedQualityCondition": "WEAK_DISTRACTORS",
+      "requestedBand": 1,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.9
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-2",
+      "caseId": "b2-unsupported",
+      "intendedQualityCondition": "UNSUPPORTED_ANSWER",
+      "requestedBand": 2,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "D",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "D",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.9
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-2",
+      "caseId": "b2-ambiguous",
+      "intendedQualityCondition": "AMBIGUOUS",
+      "requestedBand": 2,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.85
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-2",
+      "caseId": "b2-good-inference",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 2,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.85
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-3",
+      "caseId": "b3-answer-key-mismatch",
+      "intendedQualityCondition": "ANSWER_KEY_MISMATCH",
+      "requestedBand": 3,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.88
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-3",
+      "caseId": "b3-good-gist",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 3,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.78
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-3",
+      "caseId": "b3-weak-distractors",
+      "intendedQualityCondition": "WEAK_DISTRACTORS",
+      "requestedBand": 3,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.78
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-4",
+      "caseId": "b4-ambiguous",
+      "intendedQualityCondition": "AMBIGUOUS",
+      "requestedBand": 4,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.74
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-4",
+      "caseId": "b4-leakage",
+      "intendedQualityCondition": "ANSWER_LEAKAGE",
+      "requestedBand": 4,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "DETAIL",
+      "qualityOnly": {
+        "bestAnswerKey": "C",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "C",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.88
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-4",
+      "caseId": "b4-good-structure",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 4,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "STRUCTURE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": false,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 2,
+        "alternativeBand": null,
+        "difficultyConfidence": 0.81
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-5",
+      "caseId": "b5-unsupported",
+      "intendedQualityCondition": "UNSUPPORTED_ANSWER",
+      "requestedBand": 5,
+      "relativeDifficulty": "EASIER",
+      "skillTag": "INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": false,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": false,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 1,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-5",
+      "caseId": "b5-answer-key-mismatch",
+      "intendedQualityCondition": "ANSWER_KEY_MISMATCH",
+      "requestedBand": 5,
+      "relativeDifficulty": "CURRENT",
+      "skillTag": "GIST",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "REJECT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    },
+    {
+      "round": 2,
+      "batchId": "band-5",
+      "caseId": "b5-good-inference",
+      "intendedQualityCondition": "GOOD",
+      "requestedBand": 5,
+      "relativeDifficulty": "CHALLENGE",
+      "skillTag": "CONTEXT_INFERENCE",
+      "qualityOnly": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "combined": {
+        "bestAnswerKey": "A",
+        "ambiguous": false,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": false,
+        "distractorsPlausible": true,
+        "qualityAction": "ACCEPT"
+      },
+      "agreement": {
+        "bestAnswerKey": true,
+        "ambiguous": true,
+        "supported": true,
+        "modeFit": true,
+        "answerLeakage": true,
+        "distractorsPlausible": true,
+        "qualityAction": true
+      },
+      "combinedDifficulty": {
+        "difficultyStatus": "ASSESSED",
+        "observedBand": 3,
+        "alternativeBand": null,
+        "difficultyConfidence": null
+      }
+    }
+  ],
+  "verdict": "QUALITY-PARITY-WITH-CONDITIONS"
+}

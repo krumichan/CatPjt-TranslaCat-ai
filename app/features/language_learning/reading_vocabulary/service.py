@@ -8,17 +8,27 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.ai.ports import TextGenerationProvider
 from app.features.language_learning.reading_vocabulary.reading_difficulty_adapter import (
     ReadingAcceptanceContext,
+    ReadingSemanticDifficultyPolicy,
     ReadingSemanticQualityPolicy,
     build_reading_passage_difficulty_spec,
     build_reading_question_difficulty_spec,
+    measure_reading_passage,
+    measure_reading_question,
+    normalize_reading_semantic_difficulty_assessment,
     normalize_reading_semantic_assessment,
     project_reading_question_validation,
     validate_reading_passage,
+    reading_passage_segments,
+    reading_question_segment_ids,
+)
+from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
+    READING_DIFFICULTY_RECIPE_VERSION,
+    question_demand_recipe,
 )
 from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_adapter import (
     VocabularyAcceptanceContext,
@@ -140,7 +150,43 @@ _READING_PASSAGE_SCHEMA: dict[str, Any] = {
     "required": ["passageId", "passageText"],
 }
 
-_PRACTICE_VERIFICATION_SCHEMA: dict[str, Any] = {
+_QUALITY_VERDICT_PROPERTIES: dict[str, Any] = {
+    "order": {"type": "INTEGER"},
+    "bestAnswerKey": {"type": "STRING"},
+    "ambiguous": {"type": "BOOLEAN"},
+    "supported": {"type": "BOOLEAN"},
+    "reason": {"type": "STRING"},
+    "modeFit": {"type": "BOOLEAN"},
+    "answerLeakage": {"type": "BOOLEAN"},
+    "contextDependent": {"type": "BOOLEAN"},
+    "distractorsPlausible": {"type": "BOOLEAN"},
+}
+_QUALITY_VERDICT_REQUIRED = list(_QUALITY_VERDICT_PROPERTIES)
+
+# The provider schema must not reject or retry an otherwise-valid quality verdict because
+# an observation-only Reading shadow value is malformed. Keep the field present as a
+# generation hint, but accept every JSON value and normalize it fail-open in application
+# code. Quality fields retain their existing strict types and required-field coverage.
+_SHADOW_JSON_VALUE_SCHEMA: dict[str, Any] = {
+    "type": ["OBJECT", "ARRAY", "STRING", "NUMBER", "BOOLEAN", "NULL"]
+}
+
+_VOCABULARY_PRACTICE_VERIFICATION_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "verdicts": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": _QUALITY_VERDICT_PROPERTIES,
+                "required": _QUALITY_VERDICT_REQUIRED,
+            },
+        },
+    },
+    "required": ["verdicts"],
+}
+
+_READING_PRACTICE_VERIFICATION_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
         "verdicts": {
@@ -148,22 +194,13 @@ _PRACTICE_VERIFICATION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "OBJECT",
                 "properties": {
-                    "order": {"type": "INTEGER"},
-                    "bestAnswerKey": {"type": "STRING"},
-                    "ambiguous": {"type": "BOOLEAN"},
-                    "supported": {"type": "BOOLEAN"},
-                    "reason": {"type": "STRING"},
-                    "modeFit": {"type": "BOOLEAN"},
-                    "answerLeakage": {"type": "BOOLEAN"},
-                    "contextDependent": {"type": "BOOLEAN"},
-                    "distractorsPlausible": {"type": "BOOLEAN"},
+                    **_QUALITY_VERDICT_PROPERTIES,
+                    "difficulty": _SHADOW_JSON_VALUE_SCHEMA,
                 },
-                "required": [
-                    "order", "bestAnswerKey", "ambiguous", "supported", "reason",
-                    "modeFit", "answerLeakage", "contextDependent", "distractorsPlausible",
-                ],
+                "required": _QUALITY_VERDICT_REQUIRED,
             },
-        }
+        },
+        "passageDifficultyAssessments": _SHADOW_JSON_VALUE_SCHEMA,
     },
     "required": ["verdicts"],
 }
@@ -219,10 +256,12 @@ class _PracticeVerificationVerdict(BaseModel):
     answerLeakage: bool
     contextDependent: bool
     distractorsPlausible: bool
+    difficulty: Any = None
 
 
 class _PracticeVerificationPayload(BaseModel):
     verdicts: list[_PracticeVerificationVerdict]
+    passageDifficultyAssessments: Any = Field(default_factory=list)
 
 
 class _UsagePrescreenVerdict(BaseModel):
@@ -285,6 +324,11 @@ class _QuestionSlot:
         }
         if self.question_type is not None:
             payload["questionType"] = self.question_type.value
+        if self.passage_id is not None:
+            payload["difficultyRecipe"] = question_demand_recipe(
+                self.complexity_band,
+                skill_tag=self.skill_tag,
+            ).generation_payload()
         if self.usage_intent is not None:
             payload["usageIntent"] = self.usage_intent
             payload["answerVisibilityPolicy"] = "HIDE_TARGET_FROM_STEM"
@@ -1181,6 +1225,7 @@ class ReadingVocabularyGenerationService:
                 if request.domain == PracticeDomain.READING:
                     slot = slot_by_order[order]
                     assert slot.passage_id is not None
+                    assert slot.passage_text is not None
                     question_spec = build_reading_question_difficulty_spec(
                         difficulty=slot.difficulty.value,
                         complexity_band=slot.complexity_band,
@@ -1195,6 +1240,8 @@ class ReadingVocabularyGenerationService:
                             slot,
                             accepted,
                         ),
+                        question=question,
+                        passage_text=slot.passage_text,
                     )
                     if not validation.passed:
                         raise ValueError(validation.primary_issue)
@@ -1834,6 +1881,11 @@ class ReadingVocabularyGenerationService:
                 "options": [option.model_dump(by_alias=True) for option in question.options],
                 "skillTag": question.skill_tag,
                 **(
+                    self._reading_verification_fields(question)
+                    if request.domain == PracticeDomain.READING
+                    else {}
+                ),
+                **(
                     {"usageIntent": self._usage_intent_for_skill(question.skill_tag)}
                     if request.mode == VocabularyMode.USAGE_DISTINCTION.value
                     else {}
@@ -1850,7 +1902,11 @@ class ReadingVocabularyGenerationService:
                     self.provider.call(
                         type_name=self.VERIFICATION_TYPE_NAME,
                         data=build_practice_verification_prompt(request, verification_input),
-                        schema=_PRACTICE_VERIFICATION_SCHEMA,
+                        schema=(
+                            _READING_PRACTICE_VERIFICATION_SCHEMA
+                            if request.domain == PracticeDomain.READING
+                            else _VOCABULARY_PRACTICE_VERIFICATION_SCHEMA
+                        ),
                     ),
                     timeout=self.timeout_seconds,
                 )
@@ -1859,6 +1915,7 @@ class ReadingVocabularyGenerationService:
                 if set(verdict_by_order) != set(expected_by_order):
                     raise ValueError("semantic verifier verdict coverage mismatch")
                 failures: dict[int, str] = {}
+                quality_actions: dict[int, str] = {}
                 for order, expected_key in expected_by_order.items():
                     verdict = verdict_by_order[order]
                     if request.domain == PracticeDomain.READING:
@@ -1874,6 +1931,7 @@ class ReadingVocabularyGenerationService:
                             assessment=assessment,
                             context=ReadingAcceptanceContext(expected_answer_key=expected_key),
                         )
+                        quality_actions[order] = decision.action
                         if decision.action != "ACCEPT":
                             failures[order] = decision.reason
                     else:
@@ -1896,6 +1954,23 @@ class ReadingVocabularyGenerationService:
                         )
                         if decision.action != "ACCEPT":
                             failures[order] = decision.reason
+                if request.domain == PracticeDomain.READING:
+                    try:
+                        self._record_reading_difficulty_shadow(
+                            request,
+                            single_choice,
+                            verdict_by_order,
+                            payload.passageDifficultyAssessments,
+                            quality_actions,
+                        )
+                    except Exception as exc:
+                        # Difficulty is observation-only in V1.  A malformed shadow result
+                        # must not retry Mini, reject a candidate or change quality precedence.
+                        logger.warning(
+                            "Reading difficulty shadow processing failed. request_id=%s type=%s",
+                            request.request_id,
+                            type(exc).__name__,
+                        )
                 return failures
             except Exception as exc:
                 last_error = exc
@@ -1909,6 +1984,149 @@ class ReadingVocabularyGenerationService:
             "semantic verifier unavailable after provider retries: "
             f"{type(last_error).__name__ if last_error else 'unknown'}"
         )
+
+    @staticmethod
+    def _reading_verification_fields(
+        question: PracticeGeneratedQuestion,
+    ) -> dict[str, object]:
+        passage_id = question.passage_id or "unbound"
+        passage_text = question.passage_text or ""
+        question_segments = [
+            {"id": f"question:{question.order}:prompt", "field": "prompt"},
+            *[
+                {
+                    "id": f"question:{question.order}:option:{option.key}",
+                    "field": "option",
+                    "optionKey": option.key,
+                }
+                for option in question.options
+            ],
+        ]
+        return {
+            "passageId": question.passage_id,
+            "passageSegments": [
+                {"id": segment["id"], "ordinal": index}
+                for index, segment in enumerate(
+                    reading_passage_segments(passage_id, passage_text),
+                    1,
+                )
+            ],
+            "questionSegments": question_segments,
+        }
+
+    @staticmethod
+    def _record_reading_difficulty_shadow(
+        request: PracticeGenerationRequest,
+        questions: list[PracticeGeneratedQuestion],
+        verdict_by_order: dict[int, _PracticeVerificationVerdict],
+        raw_passage_assessments: object,
+        quality_actions: dict[int, str],
+    ) -> None:
+        policy = ReadingSemanticDifficultyPolicy()
+        passage_assessment_items = (
+            raw_passage_assessments
+            if isinstance(raw_passage_assessments, list)
+            else []
+        )
+        passage_raw_by_id = {
+            item.get("passageId"): item
+            for item in passage_assessment_items
+            if isinstance(item, dict) and isinstance(item.get("passageId"), str)
+        }
+        passage_text_by_id = {
+            question.passage_id: question.passage_text
+            for question in questions
+            if question.passage_id and question.passage_text
+        }
+        for passage_id, passage_text in passage_text_by_id.items():
+            allowed_refs = {
+                segment["id"]
+                for segment in reading_passage_segments(passage_id, passage_text)
+            }
+            assessment = normalize_reading_semantic_difficulty_assessment(
+                passage_raw_by_id.get(passage_id),
+                allowed_evidence_refs=allowed_refs,
+            )
+            comparison = policy.decide(
+                requested_band=request.complexity_band,
+                assessment=assessment,
+            )
+            rejected_question_count = sum(
+                quality_actions.get(question.order) == "REJECT"
+                for question in questions
+                if question.passage_id == passage_id
+            )
+            logger.info(
+                "Reading difficulty shadow. request_id=%s scope=passage passage_id=%s "
+                "learning_language=%s mode=%s requested_band=%d "
+                "generator_declared_band=none recipe_version=%s "
+                "quality_rejected_question_count=%d "
+                "difficulty_status=%s observed_band=%s alternative_band=%s comparison=%s "
+                "difficulty_confidence=%s measurements=%s issue_codes=%s evidence_refs=%s",
+                request.request_id,
+                passage_id,
+                request.learning_language,
+                request.mode,
+                request.complexity_band,
+                READING_DIFFICULTY_RECIPE_VERSION,
+                rejected_question_count,
+                assessment.difficulty_status,
+                assessment.observed_target,
+                assessment.alternative_target,
+                comparison.action,
+                assessment.difficulty_confidence,
+                measure_reading_passage(passage_text).log_fields(),
+                assessment.issue_codes,
+                assessment.evidence_refs,
+            )
+
+        question_by_order = {question.order: question for question in questions}
+        for order, question in question_by_order.items():
+            passage_id = question.passage_id or "unbound"
+            passage_text = question.passage_text or ""
+            allowed_refs = {
+                segment["id"]
+                for segment in reading_passage_segments(passage_id, passage_text)
+            } | reading_question_segment_ids(question)
+            assessment = normalize_reading_semantic_difficulty_assessment(
+                verdict_by_order[order].difficulty,
+                allowed_evidence_refs=allowed_refs,
+            )
+            comparison = policy.decide(
+                requested_band=question.complexity_band,
+                assessment=assessment,
+            )
+            measurements = measure_reading_question(
+                question,
+                passage_id=passage_id,
+                passage_text=passage_text,
+            )
+            logger.info(
+                "Reading difficulty shadow. request_id=%s scope=question order=%d passage_id=%s "
+                "learning_language=%s mode=%s skill_tag=%s requested_band=%d "
+                "generator_declared_band=%d recipe_version=%s "
+                "quality_action=%s difficulty_status=%s observed_band=%s "
+                "alternative_band=%s comparison=%s "
+                "difficulty_confidence=%s measurements=%s issue_codes=%s evidence_refs=%s",
+                request.request_id,
+                order,
+                passage_id,
+                request.learning_language,
+                request.mode,
+                question.skill_tag,
+                question.complexity_band,
+                question.complexity_band,
+                READING_DIFFICULTY_RECIPE_VERSION,
+                quality_actions.get(order, "UNKNOWN"),
+                assessment.difficulty_status,
+                assessment.observed_target,
+                assessment.alternative_target,
+                comparison.action,
+                assessment.difficulty_confidence,
+                measurements.log_fields(),
+                assessment.issue_codes,
+                assessment.evidence_refs,
+            )
 
     async def _attach_origin_explanations(
         self,
