@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
 from typing import Any
 
@@ -17,6 +16,10 @@ from app.ai.ports import (
 )
 from app.ai.prompt_registry import get_prompt_rule
 from app.ai.providers.openai.schema import build_openai_text_config
+from app.ai.providers.openai.response import (
+    OpenAIProviderResponseError as OpenAIProviderResponseError,
+    decode_response,
+)
 from app.core.config import settings
 from app.features.chat_translation.normalizer import normalize_chat_translation_result
 from app.features.chat_translation.prompts import build_chat_translation_prompt
@@ -24,12 +27,6 @@ from app.features.voice_translation.prompts import build_voice_translation_promp
 from app.schemas.voice_translation import VoiceTranslationProviderPayload
 
 logger = logging.getLogger(__name__)
-
-
-class OpenAIProviderResponseError(RuntimeError):
-    """Retryable provider-side response-format/incomplete-output failure."""
-
-    status_code = 502
 
 
 class OpenAIService:
@@ -223,24 +220,7 @@ class OpenAIService:
                 prompt_cache_key=self._prompt_cache_key(type_name, model),
                 store=False,
             )
-            status = str(getattr(response, "status", "completed") or "completed")
-            if status != "completed":
-                raise OpenAIProviderResponseError(
-                    f"OpenAI response did not complete: status={status}"
-                )
-
-            output_text = response.output_text
-            if not isinstance(output_text, str) or not output_text.strip():
-                raise OpenAIProviderResponseError("OpenAI response has no output text")
-
-            data: Any = output_text
-            if schema is not None:
-                try:
-                    data = json.loads(output_text)
-                except json.JSONDecodeError as exc:
-                    raise OpenAIProviderResponseError(
-                        "OpenAI structured response is not valid JSON"
-                    ) from exc
+            data = decode_response(response, structured=schema is not None)
 
             usage = getattr(response, "usage", None)
             return StructuredGenerationResult(

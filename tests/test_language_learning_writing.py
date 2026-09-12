@@ -18,6 +18,11 @@ from app.schemas.language_learning import (
 )
 
 
+from app.features.language_learning.writing.generation import GENERATION_TASK
+from app.features.language_learning.writing.prompts import DAILY_WRITING_GENERATION_PROMPT_VERSION
+from tests.writing_generation_fakes import WritingPipelineProvider, content_only
+
+
 class FakeProvider:
     def __init__(self, results=None, errors=None, delay: float = 0) -> None:
         self.results = list(results or [])
@@ -318,7 +323,11 @@ class ScoringPolicyTest(unittest.TestCase):
 
 class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_daily_generation_returns_exact_contract(self):
-        provider = FakeProvider(results=[daily_result()])
+        source = daily_result()["items"]
+        provider = WritingPipelineProvider(
+            [{"items": [content_only(item)]} for item in source],
+            {item["originText"]: item["languageComplexityBand"] for item in source},
+        )
         service = LanguageLearningWritingService(
             provider=provider,
             generation_timeout_seconds=1,
@@ -328,29 +337,31 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
         response = await service.generate_daily(build_daily_request())
 
         self.assertEqual(len(response.items), 5)
-        self.assertEqual(response.prompt_version, "writing-generation-modes-diversity")
+        self.assertEqual(response.prompt_version, DAILY_WRITING_GENERATION_PROMPT_VERSION)
         self.assertEqual(
             provider.calls[0]["type_name"],
             "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
         )
 
-    async def test_invalid_daily_distribution_is_retried(self):
-        invalid = daily_result()
-        invalid["items"][0]["difficulty"] = "NORMAL"
-        provider = FakeProvider(results=[invalid, daily_result()])
-        service = LanguageLearningWritingService(
-            provider=provider,
-            generation_timeout_seconds=1,
-            generation_max_retries=1,
+    async def test_daily_distribution_is_owned_by_server_not_generator(self):
+        source = daily_result()["items"]
+        batches = []
+        for item in source:
+            draft = content_only(item)
+            # Wrong legacy model control fields must have no authority.
+            draft.update(order=999, difficulty="NORMAL", languageComplexityBand=1)
+            batches.append({"items": [draft]})
+        provider = WritingPipelineProvider(
+            batches, {item["originText"]: item["languageComplexityBand"] for item in source},
         )
-
+        service = LanguageLearningWritingService(provider, generation_timeout_seconds=1, generation_max_retries=1)
         response = await service.generate_daily(build_daily_request())
-
-        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual(provider.counts[GENERATION_TASK], 5)
         difficulties = [item.difficulty.value for item in response.items]
         self.assertEqual(1, difficulties.count("REVIEW"))
         self.assertEqual(3, difficulties.count("NORMAL"))
         self.assertEqual(1, difficulties.count("CHALLENGE"))
+        self.assertEqual([1, 2, 3, 4, 5], [item.order for item in response.items])
 
     async def test_evaluation_computes_overall_and_versions(self):
         provider = FakeProvider(results=[evaluation_result()])
@@ -369,20 +380,16 @@ class LanguageLearningWritingServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(response.recommended_answers), 2)
 
     async def test_generation_retries_three_times_then_succeeds(self):
-        provider = FakeProvider(
-            results=[daily_result()],
-            errors=[ValueError("1"), ValueError("2"), None],
+        item = daily_result()["items"][1]
+        provider = WritingPipelineProvider(
+            [ValueError("1"), ValueError("2"), {"items": [content_only(item)]}],
+            {item["originText"]: 3},
         )
-        service = LanguageLearningWritingService(
-            provider=provider,
-            generation_timeout_seconds=1,
-            generation_max_retries=3,
-        )
-
-        response = await service.generate_daily(build_daily_request())
-
-        self.assertEqual(len(provider.calls), 3)
-        self.assertEqual(len(response.items), 5)
+        service = LanguageLearningWritingService(provider, generation_timeout_seconds=1, generation_max_retries=3)
+        request = build_daily_request(sentenceCount=1, difficultyDistribution={"review": 0, "normal": 1, "challenge": 0})
+        response = await service.generate_daily(request)
+        self.assertEqual(provider.counts[GENERATION_TASK], 3)
+        self.assertEqual(len(response.items), 1)
 
     async def test_evaluation_retries_once_then_fails(self):
         provider = FakeProvider(errors=[RuntimeError("1"), RuntimeError("2")])

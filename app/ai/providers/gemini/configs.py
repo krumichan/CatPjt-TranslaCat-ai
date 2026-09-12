@@ -214,3 +214,21 @@ def build_language_learning_evaluation_config(
         response_schema=sanitize_gemini_response_schema(schema),
         safety_settings=DEFAULT_SAFETY_SETTINGS,
     )
+
+
+def build_language_learning_writing_verification_config(
+    rule: str,
+    schema: dict,
+) -> types.GenerateContentConfig:
+    # Bound evidence + IDs require more room than the 512-token sufficiency gate.
+    return types.GenerateContentConfig(
+        system_instruction=rule,
+        temperature=0,
+        top_p=0.2,
+        top_k=10,
+        max_output_tokens=4096,
+        response_mime_type="application/json",
+        response_schema=sanitize_gemini_response_schema(schema),
+        safety_settings=DEFAULT_SAFETY_SETTINGS,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )

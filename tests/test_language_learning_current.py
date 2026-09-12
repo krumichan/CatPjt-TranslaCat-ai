@@ -22,7 +22,6 @@ from app.features.language_learning.writing.service import LanguageLearningWriti
 from app.schemas.language_learning import DailyWritingGenerationRequest, WritingEvaluationResponse
 from app.schemas.language_learning_level_test_benchmark import LevelTestBenchmarkSample
 from app.schemas.language_learning_level_test import (
-    LevelTestBestOptionAdvantage,
     LevelTestChoiceSelectionPolicy,
     LevelTestChoiceSemanticVerificationPayload,
     LevelTestItemType,
@@ -38,9 +37,7 @@ from app.schemas.language_learning_level_test import (
 from app.schemas.language_learning_listening import ListeningSetGenerationRequest
 from app.schemas.language_learning_quality import (
     DiversityContext,
-    DiversityHistoryEntry,
     DiversityMetadata,
-    GenerationSourceType,
     ScenarioCategory,
 )
 from app.schemas.language_learning_speaking import (
@@ -52,6 +49,12 @@ from app.schemas.language_learning_speaking import (
     SttSegment,
     TranscriptResult,
 )
+
+
+from app.features.language_learning.writing.generation import GENERATION_TASK
+from app.features.language_learning.writing.generation_contract import CANDIDATES_PER_SLOT, plan_slots
+from app.features.language_learning.writing.prompts import DAILY_WRITING_GENERATION_PROMPT_VERSION
+from tests.writing_generation_fakes import WritingPipelineProvider, content_only
 
 
 class QueueProvider:
@@ -550,6 +553,7 @@ class CurrentGenerationTest(unittest.TestCase):
                     writingType=writing_type,
                 )
                 payload = writing_candidate_payload()
+                payload["items"] = [content_only(item) for item in payload["items"][:2]]
                 if writing_type == "GUIDED":
                     for candidate in payload["items"]:
                         candidate.update(
@@ -563,14 +567,16 @@ class CurrentGenerationTest(unittest.TestCase):
                         "content": payload["items"][0]["originText"],
                     }]
                 }
-                provider = QueueProvider(plain=[payload])
+                provider = WritingPipelineProvider([payload], {item["originText"]: 3 for item in payload["items"]})
                 response = asyncio.run(LanguageLearningWritingService(provider).generate_daily(
                     DailyWritingGenerationRequest.model_validate(request_data)
                 ))
                 self.assertEqual(1, len(response.items))
                 self.assertEqual(1, response.items[0].order)
                 self.assertEqual(payload["items"][1]["originText"], response.items[0].origin_text)
-                self.assertEqual(1, len(provider.calls))
+                self.assertEqual(1, provider.counts[GENERATION_TASK])
+                self.assertEqual(1, provider.counts["LANGUAGE_LEARNING_WRITING_TASK_VERIFICATION"])
+                self.assertEqual(2, len(provider.calls))  # one generator + one semantic reviewer
 
     def test_progressive_listening_uses_existing_item_count_and_per_slot_idempotency(self):
         for learning_mode in ("DICTATION", "COMPREHENSION", "SUMMARY"):
@@ -622,23 +628,27 @@ class CurrentGenerationTest(unittest.TestCase):
                 self.assertNotIn("startItemIndex", first_request.model_dump(by_alias=True))
 
     def test_writing_current_returns_diversity_metadata_and_exact_distribution(self):
-        provider = QueueProvider(plain=[writing_candidate_payload()])
-        service = LanguageLearningWritingService(provider=provider)
-        response = asyncio.run(service.generate_daily(writing_current_request()))
+        source = writing_candidate_payload()["items"]
+        provider = WritingPipelineProvider(
+            [{"items": [content_only(item) for item in source[:2]]},
+             {"items": [content_only(item) for item in source[2:]]}],
+            {item["originText"]: item["languageComplexityBand"] for item in source},
+        )
+        response = asyncio.run(LanguageLearningWritingService(provider).generate_daily(writing_current_request()))
         self.assertEqual(2, len(response.items))
-        self.assertEqual("writing-generation-modes-diversity", response.prompt_version)
+        self.assertEqual(DAILY_WRITING_GENERATION_PROMPT_VERSION, response.prompt_version)
         self.assertEqual("language-learning-diversity", response.content_diversity_policy_version)
         self.assertEqual({"NORMAL", "CHALLENGE"}, {item.difficulty.value for item in response.items})
         self.assertTrue(all(item.diversity_metadata for item in response.items))
 
     def test_writing_candidate_pool_never_exceeds_current_cap(self):
-        distribution = LanguageLearningWritingService._expanded_distribution(
-            {"REVIEW": 18, "NORMAL": 4, "CHALLENGE": 3}
-        )
-        self.assertEqual(40, distribution.total)
-        self.assertGreaterEqual(distribution.review, 18)
-        self.assertGreaterEqual(distribution.normal, 4)
-        self.assertGreaterEqual(distribution.challenge, 3)
+        data = writing_current_request().model_dump(mode="json", by_alias=True)
+        data.update(sentenceCount=25, difficultyDistribution={"review": 18, "normal": 4, "challenge": 3})
+        slots = plan_slots(DailyWritingGenerationRequest.model_validate(data))
+        self.assertEqual(25, len(slots))
+        self.assertEqual({"REVIEW": 18, "NORMAL": 4, "CHALLENGE": 3}, Counter(slot.difficulty.value for slot in slots))
+        # Each call is now a bounded two-candidate slot, never a whole 40-item batch.
+        self.assertEqual(2, CANDIDATES_PER_SLOT)
 
     def test_listening_current_uses_candidate_pool_and_returns_two_distinct_items(self):
         provider = QueueProvider(structured=[listening_candidate_payload()])

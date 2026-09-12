@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     AI_LANGUAGE_LEARNING_GENERATION_MAX_RETRIES: int = 3
     AI_LANGUAGE_LEARNING_EVALUATION_MAX_RETRIES: int = 1
 
+    # Writing generation is multi-stage. Keep the total budget below the EFFECTIVE
+    # BE/proxy timeout (the attached BE application.properties sets 300 seconds).
+    AI_WRITING_VERIFICATION_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)
+    AI_WRITING_GENERATION_TOTAL_TIMEOUT_SECONDS: float = Field(default=240.0, gt=0, le=900)
+
     # Language Learning / AI Speaking
     AI_SPEAKING_STT_MODEL_NAME: str = "tiny"
     AI_SPEAKING_STT_DEVICE: str = "cpu"

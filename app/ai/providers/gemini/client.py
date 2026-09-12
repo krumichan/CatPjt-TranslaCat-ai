@@ -85,7 +85,7 @@ class GeminiService:
 
             return response.parsed if schema else response.text
         except Exception as exc:
-            logger.error("Gemini API Call Error: %s", exc)
+            logger.error("Gemini API call failed. type=%s errorType=%s", type_name, type(exc).__name__)
             raise
 
     async def call_with_metadata(
@@ -113,7 +113,7 @@ class GeminiService:
                 model=self.model_name,
             )
         except Exception as exc:
-            logger.error("Gemini API Metadata Call Error: %s", exc)
+            logger.error("Gemini API metadata call failed. type=%s errorType=%s", type_name, type(exc).__name__)
             raise
 
     async def synthesize_speech(

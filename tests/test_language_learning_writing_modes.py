@@ -3,7 +3,7 @@ from app.features.language_learning.writing.prompts import (
     WRITING_EVALUATION_SYSTEM_PROMPT,
     build_daily_writing_generation_prompt,
 )
-from app.features.language_learning.writing.service import LanguageLearningWritingService
+from app.features.language_learning.writing.generation_contract import writing_type_contract_reason
 from app.schemas.language_learning import (
     DailyWritingGenerationRequest,
     DailyWritingItem,
@@ -62,23 +62,23 @@ def test_guided_contract_requires_all_three_guidance_groups():
     )
 
     assert (
-        LanguageLearningWritingService._writing_type_contract_reason(request, incomplete)
+        writing_type_contract_reason(request, incomplete)
         == "GUIDED_RESPONSE_CONSTRAINTS_MISSING"
     )
-    assert LanguageLearningWritingService._writing_type_contract_reason(request, complete) is None
+    assert writing_type_contract_reason(request, complete) is None
 
 
 def test_translation_and_free_reject_hidden_guidance_payloads():
     item = _item(providedFacts=["숨겨진 사실"])
 
     assert (
-        LanguageLearningWritingService._writing_type_contract_reason(
+        writing_type_contract_reason(
             _request("TRANSLATION"), item
         )
         == "TRANSLATION_GUIDANCE_MUST_BE_EMPTY"
     )
     assert (
-        LanguageLearningWritingService._writing_type_contract_reason(_request("FREE"), item)
+        writing_type_contract_reason(_request("FREE"), item)
         == "FREE_GUIDANCE_MUST_BE_EMPTY"
     )
 

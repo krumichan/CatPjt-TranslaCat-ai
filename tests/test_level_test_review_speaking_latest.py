@@ -5,7 +5,7 @@ import pytest
 from app.features.language_learning.level_test.policy import LEVEL_TEST_RECIPE
 from app.features.language_learning.level_test.prompts import build_level_test_generation_prompt
 from app.features.language_learning.level_test.service import LevelTestService
-from app.features.language_learning.writing.service import _DAILY_WRITING_GENERATION_SCHEMA
+from app.features.language_learning.writing.generation_contract import build_candidate_schema
 from app.schemas.language_learning_level_test import (
     LevelTestDomain,
     LevelTestFeedbackDetail,
@@ -161,9 +161,10 @@ def test_repeat_speaking_payload_defaults_model_answer_list_without_fabricating_
 
 
 def test_daily_writing_schema_requires_quality_metadata_used_by_current_filter():
-    item_schema = _DAILY_WRITING_GENERATION_SCHEMA["properties"]["items"]["items"]
-    assert "languageComplexityBand" in item_schema["required"]
+    item_schema = build_candidate_schema()["$defs"]["WritingDraft"]
     assert "diversityMetadata" in item_schema["required"]
+    # Band/order/bucket are server-owned, not generated self-classification.
+    assert {"languageComplexityBand", "difficulty", "order"}.isdisjoint(item_schema["properties"])
 
 
 def test_feedback_detail_uses_camel_case_contract():

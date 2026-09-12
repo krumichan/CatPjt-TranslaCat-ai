@@ -91,6 +91,35 @@ def schema_name(type_name: str) -> str:
     return (normalized or "translacat_response")[:64]
 
 
+# Only these closed, required-field schemas opt in. Legacy optional-field callers
+# retain their existing migration contract. Semantic/binding checks remain mandatory.
+_STRICT_REVIEW_TASKS = frozenset({
+    "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION",
+    "LANGUAGE_LEARNING_WRITING_SOURCE_LOCALIZATION",
+    "LANGUAGE_LEARNING_WRITING_DIFFICULTY_PRESCREEN",
+    "LANGUAGE_LEARNING_WRITING_TASK_VERIFICATION",
+    "LANGUAGE_LEARNING_WRITING_DIFFICULTY_VERIFICATION",
+    "LANGUAGE_LEARNING_WRITING_NOTE_VERIFICATION",
+    "LANGUAGE_LEARNING_WRITING_NOTE_LOCALIZATION",
+})
+
+
+class OpenAISchemaConfigurationError(ValueError):
+    status_code = 400
+
+
+def _assert_strict_objects(node: Any) -> None:
+    if isinstance(node, list):
+        for child in node:
+            _assert_strict_objects(child)
+    elif isinstance(node, dict):
+        if node.get("type") == "object":
+            if node.get("additionalProperties") is not False or set(node.get("required", [])) != set(node.get("properties", {})):
+                raise OpenAISchemaConfigurationError("Strict Writing review schemas require closed objects and every property required")
+        for child in node.values():
+            _assert_strict_objects(child)
+
+
 def build_openai_text_config(
     *,
     type_name: str,
@@ -103,13 +132,13 @@ def build_openai_text_config(
 
     normalized_schema = normalize_openai_response_schema(schema)
     assert normalized_schema is not None
+    strict = type_name in _STRICT_REVIEW_TASKS
+    if strict:
+        _assert_strict_objects(normalized_schema)
     config["format"] = {
         "type": "json_schema",
         "name": schema_name(type_name),
-        # Keep strict=False during the migration because several existing service
-        # schemas intentionally contain optional fields. Pydantic remains the final
-        # strict validator after parsing.
-        "strict": False,
+        "strict": strict,
         "schema": normalized_schema,
     }
     return config

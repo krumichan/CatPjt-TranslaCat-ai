@@ -8,7 +8,6 @@ from app.features.language_learning.level_test.normalizer import LevelTestGenera
 from app.features.language_learning.level_test.service import LevelTestService
 from app.features.language_learning.writing.service import (
     LanguageLearningWritingService,
-    _DAILY_WRITING_CANDIDATE_SCHEMA,
 )
 from app.schemas.language_learning_level_test import (
     LevelTestQuestionGenerationPayload,
@@ -16,7 +15,6 @@ from app.schemas.language_learning_level_test import (
 )
 from tests.test_language_learning_current import (
     QueueProvider,
-    diversity_metadata,
     level_generation_payload,
     level_question_request,
     writing_candidate_payload,
@@ -25,44 +23,51 @@ from tests.test_language_learning_current import (
 )
 
 
-def test_daily_current_provider_schema_requires_quality_metadata():
-    item_schema = _DAILY_WRITING_CANDIDATE_SCHEMA["properties"]["items"]["items"]
+from app.features.language_learning.writing.generation import GENERATION_TASK
+from app.features.language_learning.writing.generation_contract import build_candidate_schema
+from tests.writing_generation_fakes import WritingPipelineProvider, content_only
+
+
+def test_daily_current_provider_schema_requires_quality_metadata_not_server_fields():
+    item_schema = build_candidate_schema()["$defs"]["WritingDraft"]
     required = item_schema["required"]
-    assert required.count("languageComplexityBand") == 1
+    assert "languageComplexityBand" not in item_schema["properties"]
+    assert "difficulty" not in item_schema["properties"]
+    assert "order" not in item_schema["properties"]
     assert required.count("diversityMetadata") == 1
     assert len(required) == len(set(required))
 
 
 def test_daily_current_salvages_valid_sibling_when_one_candidate_is_malformed():
-    payload = writing_candidate_payload()
-    payload["items"][1].pop("diversityMetadata")
-    provider = QueueProvider(plain=[payload])
-    service = LanguageLearningWritingService(provider=provider)
-
-    request = writing_current_request().model_copy(
-        deep=True,
-        update={"sentence_count": 2},
-    )
-    batch = asyncio.run(
-        service._call_daily_candidate_batch(request, provider_attempt=0)
-    )
-
-    assert len(batch.items) == 3
-    assert all(item.diversity_metadata is not None for item in batch.items)
+    items = [content_only(item) for item in writing_candidate_payload()["items"][:2]]
+    items[0].pop("diversityMetadata")
+    request = writing_current_request().model_copy(deep=True, update={
+        "sentence_count": 1,
+        "difficulty_distribution": writing_current_request().difficulty_distribution.model_copy(update={"challenge": 0}),
+    })
+    provider = WritingPipelineProvider([{"items": items}], {items[1]["originText"]: 3})
+    response = asyncio.run(LanguageLearningWritingService(provider).generate_daily(request))
+    assert len(response.items) == 1
+    assert response.items[0].origin_text == items[1]["originText"]
+    assert response.items[0].diversity_metadata is not None
+    assert provider.counts[GENERATION_TASK] == 1
 
 
 def test_daily_current_retries_after_an_unusable_batch_and_still_builds_set():
-    unusable = copy.deepcopy(writing_candidate_payload())
-    for item in unusable["items"]:
+    source = writing_candidate_payload()["items"]
+    normal = [content_only(item) for item in source[:2]]
+    challenge = [content_only(item) for item in source[2:]]
+    unusable = copy.deepcopy(normal)
+    for item in unusable:
         item.pop("diversityMetadata")
-    provider = QueueProvider(plain=[unusable, writing_candidate_payload()])
-    service = LanguageLearningWritingService(provider=provider)
-
-    response = asyncio.run(service.generate_daily(writing_current_request()))
-
+    provider = WritingPipelineProvider(
+        [{"items": unusable}, {"items": normal}, {"items": challenge}],
+        {item["originText"]: item["languageComplexityBand"] for item in source},
+    )
+    response = asyncio.run(LanguageLearningWritingService(provider).generate_daily(writing_current_request()))
     assert len(response.items) == 2
     assert {item.difficulty.value for item in response.items} == {"NORMAL", "CHALLENGE"}
-    assert len(provider.calls) == 2
+    assert provider.counts[GENERATION_TASK] == 3
 
 
 def test_vocab_context_rejects_exact_correct_answer_leak_in_prompt():

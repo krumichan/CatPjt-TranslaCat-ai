@@ -112,6 +112,10 @@ class AiProviderPool:
         slot = self._first_capable_slot("model_name_for") or self._first_capable_slot("call")
         return slot.name if slot is not None else "unknown"
 
+    def supports(self, method_name: str) -> bool:
+        """Capability check without making a speculative provider request."""
+        return any(callable(getattr(slot.provider, method_name, None)) for slot in self._slots)
+
     async def call(
         self,
         type_name: str,
@@ -277,6 +281,10 @@ class AiProviderPool:
 
     @staticmethod
     def _is_transient_provider_error(exc: Exception) -> bool:
+        # A provider may explicitly mark refusal/token-limit output as nonretryable.
+        # Do not silently retry that operation on another docked provider.
+        if getattr(exc, "retryable", None) is False:
+            return False
         status_code = getattr(exc, "status_code", None)
         if status_code in {408, 409, 429, 500, 502, 503, 504}:
             return True

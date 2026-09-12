@@ -36,6 +36,27 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 8192
     ),
+    # Writing: content generation is separate from blind difficulty/task checks.
+    # Nano never issues the final reject/accept; Mini task review is mandatory.
+    "LANGUAGE_LEARNING_WRITING_DIFFICULTY_PRESCREEN": AiTaskModelPolicy(
+        AiModelTier.NANO, "low", 2048
+    ),
+    "LANGUAGE_LEARNING_WRITING_TASK_VERIFICATION": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 4096
+    ),
+    "LANGUAGE_LEARNING_WRITING_DIFFICULTY_VERIFICATION": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 2048
+    ),
+    # Note localization proposes text only; independent Mini must still approve it.
+    "LANGUAGE_LEARNING_WRITING_SOURCE_LOCALIZATION": AiTaskModelPolicy(
+        AiModelTier.NANO, "low", 3072
+    ),
+    "LANGUAGE_LEARNING_WRITING_NOTE_LOCALIZATION": AiTaskModelPolicy(
+        AiModelTier.NANO, "low", 2048
+    ),
+    "LANGUAGE_LEARNING_WRITING_NOTE_VERIFICATION": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 2048
+    ),
     "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),

@@ -1,3 +1,5 @@
+import pytest
+
 from app.ai.providers.gemini.configs import (
     build_language_learning_task_verification_config,
     build_language_learning_vocab_design_config,
@@ -226,3 +228,51 @@ def test_task_sufficiency_verification_config_is_deterministic_and_compact():
     assert config.top_k == 10
     assert config.max_output_tokens == 512
     assert config.thinking_config.thinking_budget == 0
+
+
+@pytest.mark.parametrize("task,model_name", [
+    ("LANGUAGE_LEARNING_WRITING_TASK_VERIFICATION", "TaskReview"),
+    ("LANGUAGE_LEARNING_WRITING_DIFFICULTY_VERIFICATION", "TaskReview"),
+    ("LANGUAGE_LEARNING_WRITING_NOTE_VERIFICATION", "NoteReview"),
+])
+def test_writing_review_configs_preserve_bound_evidence_shape_and_token_budget(task, model_name):
+    from copy import deepcopy
+    from app.ai.providers.gemini.config_manager import GeminiConfigManager
+    from app.features.language_learning.writing import verification
+
+    model = getattr(verification, model_name)
+    schema = model.model_json_schema(by_alias=True)
+    before = deepcopy(schema)
+    config = GeminiConfigManager().get_cached_config(type_name=task, schema=schema)
+    assert config.max_output_tokens == 4096
+    assert config.temperature == 0
+    assert config.thinking_config.thinking_budget == 0
+    assert schema == before
+    sanitized = sanitize_gemini_response_schema(schema)
+    assert {"candidateId", "contentHash", "verdict", "confidence"}.issubset(sanitized["required"])
+    if model_name == "TaskReview":
+        assert {"checks", "difficultyEvidenceSegmentIds", "difficultyStatus"}.issubset(sanitized["required"])
+        assert "evidenceSegmentIds" in sanitized["$defs"]["CriterionCheck"]["required"]
+    else:
+        assert "evidenceSegmentIds" in sanitized["required"]
+    assert "ReviewEvidence" not in sanitized.get("$defs", {})
+
+
+def test_writing_note_localization_config_keeps_note_only_schema():
+    from copy import deepcopy
+
+    from app.ai.providers.gemini.config_manager import GeminiConfigManager
+    from app.features.language_learning.writing.note_localization import (
+        NOTE_LOCALIZATION_TASK, LocalizedWritingNote,
+    )
+
+    schema = LocalizedWritingNote.model_json_schema(by_alias=True)
+    before = deepcopy(schema)
+    config = GeminiConfigManager().get_cached_config(type_name=NOTE_LOCALIZATION_TASK, schema=schema)
+    assert config.max_output_tokens == 4096
+    assert config.temperature == 0
+    assert config.thinking_config.thinking_budget == 0
+    assert schema == before
+    sanitized = sanitize_gemini_response_schema(schema)
+    assert set(sanitized["required"]) == {"candidateId", "contentHash", "focusReason"}
+    assert set(sanitized["properties"]) == {"candidateId", "contentHash", "focusReason"}
