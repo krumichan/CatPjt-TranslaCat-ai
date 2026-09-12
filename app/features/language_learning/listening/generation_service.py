@@ -5,13 +5,15 @@ import hashlib
 import json
 import logging
 import time
-from difflib import SequenceMatcher
 
 from pydantic import ValidationError
 
 from app.ai.ports import StructuredTextGenerationProvider
 from app.common.idempotency import InMemoryIdempotencyStore
 from app.core.config import settings
+from app.features.language_learning.listening.difficulty_adapter import (
+    validate_listening_candidate,
+)
 from app.features.language_learning.listening.errors import ListeningStageException
 from app.features.language_learning.listening.normalization import (
     normalize_text,
@@ -28,13 +30,11 @@ from app.features.language_learning.quality import (
     DiversityCandidate,
     DiversityValidator,
     DiversityValidationStats,
-    resolve_listening_complexity_band,
 )
 from app.features.language_learning.listening.prompts import build_generation_prompt
 from app.features.language_learning.listening.provider_error import (
     map_provider_exception,
 )
-from app.features.language_learning.listening.retry import run_with_stage_retry
 from app.schemas.language_learning_listening import (
     GeneratedListeningItemPayload,
     ListeningErrorCode,
@@ -436,18 +436,13 @@ class ListeningGenerationService:
         request: ListeningSetGenerationRequest,
         item,
     ) -> ListeningItem | None:
-        if item.diversity_metadata is None or item.language_complexity_band is None:
-            return None
-        expected_band = resolve_listening_complexity_band(
-            request.set_context.difficulty.value,
-            request.language_complexity,
+        _, validation = validate_listening_candidate(
+            request,
+            item,
+            duration_range_resolver=lambda: self._duration_range(request),
+            mode_payload_validator=lambda: self._valid_mode_payload(request, item),
         )
-        if item.language_complexity_band != expected_band or not item.safety.passed:
-            return None
-        minimum, maximum = self._duration_range(request)
-        if not minimum <= item.estimated_audio_seconds <= maximum:
-            return None
-        if not self._valid_mode_payload(request, item):
+        if not validation.passed:
             return None
         normalized = normalize_text(item.source_text, request.user_context.learning_language)
         content_hash = hashlib.sha256(normalized.text.encode("utf-8")).hexdigest()

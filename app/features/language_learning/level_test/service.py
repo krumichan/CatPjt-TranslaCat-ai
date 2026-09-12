@@ -21,6 +21,10 @@ from app.features.language_learning.level_test.audio_upload import (
     PresignedAudioUploadError,
     PresignedAudioUploader,
 )
+from app.features.language_learning.level_test.difficulty_adapter import (
+    build_level_test_difficulty_spec,
+    project_level_test_candidate_validation,
+)
 from app.features.language_learning.level_test.normalizer import LevelTestGenerationNormalizer
 from app.core.config import settings
 from app.features.language_learning.level_test.policy import (
@@ -215,6 +219,7 @@ class LevelTestService:
         self,
         request: LevelTestQuestionGenerationRequest,
     ) -> LevelTestQuestionGenerationResponse:
+        difficulty_spec = build_level_test_difficulty_spec(request)
         stats = DiversityValidationStats()
         telemetry = _GenerationTelemetry()
         all_candidates: list[tuple[LevelTestQuestionCandidate, dict[str, int]]] = []
@@ -373,7 +378,12 @@ class LevelTestService:
                 quality_failure_occurred = False
                 option_scores: dict[str, int] = {}
                 try:
-                    self._validate_question_candidate(request, candidate)
+                    validation = project_level_test_candidate_validation(
+                        difficulty_spec,
+                        lambda: self._validate_question_candidate(request, candidate),
+                    )
+                    if not validation.passed:
+                        raise ValueError(validation.primary_issue)
                     if design_map:
                         design = self._validate_vocab_context_design_binding(candidate, design_map)
 
@@ -424,7 +434,16 @@ class LevelTestService:
                                 total_output_tokens += repair_usage.output_tokens
 
                             if repaired_candidate is not None:
-                                self._validate_question_candidate(request, repaired_candidate)
+                                candidate_to_validate = repaired_candidate
+                                repair_validation = project_level_test_candidate_validation(
+                                    difficulty_spec,
+                                    lambda: self._validate_question_candidate(
+                                        request,
+                                        candidate_to_validate,
+                                    ),
+                                )
+                                if not repair_validation.passed:
+                                    raise ValueError(repair_validation.primary_issue)
                                 self._validate_vocab_context_design_binding(repaired_candidate, design_map)
                                 repair_reason, repair_verdict, repair_usage, repair_verifier_calls, repair_option_scores = (
                                     await self._verify_choice_candidate(

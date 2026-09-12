@@ -8,6 +8,10 @@ from pydantic import ValidationError
 from app.ai.ports import StructuredTextGenerationProvider
 from app.core.config import settings
 from app.features.language_learning.speaking.errors import SpeakingStageException
+from app.features.language_learning.speaking.generation_difficulty_adapter import (
+    build_speaking_generation_difficulty_spec,
+    project_speaking_generation_validation,
+)
 from app.features.language_learning.speaking.idempotency import InMemoryIdempotencyStore
 from app.features.language_learning.speaking.policy import (
     SPEAKING_CONVERSATION_PROMPT_VERSION,
@@ -75,6 +79,7 @@ class SpeakingConversationService:
     ) -> ConversationGenerationResponse:
         prompt = build_conversation_prompt(request)
         schema = ConversationPayload.model_json_schema()
+        difficulty_spec = build_speaking_generation_difficulty_spec(request)
         started = time.perf_counter()
 
         async def operation():
@@ -97,7 +102,12 @@ class SpeakingConversationService:
                     raise ValueError(
                         "COACHING correction에는 improvementLink가 필요합니다."
                     )
-                self._validate_practice_mode_payload(request, payload)
+                validation = project_speaking_generation_validation(
+                    difficulty_spec,
+                    lambda: self._validate_practice_mode_payload(request, payload),
+                )
+                if not validation.passed:
+                    raise ValueError(validation.primary_issue)
                 return result, payload
             except (TimeoutError, asyncio.TimeoutError) as exc:
                 raise SpeakingStageException(

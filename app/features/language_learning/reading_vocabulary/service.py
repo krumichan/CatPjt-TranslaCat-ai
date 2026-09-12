@@ -11,6 +11,22 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ValidationError
 
 from app.ai.ports import TextGenerationProvider
+from app.features.language_learning.reading_vocabulary.reading_difficulty_adapter import (
+    ReadingAcceptanceContext,
+    ReadingSemanticQualityPolicy,
+    build_reading_passage_difficulty_spec,
+    build_reading_question_difficulty_spec,
+    normalize_reading_semantic_assessment,
+    project_reading_question_validation,
+    validate_reading_passage,
+)
+from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_adapter import (
+    VocabularyAcceptanceContext,
+    build_vocabulary_difficulty_spec,
+    normalize_vocabulary_semantic_assessment,
+    project_vocabulary_validation,
+    semantic_quality_policy_for_vocabulary_mode,
+)
 from app.features.language_learning.reading_vocabulary.prompts import (
     PRACTICE_GENERATION_PROMPT_VERSION,
     build_origin_explanation_prompt,
@@ -363,6 +379,11 @@ class ReadingVocabularyGenerationService:
                     reason="Reading passage is not in learningLanguage",
                 )
                 continue
+            passage_spec = build_reading_passage_difficulty_spec(
+                request,
+                passage_id=passage_id,
+                complexity_band=request.complexity_band,
+            )
             last_error: Exception | None = None
             for attempt in range(1, _MAX_PASSAGE_ATTEMPTS + 1):
                 try:
@@ -379,16 +400,19 @@ class ReadingVocabularyGenerationService:
                         timeout=self.timeout_seconds,
                     )
                     payload = _ReadingPassagePayload.model_validate(raw)
-                    if payload.passageId != passage_id:
-                        raise ValueError("reading passageId mismatch")
                     passage_text = payload.passageText.strip()
-                    if not passage_text:
-                        raise ValueError("reading passageText is blank")
-                    self._assert_language_lane(
-                        request.learning_language,
-                        [passage_text],
-                        reason="Reading passage is not in learningLanguage",
+                    passage_validation = validate_reading_passage(
+                        passage_spec,
+                        observed_passage_id=payload.passageId,
+                        passage_text=passage_text,
+                        language_validator=lambda: self._assert_language_lane(
+                            request.learning_language,
+                            [passage_text],
+                            reason="Reading passage is not in learningLanguage",
+                        ),
                     )
+                    if not passage_validation.passed:
+                        raise ValueError(passage_validation.primary_issue)
                     passages[passage_id] = passage_text
                     break
                 except (ValidationError, ValueError, TimeoutError, asyncio.TimeoutError) as exc:
@@ -1154,12 +1178,47 @@ class ReadingVocabularyGenerationService:
                     and question.target_expression != expected_retry_target
                 ):
                     raise ValueError("semantic retry changed targetExpression")
-                self._validate_candidate(
-                    request,
-                    question,
-                    slot_by_order[order],
-                    accepted,
-                )
+                if request.domain == PracticeDomain.READING:
+                    slot = slot_by_order[order]
+                    assert slot.passage_id is not None
+                    question_spec = build_reading_question_difficulty_spec(
+                        difficulty=slot.difficulty.value,
+                        complexity_band=slot.complexity_band,
+                        skill_tag=slot.skill_tag,
+                        passage_id=slot.passage_id,
+                    )
+                    validation = project_reading_question_validation(
+                        question_spec,
+                        lambda: self._validate_candidate(
+                            request,
+                            question,
+                            slot,
+                            accepted,
+                        ),
+                    )
+                    if not validation.passed:
+                        raise ValueError(validation.primary_issue)
+                else:
+                    slot = slot_by_order[order]
+                    vocabulary_spec = build_vocabulary_difficulty_spec(
+                        mode=request.mode,
+                        difficulty=slot.difficulty.value,
+                        complexity_band=slot.complexity_band,
+                        skill_tag=slot.skill_tag,
+                        question_type=question.question_type.value,
+                        target_expression=question.target_expression or "",
+                    )
+                    validation = project_vocabulary_validation(
+                        vocabulary_spec,
+                        lambda: self._validate_candidate(
+                            request,
+                            question,
+                            slot,
+                            accepted,
+                        ),
+                    )
+                    if not validation.passed:
+                        raise ValueError(validation.primary_issue)
                 accepted[order] = question
             except (ValidationError, ValueError) as exc:
                 reason = str(exc)
@@ -1802,26 +1861,41 @@ class ReadingVocabularyGenerationService:
                 failures: dict[int, str] = {}
                 for order, expected_key in expected_by_order.items():
                     verdict = verdict_by_order[order]
-                    if verdict.ambiguous:
-                        failures[order] = "ambiguous single-choice item"
-                    elif not verdict.supported:
-                        failures[order] = "answer is not sufficiently supported"
-                    elif not verdict.modeFit:
-                        failures[order] = "question does not fit requested mode/skill"
-                    elif verdict.answerLeakage:
-                        failures[order] = "semantic verifier detected answer leakage"
-                    elif not verdict.distractorsPlausible:
-                        failures[order] = "distractors are too weak or unrelated"
-                    elif (
-                        request.domain == PracticeDomain.VOCABULARY
-                        and request.mode == VocabularyMode.USAGE_DISTINCTION.value
-                        and not verdict.contextDependent
-                    ):
-                        failures[order] = "USAGE_DISTINCTION does not require context"
-                    elif verdict.bestAnswerKey != expected_key:
-                        failures[order] = (
-                            f"answer mismatch expected={expected_key} verifier={verdict.bestAnswerKey}"
+                    if request.domain == PracticeDomain.READING:
+                        assessment = normalize_reading_semantic_assessment(
+                            best_answer_key=verdict.bestAnswerKey,
+                            ambiguous=verdict.ambiguous,
+                            supported=verdict.supported,
+                            mode_fit=verdict.modeFit,
+                            answer_leakage=verdict.answerLeakage,
+                            distractors_plausible=verdict.distractorsPlausible,
                         )
+                        decision = ReadingSemanticQualityPolicy().decide(
+                            assessment=assessment,
+                            context=ReadingAcceptanceContext(expected_answer_key=expected_key),
+                        )
+                        if decision.action != "ACCEPT":
+                            failures[order] = decision.reason
+                    else:
+                        assessment = normalize_vocabulary_semantic_assessment(
+                            best_answer_key=verdict.bestAnswerKey,
+                            ambiguous=verdict.ambiguous,
+                            supported=verdict.supported,
+                            mode_fit=verdict.modeFit,
+                            answer_leakage=verdict.answerLeakage,
+                            context_dependent=verdict.contextDependent,
+                            distractors_plausible=verdict.distractorsPlausible,
+                        )
+                        decision = semantic_quality_policy_for_vocabulary_mode(
+                            request.mode
+                        ).decide(
+                            assessment=assessment,
+                            context=VocabularyAcceptanceContext(
+                                expected_answer_key=expected_key
+                            ),
+                        )
+                        if decision.action != "ACCEPT":
+                            failures[order] = decision.reason
                 return failures
             except Exception as exc:
                 last_error = exc
