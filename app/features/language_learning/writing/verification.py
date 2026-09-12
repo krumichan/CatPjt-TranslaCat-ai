@@ -11,7 +11,19 @@ from uuid import uuid4
 
 from app.ai.ports import TextGenerationProvider
 from app.features.language_learning.writing.assessment_contract import (
-    NoteReview, TaskReview, RecoveredTaskReview, recovered_acceptance, binding_failure, build_review_schema,
+    NoteReview, TaskReview, RecoveredTaskReview, binding_failure, build_review_schema,
+)
+from app.features.language_learning.difficulty.contracts import (
+    DifficultyAcceptanceDecision,
+    DifficultyValidationResult,
+)
+from app.features.language_learning.difficulty.orchestration import orchestrate_candidate
+from app.features.language_learning.writing.difficulty_adapter import (
+    WritingAcceptanceContext,
+    WritingDifficultyAcceptancePolicy,
+    WritingSemanticAssessment,
+    normalize_writing_assessment,
+    writing_difficulty_target,
 )
 from app.features.language_learning.writing.difficulty_spec import build_difficulty_spec, difficulty_spec_reason
 from app.features.language_learning.writing.difficulty_planning import ADJACENT_RECHECKS_PER_SLOT
@@ -91,39 +103,101 @@ class WritingCandidateVerifier:
     async def verify(
         self, request: DailyWritingGenerationRequest, draft: WritingDraft, slot: WritingSlot,
         candidate_id: str, *, generation_attempt: int = 1,
+        validation: DifficultyValidationResult | None = None,
         source_recovery: SourceRecoveryEvidence | None = None,
     ) -> VerificationDecision:
         # An approval must refer to the exact snapshot seen by the reviewer.
         draft = draft.model_copy(deep=True)
         content_hash = review_content_hash(request, draft)
-        context = ReviewContext(request.request_id, candidate_id, content_hash, slot.order, generation_attempt)
-        quality = await self._assess(request, draft, context, source_recovery=source_recovery)
-        if quality is None:
-            return VerificationDecision(False, "SEMANTIC_UNRESOLVED", content_hash)
-        primary_band = quality.estimated_band
-        used = self.adjacent_rechecks.get(slot.order, 0)
-        acceptance = recovered_acceptance(quality, slot, allow_adjacent_recheck=used < ADJACENT_RECHECKS_PER_SLOT)
-        adjudicated = False
-        adjudication_reason = None
-        if acceptance.action == "ADJUDICATE":
-            adjudicated = True
-            adjudication_reason = acceptance.reason
-            if adjudication_reason == "ADJACENT_BAND_RECHECK":
+        # Legacy/direct callers did not run deterministic validation here. The
+        # production generator passes its already-computed validation explicitly.
+        effective_validation = (
+            validation if validation is not None else DifficultyValidationResult.accept()
+        )
+        context_holder = [
+            ReviewContext(
+                request.request_id, candidate_id, content_hash, slot.order, generation_attempt,
+            )
+        ]
+        policy = WritingDifficultyAcceptancePolicy()
+        target = writing_difficulty_target(slot)
+
+        async def assess_primary() -> WritingSemanticAssessment | None:
+            review = await self._assess(
+                request, draft, context_holder[0], source_recovery=source_recovery,
+            )
+            return None if review is None else normalize_writing_assessment(review)
+
+        def policy_context(
+            _assessment: WritingSemanticAssessment, _adjudicated: bool,
+        ) -> WritingAcceptanceContext:
+            return WritingAcceptanceContext(
+                slot,
+                self.adjacent_rechecks.get(slot.order, 0) < ADJACENT_RECHECKS_PER_SLOT,
+            )
+
+        def before_adjudication(decision: DifficultyAcceptanceDecision) -> None:
+            if decision.reason == "ADJACENT_BAND_RECHECK":
                 # Reserve before awaiting; even a failed/cancelled review consumes
                 # the extra allowance, and siblings cannot start fresh re-votes.
+                used = self.adjacent_rechecks.get(slot.order, 0)
                 self.adjacent_rechecks[slot.order] = used + 1
-            emit_event("writing.adjudication.requested", **context.fields(), reason=acceptance.reason,
-                       target_band=slot.target_band, primary_estimated_band=primary_band,
+            primary = assessment_holder[0]
+            emit_event("writing.adjudication.requested", **context_holder[0].fields(), reason=decision.reason,
+                       target_band=slot.target_band,
+                       primary_estimated_band=(primary.review.estimated_band if primary else None),
                        adjacent_rechecks_used=self.adjacent_rechecks.get(slot.order, 0),
                        adjacent_recheck_limit=ADJACENT_RECHECKS_PER_SLOT,
                        confidence_used_for_acceptance=False)
+
+        assessment_holder: list[WritingSemanticAssessment | None] = [None]
+
+        async def primary_with_capture() -> WritingSemanticAssessment | None:
+            assessment_holder[0] = await assess_primary()
+            return assessment_holder[0]
+
+        async def adjudicate() -> WritingSemanticAssessment | None:
             # A fresh correlation ID also prevents replaying the first verdict as
             # the adjudicator's response. No prior decisions appear in the prompt.
-            context = ReviewContext(request.request_id, uuid4().hex, content_hash, slot.order, generation_attempt)
-            quality = await self._assess(request, draft, context, adjudicator=True, source_recovery=source_recovery)
-            if quality is None:
-                return VerificationDecision(False, "SEMANTIC_UNRESOLVED", content_hash, adjudicated=True)
-            acceptance = recovered_acceptance(quality, slot, adjudicated=True)
+            context_holder[0] = ReviewContext(
+                request.request_id, uuid4().hex, content_hash, slot.order, generation_attempt,
+            )
+            review = await self._assess(
+                request, draft, context_holder[0], adjudicator=True,
+                source_recovery=source_recovery,
+            )
+            return None if review is None else normalize_writing_assessment(review)
+
+        result = await orchestrate_candidate(
+            target=target,
+            validation=effective_validation,
+            assessor=primary_with_capture,
+            policy=policy,
+            context_factory=policy_context,
+            deterministic_rejection=lambda checked: DifficultyAcceptanceDecision(
+                "REJECT", checked.primary_issue or "SEMANTIC_UNRESOLVED",
+            ),
+            is_adjudication_requested=lambda decision: decision.action == "ADJUDICATE",
+            unresolved_decision=DifficultyAcceptanceDecision("REJECT", "SEMANTIC_UNRESOLVED"),
+            adjudicator=adjudicate,
+            before_adjudication=before_adjudication,
+        )
+        if result.assessment is None:
+            return VerificationDecision(
+                False,
+                result.decision.reason,
+                content_hash,
+                adjudicated=result.adjudicated,
+            )
+        quality = result.assessment.review
+        primary_band = (
+            result.primary_assessment.review.estimated_band
+            if result.primary_assessment is not None
+            else None
+        )
+        acceptance = result.decision
+        adjudicated = result.adjudicated
+        adjudication_reason = result.adjudication_reason
 
         def decision(accepted: bool, reason: str, final: WritingDraft = draft) -> VerificationDecision:
             return VerificationDecision(
@@ -135,7 +209,7 @@ class WritingCandidateVerifier:
                 adjudication_reason=adjudication_reason,
             )
 
-        emit_event("writing.acceptance.decided", **context.fields(), action=acceptance.action,
+        emit_event("writing.acceptance.decided", **context_holder[0].fields(), action=acceptance.action,
                    reason=acceptance.reason, target_band=slot.target_band,
                    primary_estimated_band=primary_band, adjudication_reason=adjudication_reason,
                    adjacent_rechecks_used=self.adjacent_rechecks.get(slot.order, 0),
@@ -149,7 +223,7 @@ class WritingCandidateVerifier:
         if acceptance.action == "LOCALIZE_NOTE" or note_needs_localization(request, draft):
             # Only a language-only note defect is repairable. The main task passed;
             # all task fields remain immutable. The replacement gets its own audit.
-            localized = await self._localize_note(request, draft, slot, context)
+            localized = await self._localize_note(request, draft, slot, context_holder[0])
             if isinstance(localized, str):
                 return decision(False, localized)
             return decision(True, "VERIFIED_NOTE_LOCALIZED", localized)

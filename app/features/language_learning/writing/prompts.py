@@ -4,7 +4,8 @@ import json
 
 from app.features.language_learning.writing.generation_contract import CANDIDATES_PER_SLOT, WritingSlot, plan_slots
 from app.features.language_learning.writing.source_language import source_language_contract
-from app.features.language_learning.writing.difficulty_spec import WRITING_BAND_RUBRIC, build_difficulty_spec
+from app.features.language_learning.writing.difficulty_spec import WRITING_BAND_RUBRIC
+from app.features.language_learning.writing.difficulty_adapter import writing_difficulty_spec
 
 from app.schemas.language_learning import (
     DailyWritingGenerationRequest,
@@ -234,7 +235,9 @@ def build_daily_writing_generation_prompt(
         }
         payload["sourceRecoveryMode"] = "REDUCED_CONTEXT_REGENERATION_ONCE"
     payload["languageProductionRubric"] = WRITING_BAND_RUBRIC
-    payload["difficultySpec"] = build_difficulty_spec(request, selected_slot).generation_payload()
+    payload["difficultySpec"] = writing_difficulty_spec(
+        request, selected_slot,
+    ).generation_payload()
     # Only bounded application-generated codes, never a reviewer's prose/instructions.
     payload["failedChecks"] = dict(sorted((retry_feedback or {}).items())[:24])
     payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

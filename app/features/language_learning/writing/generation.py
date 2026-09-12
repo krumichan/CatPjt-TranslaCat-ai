@@ -23,8 +23,10 @@ from app.features.language_learning.quality import (
     DiversityValidationStats,
 )
 from app.features.language_learning.writing.difficulty_spec import (
-    WRITING_DIFFICULTY_SPEC_VERSION, measure_draft,
+    WRITING_DIFFICULTY_SPEC_VERSION,
 )
+from app.features.language_learning.difficulty.contracts import DifficultyValidationResult
+from app.features.language_learning.writing.difficulty_adapter import validate_writing_candidate
 from app.features.language_learning.writing.difficulty_planning import (
     WRITING_DIFFICULTY_CONTROL_VERSION, DifficultyRecoveryState, production_blueprint,
 )
@@ -264,8 +266,10 @@ class VerifiedWritingGenerator:
             source_only = []
             source_exhausted = False
             for draft in drafts:
-                reason = self._check_draft(request, draft, slot, attempt)
-                if reason is not None:
+                validation = self._check_draft(request, draft, slot, attempt)
+                reason = validation.primary_issue
+                if not validation.passed:
+                    assert reason is not None
                     self._reject(reason, feedback, stats)
                     if reason == "ORIGIN_TEXT_SCRIPT_MISMATCH":
                         source_only.append(draft)
@@ -273,7 +277,7 @@ class VerifiedWritingGenerator:
                 verified, strict = await self._review_candidate(
                     request, draft, slot, attempt, seen, accepted, stats, feedback, verifier,
                     strict_diversity, relaxed_diversity, rejected_tasks=rejected_tasks,
-                    difficulty_control=difficulty_control,
+                    difficulty_control=difficulty_control, validation=validation,
                 )
                 if verified is not None:
                     if strict:
@@ -307,15 +311,19 @@ class VerifiedWritingGenerator:
             )
             stats.source_recovery_proposals += len(proposals)
             for proposal in proposals:
-                reason = self._check_draft(request, proposal.draft, slot, attempt, recovered=True)
-                if reason is not None:
+                validation = self._check_draft(
+                    request, proposal.draft, slot, attempt, recovered=True,
+                )
+                reason = validation.primary_issue
+                if not validation.passed:
+                    assert reason is not None
                     self._reject("SOURCE_RECOVERY_" + reason, feedback, stats)
                     continue
                 source_exhausted = False
                 verified, strict = await self._review_candidate(
                     request, proposal.draft, slot, attempt, seen, accepted, stats, feedback, verifier,
                     strict_diversity, relaxed_diversity, source_recovery=proposal.evidence, rejected_tasks=rejected_tasks,
-                    difficulty_control=difficulty_control,
+                    difficulty_control=difficulty_control, validation=validation,
                 )
                 if verified is not None:
                     stats.source_recovery_accepted += 1
@@ -365,12 +373,13 @@ class VerifiedWritingGenerator:
         stats.rejections[reason] += 1
 
     def _check_draft(self, request: DailyWritingGenerationRequest, draft: WritingDraft,
-                     slot: WritingSlot, attempt: int, *, recovered: bool = False) -> str | None:
-        reason = deterministic_draft_reason(request, draft, slot=slot)
+                     slot: WritingSlot, attempt: int, *, recovered: bool = False) -> DifficultyValidationResult:
+        validation = validate_writing_candidate(request, draft, slot)
+        reason = validation.primary_issue
         emit_event("writing.spec.checked", request_id=request.request_id, slot=slot.order,
                    generation_attempt=attempt, policy=WRITING_DIFFICULTY_SPEC_VERSION,
                    target_band=slot.target_band, outcome="PASS" if reason is None else "REJECT", reason=reason,
-                   recovered_source=recovered, measurements=measure_draft(draft).log_fields(),
+                   recovered_source=recovered, measurements=dict(validation.measurements),
                    source_script=script_statistics(request.origin_language, draft.origin_text))
         if reason is not None:
             logger.info(
@@ -379,7 +388,7 @@ class VerifiedWritingGenerator:
                 safe_identifier(request.request_id), slot.order, attempt, self.max_attempts, reason,
                 script_rejection_field(reason), request.origin_language, request.writing_type.value,
             )
-        return reason
+        return validation
 
     async def _review_candidate(
         self, request: DailyWritingGenerationRequest, draft: WritingDraft, slot: WritingSlot,
@@ -388,6 +397,7 @@ class VerifiedWritingGenerator:
         strict_diversity: DiversityValidator, relaxed_diversity: DiversityValidator,
         *, source_recovery: SourceRecoveryEvidence | None = None, rejected_tasks: set[str],
         difficulty_control: DifficultyRecoveryState,
+        validation: DifficultyValidationResult,
     ) -> tuple[VerifiedDraft | None, bool]:
         fingerprint = review_content_hash(request, draft)
         task_key = hashlib.sha256(json.dumps(draft.task_content(), sort_keys=True,
@@ -415,7 +425,10 @@ class VerifiedWritingGenerator:
         candidate_id = uuid4().hex
         review_started = time.monotonic()
         extra = {"source_recovery": source_recovery} if source_recovery is not None else {}
-        verdict = await verifier.verify(request, draft, slot, candidate_id, generation_attempt=attempt, **extra)
+        verdict = await verifier.verify(
+            request, draft, slot, candidate_id,
+            generation_attempt=attempt, validation=validation, **extra,
+        )
         emit_event(
             "writing.candidate.reviewed", request_id=request.request_id, candidate_id=candidate_id,
             content_hash=fingerprint, slot=slot.order, generation_attempt=attempt,
