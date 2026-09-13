@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 import unicodedata
@@ -27,12 +28,24 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe
 from app.features.language_learning.reading_vocabulary.reading_difficulty_shadow import (
     ReadingDifficultyShadowCollector,
 )
+from app.features.language_learning.reading_vocabulary.meaning_relation_task import (
+    render_meaning_relation_prompt,
+)
 from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_adapter import (
     VocabularyAcceptanceContext,
     build_vocabulary_difficulty_spec,
     normalize_vocabulary_semantic_assessment,
     project_vocabulary_validation,
     semantic_quality_policy_for_vocabulary_mode,
+)
+from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_recipe import (
+    MeaningRelationDemand,
+    meaning_relation_skill_for_slot,
+    usage_intent_for_skill,
+    vocabulary_difficulty_recipe,
+)
+from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_shadow import (
+    VocabularyDifficultyShadowCollector,
 )
 from app.features.language_learning.reading_vocabulary.prompts import (
     PRACTICE_GENERATION_PROMPT_VERSION,
@@ -87,13 +100,6 @@ _ASCII_VOCABULARY_ALLOWLIST = {
 }
 _ASCII_ACRONYM_RE = re.compile(r"^[A-Z0-9][A-Z0-9+./#_-]{1,11}$")
 
-_USAGE_INTENT_BY_SKILL = {
-    VocabularySkill.DISTINCTION.value: "CONTEXTUAL_NEAR_EXPRESSION_CHOICE",
-    VocabularySkill.COLLOCATION.value: "COLLOCATION_CHOICE",
-    VocabularySkill.REGISTER.value: "REGISTER_CHOICE",
-    VocabularySkill.CONTEXT_USAGE.value: "CONTEXTUAL_USAGE_CHOICE",
-}
-
 _OPTION_SCHEMA = {
     "type": "OBJECT",
     "properties": {"key": {"type": "STRING"}, "text": {"type": "STRING"}},
@@ -139,6 +145,15 @@ _PRACTICE_CANDIDATE_SCHEMA: dict[str, Any] = {
     },
     "required": ["questions"],
 }
+
+_MEANING_RELATION_CANDIDATE_SCHEMA = copy.deepcopy(_PRACTICE_CANDIDATE_SCHEMA)
+_meaning_relation_question_schema = _MEANING_RELATION_CANDIDATE_SCHEMA["properties"][
+    "questions"
+]["items"]
+_meaning_relation_question_schema["properties"]["meaningContext"] = {
+    "type": ["STRING", "NULL"]
+}
+_meaning_relation_question_schema["required"].append("meaningContext")
 
 _READING_PASSAGE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -311,6 +326,7 @@ class _QuestionSlot:
     previous_question_types: tuple[str, ...] = ()
     usage_intent: str | None = None
     reading_mode: str | None = None
+    vocabulary_mode: str | None = None
 
     @property
     def review_target(self) -> bool:
@@ -335,6 +351,16 @@ class _QuestionSlot:
                 self.complexity_band,
                 mode=self.reading_mode,
                 skill_tag=self.skill_tag,
+            ).generation_payload()
+        if self.vocabulary_mode is not None:
+            if self.question_type is None:
+                raise ValueError("Vocabulary slot requires its server-selected question type")
+            payload["difficultyRecipe"] = vocabulary_difficulty_recipe(
+                mode=self.vocabulary_mode,
+                band=self.complexity_band,
+                skill_tag=self.skill_tag,
+                question_type=self.question_type.value,
+                usage_intent=self.usage_intent,
             ).generation_payload()
         if self.usage_intent is not None:
             payload["usageIntent"] = self.usage_intent
@@ -367,6 +393,9 @@ class ReadingVocabularyGenerationService:
         difficulty_shadow_enabled: bool = False,
         difficulty_shadow_sample_percent: float = 0.0,
         difficulty_shadow_timeout_seconds: float = 12.0,
+        vocabulary_difficulty_shadow_enabled: bool = False,
+        vocabulary_difficulty_shadow_sample_percent: float = 0.0,
+        vocabulary_difficulty_shadow_timeout_seconds: float = 12.0,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = timeout_seconds
@@ -375,6 +404,12 @@ class ReadingVocabularyGenerationService:
             enabled=difficulty_shadow_enabled,
             sample_percent=difficulty_shadow_sample_percent,
             timeout_seconds=difficulty_shadow_timeout_seconds,
+        )
+        self.vocabulary_difficulty_shadow = VocabularyDifficultyShadowCollector(
+            provider,
+            enabled=vocabulary_difficulty_shadow_enabled,
+            sample_percent=vocabulary_difficulty_shadow_sample_percent,
+            timeout_seconds=vocabulary_difficulty_shadow_timeout_seconds,
         )
 
     async def generate(self, request: PracticeGenerationRequest) -> PracticeGenerationResponse:
@@ -400,6 +435,9 @@ class ReadingVocabularyGenerationService:
                 questions=questions,
             )
             await self.difficulty_shadow.collect_if_selected(request, response.questions)
+            await self.vocabulary_difficulty_shadow.collect_if_selected(
+                request, response.questions
+            )
             return response
         except HTTPException:
             raise
@@ -605,12 +643,6 @@ class ReadingVocabularyGenerationService:
             return slots
 
         skill_cycle = {
-            VocabularyMode.MEANING_RELATION.value: [
-                VocabularySkill.MEANING.value,
-                VocabularySkill.SYNONYM.value,
-                VocabularySkill.ANTONYM.value,
-                VocabularySkill.DISTINCTION.value,
-            ],
             VocabularyMode.USAGE_DISTINCTION.value: [
                 VocabularySkill.DISTINCTION.value,
                 VocabularySkill.COLLOCATION.value,
@@ -623,20 +655,39 @@ class ReadingVocabularyGenerationService:
                 VocabularySkill.COMPOSITION.value,
                 VocabularySkill.CONTEXT_USAGE.value,
             ],
-        }[request.mode]
+        }.get(request.mode)
         ordering_orders = {1, 3, 6, 8} if request.mode == VocabularyMode.COMPOSITION.value else set()
         eligible_review_targets = self._eligible_review_targets(request)
         review_targets = list(eligible_review_targets[: request.review_question_count])
+        meaning_relation_band_occurrences: dict[int, int] = {}
+        if request.mode == VocabularyMode.MEANING_RELATION.value:
+            for question in request.previous_questions:
+                band = question.complexity_band
+                meaning_relation_band_occurrences[band] = (
+                    meaning_relation_band_occurrences.get(band, 0) + 1
+                )
         slots: list[_QuestionSlot] = []
         for index, difficulty in enumerate(difficulties, 1):
             global_index = request.question_offset + index
+            band = self._band_for(request, difficulty)
             review = review_targets[index - 1] if index <= len(review_targets) else None
+            if request.mode == VocabularyMode.MEANING_RELATION.value:
+                band_occurrence = meaning_relation_band_occurrences.get(band, 0) + 1
+                meaning_relation_band_occurrences[band] = band_occurrence
+                skill_tag = meaning_relation_skill_for_slot(
+                    band=band,
+                    band_occurrence=band_occurrence,
+                )
+            else:
+                if skill_cycle is None:
+                    raise ValueError(f"Unsupported Vocabulary mode: {request.mode}")
+                skill_tag = skill_cycle[(global_index - 1) % len(skill_cycle)]
             slots.append(
                 _QuestionSlot(
                     order=index,
                     difficulty=difficulty,
-                    complexity_band=self._band_for(request, difficulty),
-                    skill_tag=skill_cycle[(global_index - 1) % len(skill_cycle)],
+                    complexity_band=band,
+                    skill_tag=skill_tag,
                     question_type=(
                         PracticeQuestionType.ORDERING
                         if global_index in ordering_orders
@@ -648,10 +699,11 @@ class ReadingVocabularyGenerationService:
                         item.value for item in (review.previous_question_types if review else [])
                     ),
                     usage_intent=(
-                        self._usage_intent_for_skill(skill_cycle[(global_index - 1) % len(skill_cycle)])
+                        self._usage_intent_for_skill(skill_tag)
                         if request.mode == VocabularyMode.USAGE_DISTINCTION.value
                         else None
                     ),
+                    vocabulary_mode=request.mode,
                 )
             )
         return slots
@@ -1231,7 +1283,7 @@ class ReadingVocabularyGenerationService:
 
     @staticmethod
     def _usage_intent_for_skill(skill_tag: str) -> str | None:
-        return _USAGE_INTENT_BY_SKILL.get(skill_tag)
+        return usage_intent_for_skill(skill_tag)
 
     async def _generate_candidate_batch(
         self,
@@ -1284,7 +1336,7 @@ class ReadingVocabularyGenerationService:
                         excluded_canonical_keys=excluded_keys,
                         excluded_target_expressions=excluded_target_expressions,
                     ),
-                    schema=_PRACTICE_CANDIDATE_SCHEMA,
+                    schema=self._candidate_schema_for(request),
                 ),
                 timeout=self.timeout_seconds,
             )
@@ -1337,6 +1389,30 @@ class ReadingVocabularyGenerationService:
                             reading_slot.passage_text or "",
                         ),
                     }
+                elif request.domain == PracticeDomain.VOCABULARY:
+                    vocabulary_slot = slot_by_order[order]
+                    normalized_item = {
+                        **item,
+                        # Target labels and subtype binding come from the application slot. A
+                        # generator self-report cannot prove or relabel achieved difficulty.
+                        "difficulty": vocabulary_slot.difficulty.value,
+                        "complexityBand": vocabulary_slot.complexity_band,
+                        "skillTag": vocabulary_slot.skill_tag,
+                        "questionType": (
+                            vocabulary_slot.question_type.value
+                            if vocabulary_slot.question_type is not None
+                            else item.get("questionType")
+                        ),
+                        "passageId": None,
+                        "passageText": None,
+                        "evidenceText": None,
+                        "vocabularyCandidates": [],
+                    }
+                    normalized_item = self._normalize_meaning_relation_candidate(
+                        request,
+                        vocabulary_slot,
+                        normalized_item,
+                    )
                 # Placeholder is internal only and always overwritten after semantic acceptance.
                 question = PracticeGeneratedQuestion.model_validate(
                     {**normalized_item, "explanationOrigin": "PENDING"}
@@ -1399,6 +1475,7 @@ class ReadingVocabularyGenerationService:
                         skill_tag=slot.skill_tag,
                         question_type=question.question_type.value,
                         target_expression=question.target_expression or "",
+                        usage_intent=slot.usage_intent,
                     )
                     validation = project_vocabulary_validation(
                         vocabulary_spec,
@@ -1422,6 +1499,66 @@ class ReadingVocabularyGenerationService:
                     reason[:300],
                 )
         return failures
+
+    @staticmethod
+    def _candidate_schema_for(request: PracticeGenerationRequest) -> dict[str, Any]:
+        if (
+            request.domain == PracticeDomain.VOCABULARY
+            and request.mode == VocabularyMode.MEANING_RELATION.value
+        ):
+            return _MEANING_RELATION_CANDIDATE_SCHEMA
+        return _PRACTICE_CANDIDATE_SCHEMA
+
+    @classmethod
+    def _normalize_meaning_relation_candidate(
+        cls,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
+        if request.mode != VocabularyMode.MEANING_RELATION.value:
+            return item
+
+        normalized = {key: value for key, value in item.items() if key != "meaningContext"}
+        if not cls._meaning_relation_context_required(
+            complexity_band=slot.complexity_band,
+            skill_tag=slot.skill_tag,
+            question_type=slot.question_type,
+        ):
+            return normalized
+
+        meaning_context = item.get("meaningContext")
+        if not isinstance(meaning_context, str):
+            raise ValueError("MEANING_RELATION B3+ requires string meaningContext")
+        target_expression = item.get("targetExpression")
+        if not isinstance(target_expression, str):
+            raise ValueError("MEANING_RELATION task shell requires targetExpression")
+        normalized["prompt"] = render_meaning_relation_prompt(
+            learning_language=request.learning_language,
+            skill_tag=slot.skill_tag,
+            target_expression=target_expression,
+            meaning_context=meaning_context,
+        )
+        return normalized
+
+    @staticmethod
+    def _meaning_relation_context_required(
+        *,
+        complexity_band: int,
+        skill_tag: str,
+        question_type: PracticeQuestionType | None,
+    ) -> bool:
+        if question_type is None:
+            raise ValueError("MEANING_RELATION slot requires questionType")
+        demand = vocabulary_difficulty_recipe(
+            mode=VocabularyMode.MEANING_RELATION.value,
+            band=complexity_band,
+            skill_tag=skill_tag,
+            question_type=question_type.value,
+        ).demand
+        if not isinstance(demand, MeaningRelationDemand):
+            raise ValueError("MEANING_RELATION slot requires meaning-relation demand")
+        return demand.context_requirement.endswith("_REQUIRED")
 
     def _normalize_reading_candidate_metadata(
         self,
@@ -1789,6 +1926,8 @@ class ReadingVocabularyGenerationService:
 
         if request.mode == VocabularyMode.USAGE_DISTINCTION.value:
             self._validate_usage_distinction_candidate(question)
+        elif request.mode == VocabularyMode.MEANING_RELATION.value:
+            self._validate_meaning_relation_candidate(question)
 
     def _validate_vocabulary_surface_language(
         self,
@@ -1864,6 +2003,30 @@ class ReadingVocabularyGenerationService:
     @staticmethod
     def _base_language(language_code: str) -> str:
         return language_code.strip().lower().split("-")[0].split("_")[0]
+
+    @classmethod
+    def _validate_meaning_relation_candidate(
+        cls,
+        question: PracticeGeneratedQuestion,
+    ) -> None:
+        if question.question_type != PracticeQuestionType.SINGLE_CHOICE:
+            raise ValueError("MEANING_RELATION must use single-choice questions")
+        option_by_key = {option.key: option.text for option in question.options}
+        correct_text = option_by_key.get(question.correct_answer[0], "")
+        normalized_correct = cls._normalize_for_leak_check(correct_text)
+        normalized_target = cls._normalize_for_leak_check(
+            question.target_expression or ""
+        )
+        if normalized_target and any(
+            cls._normalize_for_leak_check(option_text) == normalized_target
+            for option_text in option_by_key.values()
+        ):
+            raise ValueError(
+                "MEANING_RELATION option must not repeat targetExpression"
+            )
+        stem = cls._normalize_for_leak_check(question.prompt)
+        if len(normalized_correct) >= 4 and normalized_correct in stem:
+            raise ValueError("MEANING_RELATION stem leaks correct option text")
 
     @classmethod
     def _validate_usage_distinction_candidate(cls, question: PracticeGeneratedQuestion) -> None:
@@ -2166,7 +2329,9 @@ class ReadingVocabularyGenerationService:
             }
             for question in single_choice
         ]
-        expected_by_order = {question.order: question.correct_answer[0] for question in single_choice}
+        expected_by_order = {
+            question.order: question.correct_answer[0] for question in single_choice
+        }
 
         last_error: Exception | None = None
         for verification_attempt in (1, 2, 3):
@@ -2202,6 +2367,16 @@ class ReadingVocabularyGenerationService:
                         if decision.action != "ACCEPT":
                             failures[order] = decision.reason
                     else:
+                        if (
+                            request.mode == VocabularyMode.MEANING_RELATION.value
+                            and not verdict.contextDependent
+                        ):
+                            logger.info(
+                                "Vocabulary MEANING_RELATION context diagnostic. "
+                                "request_id=%s order=%d context_dependent=false",
+                                request.request_id,
+                                order,
+                            )
                         assessment = normalize_vocabulary_semantic_assessment(
                             best_answer_key=verdict.bestAnswerKey,
                             ambiguous=verdict.ambiguous,
@@ -2216,7 +2391,7 @@ class ReadingVocabularyGenerationService:
                         ).decide(
                             assessment=assessment,
                             context=VocabularyAcceptanceContext(
-                                expected_answer_key=expected_key
+                                expected_answer_key=expected_key,
                             ),
                         )
                         if decision.action != "ACCEPT":
@@ -2312,17 +2487,25 @@ class ReadingVocabularyGenerationService:
         payload_questions = []
         for question in questions:
             correct_text = self._correct_answer_text(question)
-            payload_questions.append(
-                {
-                    "order": question.order,
-                    "passageText": question.passage_text,
-                    "prompt": question.prompt,
-                    "targetExpression": question.target_expression,
-                    "correctAnswerText": correct_text,
-                    "evidenceText": question.evidence_text,
-                    "explanationLearning": question.explanation_learning,
+            payload_question: dict[str, Any] = {
+                "order": question.order,
+                "passageText": question.passage_text,
+                "prompt": question.prompt,
+                "targetExpression": question.target_expression,
+                "correctAnswerText": correct_text,
+                "evidenceText": question.evidence_text,
+                "explanationLearning": question.explanation_learning,
+            }
+            if (
+                request.domain == PracticeDomain.VOCABULARY
+                and request.mode == VocabularyMode.MEANING_RELATION.value
+            ):
+                payload_question["immutableTaskFact"] = {
+                    "authority": "APPLICATION_SELECTED_IMMUTABLE",
+                    "mode": VocabularyMode.MEANING_RELATION.value,
+                    "relationKind": question.skill_tag,
                 }
-            )
+            payload_questions.append(payload_question)
         try:
             raw = await asyncio.wait_for(
                 self.provider.call(
@@ -2353,6 +2536,14 @@ class ReadingVocabularyGenerationService:
             if not text:
                 continue
             try:
+                if (
+                    request.domain == PracticeDomain.VOCABULARY
+                    and request.mode == VocabularyMode.MEANING_RELATION.value
+                    and self._origin_explanation_exposes_internal_metadata(text)
+                ):
+                    raise ValueError(
+                        "origin explanation exposes internal task metadata"
+                    )
                 # Validate each explanation independently. One good Korean explanation can no
                 # longer hide nine Japanese explanations in a combined-language check.
                 self._assert_language_lane(
@@ -2372,6 +2563,14 @@ class ReadingVocabularyGenerationService:
                 )
                 continue
             explanations[item.order] = text
+
+    @staticmethod
+    def _origin_explanation_exposes_internal_metadata(text: str) -> bool:
+        folded = text.casefold()
+        return any(
+            token.casefold() in folded
+            for token in ("immutableTaskFact", "APPLICATION_SELECTED_IMMUTABLE")
+        )
 
     @staticmethod
     def _correct_answer_text(question: PracticeGeneratedQuestion) -> str:

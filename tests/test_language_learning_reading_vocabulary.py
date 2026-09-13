@@ -29,6 +29,7 @@ class PipelineProvider:
         prescreen_reject_once: set[int] | None = None,
         prescreen_reject_always: set[int] | None = None,
         semantic_reject_rounds_by_order: dict[int, int] | None = None,
+        semantic_context_independent_rounds_by_order: dict[int, int] | None = None,
         candidate_reject_rounds_by_order: dict[int, int] | None = None,
         usage_metadata_drift_once: set[int] | None = None,
         composition_invalid_ordering_once: set[int] | None = None,
@@ -51,6 +52,9 @@ class PipelineProvider:
         self.prescreen_reject_once = set(prescreen_reject_once or set())
         self.prescreen_reject_always = set(prescreen_reject_always or set())
         self.semantic_reject_rounds_by_order = dict(semantic_reject_rounds_by_order or {})
+        self.semantic_context_independent_rounds_by_order = dict(
+            semantic_context_independent_rounds_by_order or {}
+        )
         self.candidate_reject_rounds_by_order = dict(candidate_reject_rounds_by_order or {})
         self.usage_metadata_drift_once = set(usage_metadata_drift_once or set())
         self.composition_invalid_ordering_once = set(composition_invalid_ordering_once or set())
@@ -128,7 +132,8 @@ class PipelineProvider:
                         "reason": "rival option plausible" if ambiguous else "single supported answer",
                         "modeFit": True,
                         "answerLeakage": False,
-                        "contextDependent": True,
+                        "contextDependent": occurrence
+                        > self.semantic_context_independent_rounds_by_order.get(order, 0),
                         "distractorsPlausible": True,
                     }
                 )
@@ -283,7 +288,7 @@ class PipelineProvider:
         ):
             vocabulary_candidates = ["資料", "確認する", "", "資料", "顧客への説明"]
 
-        return {
+        candidate = {
             "order": order,
             "questionType": question_type,
             "difficulty": slot["difficulty"],
@@ -301,6 +306,17 @@ class PipelineProvider:
             "reviewTarget": review_target,
             "vocabularyCandidates": vocabulary_candidates,
         }
+        if vocab and payload.get("mode") == "MEANING_RELATION":
+            candidate["meaningContext"] = (
+                "팀은 영향을 확인하며 계획을 단계적으로 진행했습니다."
+                if order in self.bad_learning_lane_once
+                and self.slot_occurrences[order] == 1
+                else (
+                    "チームは影響を確認しながら計画を段階的に進めました。"
+                    f"この方針を「{target_expression}」と表現しました。"
+                )
+            )
+        return candidate
 
 
 def _request(
@@ -310,6 +326,7 @@ def _request(
     easier=1,
     current=3,
     challenge=1,
+    complexity_band=3,
     *,
     review_targets=None,
     review_question_count=0,
@@ -322,7 +339,7 @@ def _request(
             "originLanguage": "ko",
             "learningLanguage": "ja",
             "questionCount": question_count,
-            "complexityBand": 3,
+            "complexityBand": complexity_band,
             "easierCount": easier,
             "currentCount": current,
             "challengeCount": challenge,

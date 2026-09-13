@@ -96,6 +96,15 @@ _language_learning_reading_vocabulary_service = ReadingVocabularyGenerationServi
     difficulty_shadow_timeout_seconds=(
         settings.AI_READING_DIFFICULTY_SHADOW_TIMEOUT_SECONDS
     ),
+    vocabulary_difficulty_shadow_enabled=(
+        settings.AI_VOCABULARY_DIFFICULTY_SHADOW_ENABLED
+    ),
+    vocabulary_difficulty_shadow_sample_percent=(
+        settings.AI_VOCABULARY_DIFFICULTY_SHADOW_SAMPLE_PERCENT
+    ),
+    vocabulary_difficulty_shadow_timeout_seconds=(
+        settings.AI_VOCABULARY_DIFFICULTY_SHADOW_TIMEOUT_SECONDS
+    ),
 )
 
 _listening_audio_store = TemporaryListeningAudioStore(

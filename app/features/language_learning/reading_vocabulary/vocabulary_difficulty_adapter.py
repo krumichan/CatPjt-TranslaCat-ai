@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -15,7 +16,33 @@ from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_spe
     VocabularyDifficultySpec,
     VocabularyDifficultyTargetValue,
 )
+from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_recipe import (
+    validate_vocabulary_difficulty_recipe,
+    vocabulary_difficulty_recipe,
+)
 from app.schemas.language_learning_practice import VocabularyMode
+
+
+VOCABULARY_DIFFICULTY_ISSUE_CODES = (
+    "MEANING_CONTRAST",
+    "SEMANTIC_DISTANCE",
+    "DISTRACTOR_PROXIMITY",
+    "VISIBLE_CUE_INTEGRATION",
+    "CONTEXT_DEPENDENCE",
+    "REGISTER_DEPENDENCE",
+    "COLLOCATION_DEPENDENCE",
+    "PRAGMATIC_DEPENDENCE",
+    "CONSTRAINT_INTEGRATION",
+    "DEPENDENCY_SPAN",
+    "CLAUSE_RELATION",
+    "AMBIGUOUS_OR_NO_SINGLE_ANSWER",
+    "INSUFFICIENT_VISIBLE_EVIDENCE",
+    "EXTERNAL_KNOWLEDGE_DEPENDENCE",
+    "BORDERLINE_ADJACENT_BANDS",
+)
+_VOCABULARY_DIFFICULTY_ISSUE_CODE_SET = frozenset(
+    VOCABULARY_DIFFICULTY_ISSUE_CODES
+)
 
 
 def build_vocabulary_difficulty_spec(
@@ -26,7 +53,15 @@ def build_vocabulary_difficulty_spec(
     skill_tag: str,
     question_type: str,
     target_expression: str,
+    usage_intent: str | None = None,
 ) -> VocabularyDifficultySpec:
+    recipe = vocabulary_difficulty_recipe(
+        mode=mode,
+        band=complexity_band,
+        skill_tag=skill_tag,
+        question_type=question_type,
+        usage_intent=usage_intent,
+    )
     return VocabularyDifficultySpec(
         target=DifficultyTarget(
             service="vocabulary",
@@ -41,6 +76,8 @@ def build_vocabulary_difficulty_spec(
         ),
         question_type=question_type,
         target_expression=target_expression,
+        usage_intent=usage_intent,
+        recipe=recipe,
     )
 
 
@@ -49,6 +86,14 @@ def project_vocabulary_validation(
     validator: Callable[[], None],
 ) -> DifficultyValidationResult:
     try:
+        validate_vocabulary_difficulty_recipe(
+            mode=spec.target.value.mode,
+            band=spec.target.value.complexity_band,
+            skill_tag=spec.target.value.skill_tag,
+            question_type=spec.question_type,
+            usage_intent=spec.usage_intent,
+            recipe=spec.recipe,
+        )
         validator()
     except ValueError as exc:
         return DifficultyValidationResult.reject(str(exc))
@@ -57,8 +102,130 @@ def project_vocabulary_validation(
             "mode": spec.target.value.mode,
             "complexityBand": spec.target.value.complexity_band,
             "skillTag": spec.target.value.skill_tag,
+            "questionType": spec.question_type,
+            "recipeVersion": spec.recipe.version,
         }
     )
+
+
+@dataclass(frozen=True, kw_only=True)
+class VocabularySemanticDifficultyAssessment(SemanticAssessment[int]):
+    """Blind Vocabulary difficulty classification for observational comparison."""
+
+
+def normalize_vocabulary_semantic_difficulty_assessment(
+    raw: object,
+    *,
+    allowed_evidence_refs: set[str] | None = None,
+) -> VocabularySemanticDifficultyAssessment:
+    if not isinstance(raw, dict):
+        return VocabularySemanticDifficultyAssessment(
+            status="UNSURE",
+            difficulty_status="NOT_ASSESSED",
+        )
+
+    status = str(raw.get("difficultyStatus", "NOT_ASSESSED")).upper()
+    observed = _difficulty_band(raw.get("observedBand"))
+    alternative = _difficulty_band(raw.get("alternativeBand"))
+    valid = (
+        status == "ASSESSED"
+        and observed is not None
+        and alternative is None
+    ) or (
+        status == "BORDERLINE"
+        and observed is not None
+        and alternative is not None
+        and abs(observed - alternative) == 1
+    ) or (
+        status in {"UNSURE", "NOT_ASSESSED"}
+        and observed is None
+        and alternative is None
+    )
+    if not valid:
+        status = "NOT_ASSESSED"
+        observed = None
+        alternative = None
+
+    raw_issue_codes = raw.get("issueCodes", [])
+    issue_codes = (
+        [
+            value
+            for value in raw_issue_codes
+            if isinstance(value, str)
+            and value in _VOCABULARY_DIFFICULTY_ISSUE_CODE_SET
+        ]
+        if isinstance(raw_issue_codes, list)
+        else []
+    )
+    raw_evidence_refs = raw.get("evidenceSegmentIds", [])
+    evidence_refs = (
+        tuple(
+            dict.fromkeys(
+                value
+                for value in raw_evidence_refs
+                if isinstance(value, str)
+                and value
+                and (allowed_evidence_refs is None or value in allowed_evidence_refs)
+            )
+        )
+        if isinstance(raw_evidence_refs, list)
+        else ()
+    )
+    confidence = raw.get("difficultyConfidence")
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not math.isfinite(confidence)
+        or not 0 <= confidence <= 1
+    ):
+        confidence = None
+    return VocabularySemanticDifficultyAssessment(
+        status="UNSURE" if status in {"UNSURE", "NOT_ASSESSED"} else "PASS",
+        difficulty_status=status,
+        observed_target=observed,
+        alternative_target=alternative,
+        issue_codes=tuple(dict.fromkeys(issue_codes)),
+        difficulty_confidence=confidence,
+        evidence_refs=evidence_refs,
+    )
+
+
+@dataclass(frozen=True)
+class VocabularySemanticDifficultyPolicy:
+    """Compare blind observations without granting quality or retry authority."""
+
+    def decide(
+        self,
+        *,
+        requested_band: int,
+        assessment: VocabularySemanticDifficultyAssessment,
+    ) -> DifficultyAcceptanceDecision:
+        if assessment.difficulty_status == "ASSESSED":
+            if assessment.observed_target == requested_band:
+                return DifficultyAcceptanceDecision(
+                    "SHADOW_MATCH", "observed band matches target"
+                )
+            return DifficultyAcceptanceDecision(
+                "SHADOW_MISMATCH", "observed band does not match target"
+            )
+        if assessment.difficulty_status == "BORDERLINE":
+            if requested_band in {
+                assessment.observed_target,
+                assessment.alternative_target,
+            }:
+                return DifficultyAcceptanceDecision(
+                    "SHADOW_BORDERLINE_MATCH", "target is one adjacent observed band"
+                )
+            return DifficultyAcceptanceDecision(
+                "SHADOW_MISMATCH", "target is outside adjacent observed bands"
+            )
+        return DifficultyAcceptanceDecision(
+            "SHADOW_NOT_ASSESSED", "difficulty classifier was unsure"
+        )
+
+
+def _difficulty_band(value: object) -> int | None:
+    return value if type(value) is int and 1 <= value <= 5 else None
 
 
 @dataclass(frozen=True)
@@ -153,7 +320,11 @@ class MeaningRelationSemanticQualityPolicy:
         assessment: VocabularySemanticAssessment,
         context: VocabularyAcceptanceContext,
     ) -> DifficultyAcceptanceDecision:
-        return _base_vocabulary_decision(assessment, context, require_context=False)
+        return _base_vocabulary_decision(
+            assessment,
+            context,
+            require_context=False,
+        )
 
 
 @dataclass(frozen=True)
@@ -164,7 +335,11 @@ class UsageDistinctionSemanticQualityPolicy:
         assessment: VocabularySemanticAssessment,
         context: VocabularyAcceptanceContext,
     ) -> DifficultyAcceptanceDecision:
-        return _base_vocabulary_decision(assessment, context, require_context=True)
+        return _base_vocabulary_decision(
+            assessment,
+            context,
+            require_context=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -175,7 +350,11 @@ class CompositionSemanticQualityPolicy:
         assessment: VocabularySemanticAssessment,
         context: VocabularyAcceptanceContext,
     ) -> DifficultyAcceptanceDecision:
-        return _base_vocabulary_decision(assessment, context, require_context=False)
+        return _base_vocabulary_decision(
+            assessment,
+            context,
+            require_context=False,
+        )
 
 
 def semantic_quality_policy_for_vocabulary_mode(

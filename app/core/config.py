@@ -60,6 +60,20 @@ class Settings(BaseSettings):
         le=60,
     )
 
+    # Vocabulary difficulty uses a separate awaited, difficulty-only sampled stage.
+    # It is disabled by default and never participates in quality acceptance or retry.
+    AI_VOCABULARY_DIFFICULTY_SHADOW_ENABLED: bool = False
+    AI_VOCABULARY_DIFFICULTY_SHADOW_SAMPLE_PERCENT: float = Field(
+        default=0.0,
+        ge=0,
+        le=100,
+    )
+    AI_VOCABULARY_DIFFICULTY_SHADOW_TIMEOUT_SECONDS: float = Field(
+        default=12.0,
+        gt=0,
+        le=60,
+    )
+
     # Writing generation is multi-stage. Keep the total budget below the EFFECTIVE
     # BE/proxy timeout (the attached BE application.properties sets 300 seconds).
     AI_WRITING_VERIFICATION_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)

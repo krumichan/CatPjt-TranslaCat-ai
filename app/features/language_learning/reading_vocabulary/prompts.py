@@ -63,6 +63,8 @@ Reading:
 Vocabulary:
 - passageId/passageText are null.
 - targetExpression and canonicalKey are required and identify the expression being trained.
+- difficultyRecipe and modeDemand are fixed application-selected generation requirements. Realize them in
+  learner-visible content without returning or inventing difficulty evidence or treating ambiguity as difficulty.
 - selectedKeywords/weakSignals/recentMistakes are CONTEXT SEEDS only. Never copy an English seed directly into
   targetExpression when learningLanguage is Japanese/Korean; choose the natural learning-language lexical form.
 - targetExpression and every learner choice/chunk must be lexical content in learningLanguage. Technical acronyms
@@ -70,7 +72,12 @@ Vocabulary:
 - For a review slot, use the exact bound reviewTarget canonicalKey/expression and set reviewTarget=true.
 - For a new slot, set reviewTarget=false and create a new expression not listed in excludedCanonicalKeys or excludedTargetExpressions.
 - vocabularyCandidates must be empty.
-- MEANING_RELATION: meaning/synonym/antonym/near-expression distinction.
+- MEANING_RELATION: meaning/synonym/antonym/near-expression distinction. For every B3+ slot, return
+  meaningContext as semantic/context content only: no learner instruction, question wording, option list, answer,
+  definition of a candidate, or explanation of candidate differences. The application ignores your prompt and
+  renders the final learner-visible task shell. The visible context must select the target's relevant sense/scope;
+  it is not enough to decorate a relation that can be answered from targetExpression plus the relation label alone.
+  For B1/B2, return meaningContext=null and generate the existing direct learner-visible prompt.
 - USAGE_DISTINCTION: the application supplies a fixed usageIntent. Build a contextual choice task that follows it.
   The exact targetExpression MUST be the correct option text for this SINGLE_CHOICE item. Never put targetExpression
   in the question stem. The prompt must contain concrete learner-visible usage context plus a clear insertion/choice
@@ -234,8 +241,21 @@ def build_practice_generation_prompt(
             for question in request.previous_questions
         ],
     }
+    instruction = "Generate candidates for exactly the supplied candidateSlots."
+    if request.domain.value == "VOCABULARY" and request.mode == "MEANING_RELATION":
+        instruction += (
+            "\nFor MEANING_RELATION, modeDemand.taskShape, decisionBasis, "
+            "contextRequirement, distractorRequirements, and disallowedShortcuts are "
+            "mandatory. At B3+, return semantic content in meaningContext and do not "
+            "write a question or instruction there; the application owns and replaces "
+            "prompt with its task shell. The context must select the relevant sense "
+            "rather than merely wrapping a direct dictionary definition. At B4/B5, do "
+            "not define the answer or teach candidate differences; keep wrong options "
+            "in the same semantic neighborhood while preserving one best answer. The "
+            "target expression must never be identical to the correct option."
+        )
     return (
-        "Generate candidates for exactly the supplied candidateSlots.\n"
+        f"{instruction}\n"
         f"<practice-data>\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n</practice-data>"
     )
 
@@ -284,10 +304,20 @@ def build_practice_verification_prompt(
         "learningLanguage": request.learning_language,
         "questions": questions,
     }
-    return (
-        "Independently verify semantic uniqueness/support. Expected answer keys are not included.\n\n"
-        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    instruction = (
+        "Independently verify semantic uniqueness/support. Expected answer keys are not included."
     )
+    if request.domain.value == "VOCABULARY" and request.mode == "MEANING_RELATION":
+        instruction += (
+            "\nFor MEANING_RELATION, contextDependent=true only when removing the "
+            "visible context would materially reduce the ability to select the answer. "
+            "If the target expression and learner-visible relation task alone still "
+            "identify the same answer, return false. distractorsPlausible requires wrong "
+            "options to be semantically related alternatives; wholly unrelated "
+            "eliminations are not plausible. modeFit requires the visible task to realize "
+            "the supplied skill."
+        )
+    return f"{instruction}\n\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
 
 
 def build_reading_distractor_repair_prompt(
@@ -336,8 +366,20 @@ def build_origin_explanation_prompt(
         "learningLanguage": request.learning_language,
         "questions": questions,
     }
+    instruction = "Create explanationOrigin for exactly these validated questions."
+    if any("immutableTaskFact" in question for question in questions):
+        instruction += (
+            "\nUse each hidden immutableTaskFact as binding input only and preserve its "
+            "meaning: "
+            "MEANING asks for meaning, SYNONYM for a same/nearest meaning relation, "
+            "ANTONYM for an opposite relation, and DISTINCTION for the decisive "
+            "difference between close expressions. Never reverse SYNONYM and ANTONYM. "
+            "Write only a natural learner-facing explanation. Never mention the field "
+            "name immutableTaskFact, its authority value, or describe enum names as "
+            "internal/application metadata."
+        )
     return (
-        "Create explanationOrigin for exactly these validated questions.\n"
+        f"{instruction}\n"
         f"<practice-data>\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n</practice-data>"
     )
 

@@ -255,19 +255,31 @@ def test_reading_semantic_quality_is_explicitly_not_difficulty_calibrated():
 
 
 @pytest.mark.parametrize(
-    ("mode", "policy_type"),
+    ("mode", "skill_tag", "policy_type"),
     [
-        ("MEANING_RELATION", MeaningRelationSemanticQualityPolicy),
-        ("USAGE_DISTINCTION", UsageDistinctionSemanticQualityPolicy),
-        ("COMPOSITION", CompositionSemanticQualityPolicy),
+        (
+            "MEANING_RELATION",
+            "DISTINCTION",
+            MeaningRelationSemanticQualityPolicy,
+        ),
+        (
+            "USAGE_DISTINCTION",
+            "CONTEXT_USAGE",
+            UsageDistinctionSemanticQualityPolicy,
+        ),
+        ("COMPOSITION", "CONTEXT_USAGE", CompositionSemanticQualityPolicy),
     ],
 )
-def test_vocabulary_modes_bind_distinct_acceptance_policies(mode, policy_type):
+def test_vocabulary_modes_bind_distinct_acceptance_policies(
+    mode,
+    skill_tag,
+    policy_type,
+):
     spec = build_vocabulary_difficulty_spec(
         mode=mode,
         difficulty="CURRENT",
         complexity_band=3,
-        skill_tag="CONTEXT_USAGE",
+        skill_tag=skill_tag,
         question_type="SINGLE_CHOICE",
         target_expression="語彙",
     )
