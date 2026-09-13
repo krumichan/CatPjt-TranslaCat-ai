@@ -39,9 +39,11 @@ Learner-visible question content (passage, prompt, options, target expression, e
 must use learningLanguage. explanationOrigin is intentionally NOT part of this generation step; a separate
 post-validation stage creates it.
 
-SINGLE_CHOICE:
+SINGLE_CHOICE final learner-visible contract:
 - exactly four options with unique keys and texts;
-- exactly one unquestionably correct answer;
+- exactly one unquestionably correct answer. A B3+ MEANING_RELATION DISTINCTION candidate is
+  the explicit exception at the internal generation boundary: return wrong-only candidates as
+  instructed below and let the application construct this final contract;
 - plausible but demonstrably wrong distractors;
 - answerable from the supplied passage/context and ordinary language knowledge appropriate to the band;
 - never depend on hidden facts or trivia.
@@ -71,13 +73,31 @@ Vocabulary:
   such as API/URL/SQL may remain ASCII when they are genuinely used that way in the learning language.
 - For a review slot, use the exact bound reviewTarget canonicalKey/expression and set reviewTarget=true.
 - For a new slot, set reviewTarget=false and create a new expression not listed in excludedCanonicalKeys or excludedTargetExpressions.
+- Exclusions are authoritative for free slots only. A bound review target remains authoritative and must not be
+  replaced because it appears in a broader exclusion list. When a free slot has freeTargetFocus, use it only as a
+  deterministic topic/semantic-neighborhood hint; it does not authorize changing the requested band or skill and
+  must never be copied as canonicalKey or targetExpression unless it is naturally realized in learningLanguage.
 - vocabularyCandidates must be empty.
 - MEANING_RELATION: meaning/synonym/antonym/near-expression distinction. For every B3+ slot, return
   meaningContext as semantic/context content only: no learner instruction, question wording, option list, answer,
   definition of a candidate, or explanation of candidate differences. The application ignores your prompt and
   renders the final learner-visible task shell. The visible context must select the target's relevant sense/scope;
   it is not enough to decorate a relation that can be answered from targetExpression plus the relation label alone.
-  For B1/B2, return meaningContext=null and generate the existing direct learner-visible prompt.
+  For B1/B2, return meaningContext=null and generate the existing direct learner-visible prompt. In these low-band
+  tasks, targetExpression is the expression being tested, not a selectable answer: never copy it into any option,
+  whether correct or wrong. Every option must be a lexical alternative distinct from targetExpression after case,
+  spacing, and punctuation are normalized. B1/B2 DISTINCTION keeps the existing model-owned correct alternative in
+  options plus three distractors and two wrong-only reserveDistractors.
+  For B3+ DISTINCTION, targetExpression is the application-owned correct answer. Never copy it into meaningContext,
+  distractors, or reserveDistractors. Do not choose or generate a separate correct alternative. Return exactly three
+  primary WRONG-ONLY distractors in distractors and exactly two additional WRONG-ONLY reserveDistractors; the
+  application inserts targetExpression into the final options and sets correctAnswer. If a compatibility schema
+  exposes options/correctAnswer for a mixed B2/B3 batch, put the wrong-only primary candidates in options and return
+  correctAnswer=[]; those fields have no answer authority for the B3+ slot. All wrong candidates must be distinct,
+  use learningLanguage, and occupy the same semantic neighborhood while remaining incorrect for meaningContext.
+  For non-DISTINCTION MEANING_RELATION candidates, return reserveDistractors=[]. Because the application may
+  deterministically re-key the final options, explanationLearning must explain why targetExpression fits the context
+  and, where useful, why a major distractor does not; it must not refer to an option key or position.
 - USAGE_DISTINCTION: the application supplies a fixed usageIntent. Build a contextual choice task that follows it.
   The exact targetExpression MUST be the correct option text for this SINGLE_CHOICE item. Never put targetExpression
   in the question stem. The prompt must contain concrete learner-visible usage context plus a clear insertion/choice
@@ -251,8 +271,16 @@ def build_practice_generation_prompt(
             "prompt with its task shell. The context must select the relevant sense "
             "rather than merely wrapping a direct dictionary definition. At B4/B5, do "
             "not define the answer or teach candidate differences; keep wrong options "
-            "in the same semantic neighborhood while preserving one best answer. The "
-            "target expression must never be identical to the correct option."
+            "in the same semantic neighborhood while preserving one best answer. For B1/B2, "
+            "targetExpression must not appear in any answer option and the existing direct "
+            "task contract remains unchanged. For every B3+ DISTINCTION slot, answerAuthority "
+            "is APPLICATION_TARGET_EXPRESSION: do not select a different correct expression. "
+            "Keep targetExpression out of meaningContext and every generated wrong candidate; "
+            "return three primary wrong-only distractors plus candidateSlots.reserveDistractorCount "
+            "wrong-only reserveDistractors. The application alone inserts targetExpression, "
+            "rotates its final key, and sets correctAnswer. Apply each "
+            "slot's exclusions only to free slots and follow freeTargetFocus as a non-binding "
+            "diversity hint; boundReviewTarget always remains authoritative."
         )
     return (
         f"{instruction}\n"

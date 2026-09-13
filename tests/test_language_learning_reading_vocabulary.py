@@ -67,6 +67,7 @@ class PipelineProvider:
         self.prescreen_round = 0
         self.prescreen_payloads: list[dict] = []
         self.verification_payloads: list[dict] = []
+        self.server_answer_keys: dict[int, str] = {}
 
     async def call(self, type_name, data, schema=None):
         self.calls[type_name] += 1
@@ -86,6 +87,12 @@ class PipelineProvider:
             slots = payload["candidateSlots"]
             self.candidate_slot_calls.append([slot["order"] for slot in slots])
             self.candidate_slot_payloads.append(slots)
+            for slot in slots:
+                if slot.get("answerAuthority") == "APPLICATION_TARGET_EXPRESSION":
+                    global_order = len(payload["previousQuestions"]) + slot["order"]
+                    self.server_answer_keys[slot["order"]] = ("A", "B", "C", "D")[
+                        (global_order - 1) % 4
+                    ]
             return {"questions": [self._candidate(payload, slot) for slot in slots]}
 
         if type_name == ReadingVocabularyGenerationService.PRESCREEN_TYPE_NAME:
@@ -123,10 +130,23 @@ class PipelineProvider:
                     (occurrence == 1 and order in self.semantic_ambiguous_once)
                     or occurrence <= self.semantic_reject_rounds_by_order.get(order, 0)
                 )
+                if payload["mode"] == "MEANING_RELATION" and order in (
+                    self.server_answer_keys
+                ):
+                    best_answer_key = self.server_answer_keys[order]
+                else:
+                    best_answer_key = next(
+                        (
+                            option["key"]
+                            for option in question["options"]
+                            if option["text"] == "最も適切な内容"
+                        ),
+                        "A",
+                    )
                 verdicts.append(
                     {
                         "order": order,
-                        "bestAnswerKey": "A",
+                        "bestAnswerKey": best_answer_key,
                         "ambiguous": ambiguous,
                         "supported": True,
                         "reason": "rival option plausible" if ambiguous else "single supported answer",
@@ -313,9 +333,29 @@ class PipelineProvider:
                 and self.slot_occurrences[order] == 1
                 else (
                     "チームは影響を確認しながら計画を段階的に進めました。"
-                    f"この方針を「{target_expression}」と表現しました。"
+                    "対象を分けて順次適用し、各段階で結果を確認しています。"
                 )
             )
+            if slot.get("answerAuthority") == "APPLICATION_TARGET_EXPRESSION":
+                candidate["distractors"] = [
+                    {"text": option["text"]} for option in options[:3]
+                ]
+                candidate["reserveDistractors"] = [
+                    {"text": "補足的な対応"},
+                    {"text": "限定的な運用"},
+                ]
+                candidate.pop("prompt")
+                candidate.pop("options")
+                candidate.pop("correctAnswer")
+            else:
+                candidate["reserveDistractors"] = (
+                    [
+                        {"key": "E", "text": "補足的な対応"},
+                        {"key": "F", "text": "限定的な運用"},
+                    ]
+                    if skill_tag == "DISTINCTION"
+                    else []
+                )
         return candidate
 
 
@@ -330,6 +370,7 @@ def _request(
     *,
     review_targets=None,
     review_question_count=0,
+    selected_keywords=None,
 ):
     return PracticeGenerationRequest.model_validate(
         {
@@ -343,6 +384,7 @@ def _request(
             "easierCount": easier,
             "currentCount": current,
             "challengeCount": challenge,
+            "selectedKeywords": selected_keywords or [],
             "reviewTargets": review_targets or [],
             "reviewQuestionCount": review_question_count,
             "generationDate": "2026-09-07",
@@ -431,7 +473,12 @@ async def test_progressive_vocabulary_preserves_skill_cycle_ordering_and_uniquen
     previous = []
 
     for global_order in range(1, 11):
-        response = await service.generate(_single_request(base, previous))
+        item_request = _single_request(base, previous)
+        wire_payload = item_request.model_dump(mode="json", by_alias=True)
+        assert "questionOffset" not in wire_payload
+        assert item_request.question_offset == global_order - 1
+        assert len(wire_payload["previousQuestions"]) == global_order - 1
+        response = await service.generate(item_request)
         assert len(response.questions) == 1
         question = response.questions[0]
         assert question.order == 1
@@ -472,6 +519,9 @@ async def test_progressive_vocabulary_rejects_identity_from_previous_request(dup
     response = await ReadingVocabularyGenerationService(provider).generate(
         _single_request(base, [first])
     )
+    first_retry_slot = provider.generation_payloads[0]["candidateSlots"][0]
+    assert first.canonical_key in first_retry_slot["excludedCanonicalKeys"]
+    assert first.target_expression in first_retry_slot["excludedTargetExpressions"]
     assert provider.calls[ReadingVocabularyGenerationService.TYPE_NAME] == 2
     assert response.questions[0].canonical_key != first.canonical_key
     assert response.questions[0].target_expression != first.target_expression

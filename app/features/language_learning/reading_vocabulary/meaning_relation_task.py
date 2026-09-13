@@ -56,6 +56,12 @@ _TASK_SHELLS = {
     },
 }
 
+_TARGET_AS_ANSWER_TASK_SHELLS = {
+    "ko": "이 상황을 가장 적절하게 나타내는 표현은 무엇입니까?",
+    "ja": "この状況を最も適切に表す表現はどれですか。",
+    "en": "Which expression best describes this situation?",
+}
+
 
 def render_meaning_relation_prompt(
     *,
@@ -63,6 +69,7 @@ def render_meaning_relation_prompt(
     skill_tag: str,
     target_expression: str,
     meaning_context: str,
+    target_as_answer: bool = False,
 ) -> str:
     """Combine model-authored semantic content with an application-owned task shell."""
 
@@ -75,7 +82,10 @@ def render_meaning_relation_prompt(
 
     language = learning_language.strip().lower().split("-", 1)[0].split("_", 1)[0]
     try:
-        shell = _TASK_SHELLS[language][skill_tag]
+        if target_as_answer:
+            shell = _TARGET_AS_ANSWER_TASK_SHELLS[language]
+        else:
+            shell = _TASK_SHELLS[language][skill_tag]
     except KeyError as exc:
         raise ValueError(
             "MEANING_RELATION server task shell does not support learningLanguage/skillTag"

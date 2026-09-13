@@ -62,6 +62,7 @@ from app.schemas.language_learning_practice import (
     PracticeGeneratedQuestion,
     PracticeGenerationRequest,
     PracticeGenerationResponse,
+    PracticeOption,
     PracticeQuestionType,
     PracticeReviewTarget,
     ReadingMode,
@@ -85,6 +86,8 @@ _MAX_ORIGIN_EXPLANATION_ATTEMPTS = 2
 _CANDIDATE_BATCH_SIZE = 2
 _USAGE_DISTINCTION_BATCH_SIZE = 1
 _ORIGIN_EXPLANATION_BATCH_SIZE = 4
+_MEANING_RELATION_RESERVE_DISTRACTOR_COUNT = 2
+_SINGLE_CHOICE_KEYS = ("A", "B", "C", "D")
 
 # ASCII-only tokens that are genuinely used as lexical items inside Japanese/Korean practical
 # language. Ordinary English words are intentionally NOT accepted here: selected keywords may
@@ -145,6 +148,11 @@ _PRACTICE_CANDIDATE_SCHEMA: dict[str, Any] = {
     },
     "required": ["questions"],
 }
+_WRONG_OPTION_CANDIDATE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {"text": {"type": "STRING"}},
+    "required": ["text"],
+}
 
 _MEANING_RELATION_CANDIDATE_SCHEMA = copy.deepcopy(_PRACTICE_CANDIDATE_SCHEMA)
 _meaning_relation_question_schema = _MEANING_RELATION_CANDIDATE_SCHEMA["properties"][
@@ -154,6 +162,37 @@ _meaning_relation_question_schema["properties"]["meaningContext"] = {
     "type": ["STRING", "NULL"]
 }
 _meaning_relation_question_schema["required"].append("meaningContext")
+_meaning_relation_question_schema["properties"]["reserveDistractors"] = {
+    "type": "ARRAY",
+    "items": _OPTION_SCHEMA,
+}
+_meaning_relation_question_schema["required"].append("reserveDistractors")
+
+# B3+ DISTINCTION has no model-owned answer. The provider supplies only semantic context,
+# target identity, and wrong alternatives; the application inserts targetExpression as the
+# correct option after deterministic filtering. Keep the legacy Meaning schema for B1/B2 and
+# the rare mixed B2/B3 batch so their established task shape and call count stay unchanged.
+_HIGH_BAND_MEANING_RELATION_CANDIDATE_SCHEMA = copy.deepcopy(
+    _MEANING_RELATION_CANDIDATE_SCHEMA
+)
+_high_band_meaning_question_schema = _HIGH_BAND_MEANING_RELATION_CANDIDATE_SCHEMA[
+    "properties"
+]["questions"]["items"]
+for _server_owned_field in ("prompt", "options", "correctAnswer"):
+    _high_band_meaning_question_schema["properties"].pop(_server_owned_field)
+    _high_band_meaning_question_schema["required"].remove(_server_owned_field)
+_high_band_meaning_question_schema["properties"]["meaningContext"] = {
+    "type": "STRING"
+}
+_high_band_meaning_question_schema["properties"]["distractors"] = {
+    "type": "ARRAY",
+    "items": _WRONG_OPTION_CANDIDATE_SCHEMA,
+}
+_high_band_meaning_question_schema["required"].append("distractors")
+_high_band_meaning_question_schema["properties"]["reserveDistractors"] = {
+    "type": "ARRAY",
+    "items": _WRONG_OPTION_CANDIDATE_SCHEMA,
+}
 
 _READING_PASSAGE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
@@ -327,10 +366,19 @@ class _QuestionSlot:
     usage_intent: str | None = None
     reading_mode: str | None = None
     vocabulary_mode: str | None = None
+    free_target_focus: str | None = None
 
     @property
     def review_target(self) -> bool:
         return self.review_canonical_key is not None
+
+    @property
+    def target_as_answer(self) -> bool:
+        return (
+            self.vocabulary_mode == VocabularyMode.MEANING_RELATION.value
+            and self.skill_tag == VocabularySkill.DISTINCTION.value
+            and self.complexity_band >= 3
+        )
 
     def prompt_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -362,6 +410,20 @@ class _QuestionSlot:
                 question_type=self.question_type.value,
                 usage_intent=self.usage_intent,
             ).generation_payload()
+            if (
+                self.vocabulary_mode == VocabularyMode.MEANING_RELATION.value
+                and self.skill_tag == VocabularySkill.DISTINCTION.value
+            ):
+                payload["reserveDistractorCount"] = (
+                    _MEANING_RELATION_RESERVE_DISTRACTOR_COUNT
+                )
+            if self.target_as_answer:
+                payload["answerAuthority"] = "APPLICATION_TARGET_EXPRESSION"
+                payload["targetVisibility"] = "FINAL_OPTIONS_ONLY"
+                payload["primaryDistractorCount"] = 3
+        if self.free_target_focus is not None:
+            payload["freeTargetFocus"] = self.free_target_focus
+            payload["focusAuthority"] = "SERVER_SELECTED_HINT"
         if self.usage_intent is not None:
             payload["usageIntent"] = self.usage_intent
             payload["answerVisibilityPolicy"] = "HIDE_TARGET_FROM_STEM"
@@ -659,6 +721,10 @@ class ReadingVocabularyGenerationService:
         ordering_orders = {1, 3, 6, 8} if request.mode == VocabularyMode.COMPOSITION.value else set()
         eligible_review_targets = self._eligible_review_targets(request)
         review_targets = list(eligible_review_targets[: request.review_question_count])
+        focus_keywords = self._distinct_focus_keywords(request.selected_keywords)
+        free_slot_occurrence = sum(
+            not question.review_target for question in request.previous_questions
+        )
         meaning_relation_band_occurrences: dict[int, int] = {}
         if request.mode == VocabularyMode.MEANING_RELATION.value:
             for question in request.previous_questions:
@@ -671,6 +737,16 @@ class ReadingVocabularyGenerationService:
             global_index = request.question_offset + index
             band = self._band_for(request, difficulty)
             review = review_targets[index - 1] if index <= len(review_targets) else None
+            free_target_focus = None
+            if (
+                request.mode == VocabularyMode.MEANING_RELATION.value
+                and review is None
+            ):
+                if focus_keywords:
+                    free_target_focus = focus_keywords[
+                        free_slot_occurrence % len(focus_keywords)
+                    ]
+                free_slot_occurrence += 1
             if request.mode == VocabularyMode.MEANING_RELATION.value:
                 band_occurrence = meaning_relation_band_occurrences.get(band, 0) + 1
                 meaning_relation_band_occurrences[band] = band_occurrence
@@ -704,9 +780,23 @@ class ReadingVocabularyGenerationService:
                         else None
                     ),
                     vocabulary_mode=request.mode,
+                    free_target_focus=free_target_focus,
                 )
             )
         return slots
+
+    @classmethod
+    def _distinct_focus_keywords(cls, selected_keywords: list[str]) -> list[str]:
+        focuses: list[str] = []
+        seen: set[str] = set()
+        for raw_keyword in selected_keywords:
+            keyword = raw_keyword.strip()
+            normalized = cls._normalize_for_leak_check(keyword)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            focuses.append(keyword)
+        return focuses
 
     @staticmethod
     def _difficulty_plan(request: PracticeGenerationRequest) -> list[PracticeDifficulty]:
@@ -767,6 +857,7 @@ class ReadingVocabularyGenerationService:
         accepted: dict[int, PracticeGeneratedQuestion] = {}
         semantically_verified: set[int] = set()
         retry_feedback: dict[int, str] = {}
+        retry_target_expressions: dict[int, str] = {}
         attempt_limit = self._candidate_attempt_limit(request)
         batch_size = self._candidate_batch_size(request)
 
@@ -787,6 +878,7 @@ class ReadingVocabularyGenerationService:
                         batch_slots,
                         accepted,
                         retry_feedback=retry_feedback,
+                        retry_target_expressions=retry_target_expressions,
                     )
                     for order, reason in candidate_failures.items():
                         retry_feedback[order] = reason
@@ -838,6 +930,7 @@ class ReadingVocabularyGenerationService:
                 if failure is None:
                     semantically_verified.add(question.order)
                     retry_feedback.pop(question.order, None)
+                    retry_target_expressions.pop(question.order, None)
                     continue
                 logger.warning(
                     "Reading/Vocabulary semantic candidate rejected. request_id=%s order=%d "
@@ -848,9 +941,17 @@ class ReadingVocabularyGenerationService:
                     attempt_limit,
                     failure[:300],
                 )
+                slot = slot_by_order[question.order]
+                if slot.target_as_answer and question.target_expression:
+                    retry_target_expressions[question.order] = (
+                        question.target_expression
+                    )
                 accepted.pop(question.order, None)
                 semantically_verified.discard(question.order)
-                retry_feedback[question.order] = failure
+                retry_feedback[question.order] = self._meaning_relation_retry_feedback(
+                    failure,
+                    slot,
+                )
 
             semantic_exhausted = [
                 order
@@ -1295,29 +1396,43 @@ class ReadingVocabularyGenerationService:
         retry_target_expressions: dict[int, str] | None = None,
     ) -> dict[int, str]:
         expected_orders = {slot.order for slot in slots}
-        excluded_keys = sorted(
-            {
-                question.canonical_key
-                for question in [*request.previous_questions, *accepted.values()]
-                if question.canonical_key
-            }
-            | {target.canonical_key for target in request.review_targets}
+        accepted_keys = {
+            question.canonical_key
+            for question in [*request.previous_questions, *accepted.values()]
+            if question.canonical_key
+        }
+        accepted_target_expressions = {
+            question.target_expression.strip()
+            for question in [*request.previous_questions, *accepted.values()]
+            if question.target_expression and question.target_expression.strip()
+        }
+        review_targets = self._eligible_review_targets(request, log_rejections=False)
+        free_slot_excluded_keys = sorted(
+            accepted_keys | {target.canonical_key for target in review_targets}
         )
-        excluded_target_expressions = sorted(
-            {
-                question.target_expression.strip()
-                for question in [*request.previous_questions, *accepted.values()]
-                if question.target_expression and question.target_expression.strip()
-            }
-            | {
-                target.expression.strip()
-                for target in self._eligible_review_targets(request, log_rejections=False)
-                if target.expression.strip()
-            }
+        free_slot_excluded_target_expressions = sorted(
+            accepted_target_expressions
+            | {target.expression.strip() for target in review_targets if target.expression.strip()}
         )
+        if request.mode == VocabularyMode.MEANING_RELATION.value:
+            accepted_keys_payload = sorted(accepted_keys)
+            accepted_targets_payload = sorted(accepted_target_expressions)
+        else:
+            # Preserve the existing exclusion contract for modes not covered by this hardening.
+            accepted_keys_payload = free_slot_excluded_keys
+            accepted_targets_payload = free_slot_excluded_target_expressions
         slot_payloads: list[dict[str, Any]] = []
         for slot in slots:
             payload = slot.prompt_payload()
+            if (
+                request.domain == PracticeDomain.VOCABULARY
+                and request.mode == VocabularyMode.MEANING_RELATION.value
+                and not slot.review_target
+            ):
+                payload["excludedCanonicalKeys"] = free_slot_excluded_keys
+                payload["excludedTargetExpressions"] = (
+                    free_slot_excluded_target_expressions
+                )
             if retry_feedback and retry_feedback.get(slot.order):
                 payload["retryFeedback"] = retry_feedback[slot.order][:600]
             if retry_target_expressions and retry_target_expressions.get(slot.order):
@@ -1333,10 +1448,10 @@ class ReadingVocabularyGenerationService:
                     data=build_practice_generation_prompt(
                         request,
                         slot_payloads,
-                        excluded_canonical_keys=excluded_keys,
-                        excluded_target_expressions=excluded_target_expressions,
+                        excluded_canonical_keys=accepted_keys_payload,
+                        excluded_target_expressions=accepted_targets_payload,
                     ),
-                    schema=self._candidate_schema_for(request),
+                    schema=self._candidate_schema_for(request, slots),
                 ),
                 timeout=self.timeout_seconds,
             )
@@ -1501,11 +1616,16 @@ class ReadingVocabularyGenerationService:
         return failures
 
     @staticmethod
-    def _candidate_schema_for(request: PracticeGenerationRequest) -> dict[str, Any]:
+    def _candidate_schema_for(
+        request: PracticeGenerationRequest,
+        slots: list[_QuestionSlot] | None = None,
+    ) -> dict[str, Any]:
         if (
             request.domain == PracticeDomain.VOCABULARY
             and request.mode == VocabularyMode.MEANING_RELATION.value
         ):
+            if slots and all(slot.target_as_answer for slot in slots):
+                return _HIGH_BAND_MEANING_RELATION_CANDIDATE_SCHEMA
             return _MEANING_RELATION_CANDIDATE_SCHEMA
         return _PRACTICE_CANDIDATE_SCHEMA
 
@@ -1519,26 +1639,322 @@ class ReadingVocabularyGenerationService:
         if request.mode != VocabularyMode.MEANING_RELATION.value:
             return item
 
-        normalized = {key: value for key, value in item.items() if key != "meaningContext"}
-        if not cls._meaning_relation_context_required(
+        normalized = {
+            key: value
+            for key, value in item.items()
+            if key not in {"meaningContext", "distractors", "reserveDistractors"}
+        }
+        target_as_answer = slot.target_as_answer
+        context_required = cls._meaning_relation_context_required(
             complexity_band=slot.complexity_band,
             skill_tag=slot.skill_tag,
             question_type=slot.question_type,
-        ):
-            return normalized
-
-        meaning_context = item.get("meaningContext")
-        if not isinstance(meaning_context, str):
-            raise ValueError("MEANING_RELATION B3+ requires string meaningContext")
-        target_expression = item.get("targetExpression")
-        if not isinstance(target_expression, str):
-            raise ValueError("MEANING_RELATION task shell requires targetExpression")
-        normalized["prompt"] = render_meaning_relation_prompt(
-            learning_language=request.learning_language,
-            skill_tag=slot.skill_tag,
-            target_expression=target_expression,
-            meaning_context=meaning_context,
         )
+        if context_required:
+            meaning_context = item.get("meaningContext")
+            if not isinstance(meaning_context, str):
+                raise ValueError("MEANING_RELATION B3+ requires string meaningContext")
+            target_expression = item.get("targetExpression")
+            if not isinstance(target_expression, str):
+                raise ValueError("MEANING_RELATION task shell requires targetExpression")
+            normalized_target = cls._normalize_for_leak_check(target_expression)
+            if (
+                target_as_answer
+                and normalized_target
+                and normalized_target
+                in cls._normalize_for_leak_check(meaning_context)
+            ):
+                raise ValueError(
+                    "MEANING_RELATION target-as-answer context leaks targetExpression"
+                )
+            normalized["prompt"] = render_meaning_relation_prompt(
+                learning_language=request.learning_language,
+                skill_tag=slot.skill_tag,
+                target_expression=target_expression,
+                meaning_context=meaning_context,
+                target_as_answer=target_as_answer,
+            )
+        if slot.skill_tag == VocabularySkill.DISTINCTION.value:
+            if target_as_answer:
+                normalized = cls._assemble_high_band_meaning_relation_options(
+                    request=request,
+                    slot=slot,
+                    item=item,
+                    normalized=normalized,
+                )
+            else:
+                normalized = cls._assemble_meaning_relation_distinction_options(
+                    request=request,
+                    slot=slot,
+                    item=item,
+                    normalized=normalized,
+                )
+        return normalized
+
+    @classmethod
+    def _assemble_high_band_meaning_relation_options(
+        cls,
+        *,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        item: dict[str, Any],
+        normalized: dict[str, Any],
+    ) -> dict[str, Any]:
+        generated_target = item.get("targetExpression")
+        if not isinstance(generated_target, str) or not generated_target.strip():
+            raise ValueError("MEANING_RELATION task shell requires targetExpression")
+        target_expression = generated_target.strip()
+        normalized["targetExpression"] = target_expression
+        if slot.review_target:
+            if target_expression != slot.review_expression:
+                raise ValueError(
+                    "review slot targetExpression does not match bound review target"
+                )
+            if item.get("canonicalKey") != slot.review_canonical_key:
+                raise ValueError(
+                    "review slot canonicalKey does not match bound review target"
+                )
+            assert slot.review_expression is not None
+            target_expression = slot.review_expression
+            normalized["targetExpression"] = target_expression
+            normalized["canonicalKey"] = slot.review_canonical_key
+        cls._assert_vocabulary_surface_language(
+            request.learning_language,
+            target_expression,
+            reason="MEANING_RELATION targetExpression is not in learningLanguage",
+        )
+
+        # Dedicated B3+ batches use `distractors`. A mixed B2/B3 batch keeps the legacy
+        # response schema so call-count parity is preserved; for that compatibility shape all
+        # `options` are interpreted as wrong-only candidates and `correctAnswer` is ignored.
+        raw_primary = item.get("distractors")
+        if raw_primary is None:
+            raw_primary = item.get("options")
+        raw_reserves = item.get("reserveDistractors", [])
+        if not isinstance(raw_primary, list) or not isinstance(raw_reserves, list):
+            raise ValueError("MEANING_RELATION distractor candidates must be arrays")
+
+        normalized_target = cls._normalize_for_leak_check(target_expression)
+        selected: list[tuple[PracticeOption, bool]] = []
+        seen_texts = {normalized_target}
+        filtered_target_identity = 0
+        filtered_duplicate = 0
+        filtered_language_or_schema = 0
+        candidates = [
+            (raw_option, False) for raw_option in raw_primary
+        ] + [(raw_option, True) for raw_option in raw_reserves]
+        for candidate_index, (raw_option, is_reserve) in enumerate(candidates, start=1):
+            try:
+                option = cls._wrong_option_candidate(
+                    raw_option,
+                    fallback_key=f"candidate-{candidate_index}",
+                )
+                cls._assert_vocabulary_surface_language(
+                    request.learning_language,
+                    option.text,
+                    reason="MEANING_RELATION distractor candidate is not in learningLanguage",
+                )
+            except (ValidationError, ValueError):
+                filtered_language_or_schema += 1
+                continue
+            normalized_text = cls._normalize_for_leak_check(option.text)
+            if normalized_text == normalized_target:
+                filtered_target_identity += 1
+                continue
+            if not normalized_text or normalized_text in seen_texts:
+                filtered_duplicate += 1
+                continue
+            seen_texts.add(normalized_text)
+            selected.append((option, is_reserve))
+            if len(selected) == 3:
+                break
+
+        if filtered_target_identity:
+            logger.info(
+                "MEANING_RELATION target identity distractor filtered. "
+                "request_id=%s order=%d target_identity_role=distractor count=%d",
+                request.request_id,
+                slot.order,
+                filtered_target_identity,
+            )
+        if len(selected) < 3:
+            raise ValueError(
+                "MEANING_RELATION requires three valid distinct distractors after salvage"
+            )
+
+        global_order = request.question_offset + slot.order
+        correct_position = (global_order - 1) % len(_SINGLE_CHOICE_KEYS)
+        final_options = [option for option, _ in selected]
+        final_options.insert(
+            correct_position,
+            PracticeOption(key="server-correct", text=target_expression),
+        )
+        normalized["options"] = [
+            {"key": key, "text": option.text}
+            for key, option in zip(_SINGLE_CHOICE_KEYS, final_options, strict=True)
+        ]
+        normalized["correctAnswer"] = [_SINGLE_CHOICE_KEYS[correct_position]]
+        if (
+            filtered_target_identity
+            or filtered_duplicate
+            or filtered_language_or_schema
+            or any(is_reserve for _, is_reserve in selected)
+        ):
+            logger.info(
+                "MEANING_RELATION distractor salvage assembled. request_id=%s order=%d "
+                "answer_authority=application_target_expression "
+                "filtered_target_identity=%d filtered_duplicate=%d "
+                "filtered_language_or_schema=%d reserve_used=%d",
+                request.request_id,
+                slot.order,
+                filtered_target_identity,
+                filtered_duplicate,
+                filtered_language_or_schema,
+                sum(is_reserve for _, is_reserve in selected),
+            )
+        return normalized
+
+    @staticmethod
+    def _wrong_option_candidate(
+        raw_option: Any,
+        *,
+        fallback_key: str,
+    ) -> PracticeOption:
+        if not isinstance(raw_option, dict):
+            raise ValueError("MEANING_RELATION wrong candidate must be an object")
+        return PracticeOption.model_validate(
+            {
+                "key": raw_option.get("key") or fallback_key,
+                "text": raw_option.get("text"),
+            }
+        )
+
+    @classmethod
+    def _assemble_meaning_relation_distinction_options(
+        cls,
+        *,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        item: dict[str, Any],
+        normalized: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw_options = item.get("options")
+        raw_reserves = item.get("reserveDistractors", [])
+        correct_answer = item.get("correctAnswer")
+        if not isinstance(raw_options, list) or not isinstance(raw_reserves, list):
+            raise ValueError("MEANING_RELATION distractor candidates must be arrays")
+        if (
+            not isinstance(correct_answer, list)
+            or len(correct_answer) != 1
+            or not isinstance(correct_answer[0], str)
+        ):
+            raise ValueError("MEANING_RELATION requires one correct candidate key")
+
+        correct_key = correct_answer[0]
+        correct_indexes = [
+            index
+            for index, raw_option in enumerate(raw_options)
+            if isinstance(raw_option, dict) and raw_option.get("key") == correct_key
+        ]
+        if len(correct_indexes) != 1:
+            raise ValueError("MEANING_RELATION correct candidate key is missing or duplicated")
+        correct_index = correct_indexes[0]
+        try:
+            correct_option = PracticeOption.model_validate(raw_options[correct_index])
+            cls._assert_vocabulary_surface_language(
+                request.learning_language,
+                correct_option.text,
+                reason="MEANING_RELATION correct candidate is not in learningLanguage",
+            )
+        except (ValidationError, ValueError) as exc:
+            raise ValueError("MEANING_RELATION correct candidate is structurally invalid") from exc
+
+        normalized_target = cls._normalize_for_leak_check(
+            str(item.get("targetExpression") or "")
+        )
+        normalized_correct = cls._normalize_for_leak_check(correct_option.text)
+        if normalized_target and normalized_correct == normalized_target:
+            logger.warning(
+                "MEANING_RELATION target identity cannot be salvaged. "
+                "request_id=%s order=%d target_identity_role=correct",
+                request.request_id,
+                slot.order,
+            )
+            raise ValueError("MEANING_RELATION option must not repeat targetExpression")
+
+        candidates = [
+            (raw_option, False)
+            for index, raw_option in enumerate(raw_options)
+            if index != correct_index
+        ] + [(raw_option, True) for raw_option in raw_reserves]
+        selected: list[tuple[PracticeOption, bool]] = []
+        seen_texts = {normalized_correct}
+        filtered_target_identity = 0
+        filtered_duplicate = 0
+        filtered_language_or_schema = 0
+        for raw_option, is_reserve in candidates:
+            try:
+                option = PracticeOption.model_validate(raw_option)
+                cls._assert_vocabulary_surface_language(
+                    request.learning_language,
+                    option.text,
+                    reason="MEANING_RELATION distractor candidate is not in learningLanguage",
+                )
+            except (ValidationError, ValueError):
+                filtered_language_or_schema += 1
+                continue
+            normalized_text = cls._normalize_for_leak_check(option.text)
+            if normalized_target and normalized_text == normalized_target:
+                filtered_target_identity += 1
+                continue
+            if not normalized_text or normalized_text in seen_texts:
+                filtered_duplicate += 1
+                continue
+            seen_texts.add(normalized_text)
+            selected.append((option, is_reserve))
+            if len(selected) == 3:
+                break
+
+        if filtered_target_identity:
+            logger.info(
+                "MEANING_RELATION target identity distractor filtered. "
+                "request_id=%s order=%d target_identity_role=distractor count=%d",
+                request.request_id,
+                slot.order,
+                filtered_target_identity,
+            )
+        if len(selected) < 3:
+            raise ValueError(
+                "MEANING_RELATION requires three valid distinct distractors after salvage"
+            )
+
+        global_order = request.question_offset + slot.order
+        correct_position = (global_order - 1) % len(_SINGLE_CHOICE_KEYS)
+        selected_options = [option for option, _ in selected]
+        selected_options.insert(correct_position, correct_option)
+        assembled = [
+            {"key": key, "text": option.text}
+            for key, option in zip(_SINGLE_CHOICE_KEYS, selected_options, strict=True)
+        ]
+        normalized["options"] = assembled
+        normalized["correctAnswer"] = [_SINGLE_CHOICE_KEYS[correct_position]]
+        if (
+            filtered_target_identity
+            or filtered_duplicate
+            or filtered_language_or_schema
+            or any(is_reserve for _, is_reserve in selected)
+        ):
+            logger.info(
+                "MEANING_RELATION distractor salvage assembled. request_id=%s order=%d "
+                "filtered_target_identity=%d filtered_duplicate=%d "
+                "filtered_language_or_schema=%d reserve_used=%d",
+                request.request_id,
+                slot.order,
+                filtered_target_identity,
+                filtered_duplicate,
+                filtered_language_or_schema,
+                sum(is_reserve for _, is_reserve in selected),
+            )
         return normalized
 
     @staticmethod
@@ -2017,6 +2433,30 @@ class ReadingVocabularyGenerationService:
         normalized_target = cls._normalize_for_leak_check(
             question.target_expression or ""
         )
+        target_as_answer = (
+            question.complexity_band >= 3
+            and question.skill_tag == VocabularySkill.DISTINCTION.value
+        )
+        if target_as_answer:
+            target_option_count = sum(
+                cls._normalize_for_leak_check(option_text) == normalized_target
+                for option_text in option_by_key.values()
+            )
+            if not normalized_target or target_option_count != 1:
+                raise ValueError(
+                    "MEANING_RELATION target-as-answer must appear in exactly one option"
+                )
+            if normalized_correct != normalized_target:
+                raise ValueError(
+                    "MEANING_RELATION target-as-answer must be the correct option"
+                )
+            stem = cls._normalize_for_leak_check(question.prompt)
+            if normalized_target in stem:
+                raise ValueError(
+                    "MEANING_RELATION target-as-answer stem leaks targetExpression"
+                )
+            return
+
         if normalized_target and any(
             cls._normalize_for_leak_check(option_text) == normalized_target
             for option_text in option_by_key.values()
@@ -2186,6 +2626,17 @@ class ReadingVocabularyGenerationService:
             and verdict.modeFit
             and not verdict.answerLeakage
             and not verdict.distractorsPlausible
+        )
+
+    @staticmethod
+    def _meaning_relation_retry_feedback(reason: str, slot: _QuestionSlot) -> str:
+        if not slot.target_as_answer:
+            return reason
+        return (
+            "REPAIR_TARGET_AS_ANSWER: preserve the exact retryTargetExpression; it is the "
+            "application-owned correct answer. Revise meaningContext and wrong distractors so "
+            "that target alone is the unique best answer, and never expose it in meaningContext. "
+            f"Quality failure: {reason}"
         )
 
     async def _repair_reading_distractors(

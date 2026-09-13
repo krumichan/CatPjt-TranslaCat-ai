@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.features.language_learning.reading_vocabulary.prompts import (
+    PRACTICE_GENERATION_SYSTEM_PROMPT,
     build_practice_generation_prompt,
     build_practice_verification_prompt,
 )
@@ -129,13 +130,29 @@ def test_high_band_antonym_cannot_use_direct_lexical_pair_as_only_decision_basis
 
 
 def test_high_band_distinction_does_not_teach_candidate_difference_in_stem():
-    for band in (4, 5):
+    for band in (3, 4, 5):
         demand = _meaning_recipe("DISTINCTION", band).demand
         assert isinstance(demand, MeaningRelationDemand)
         assert "VISIBLE_CONTEXT" in demand.decision_basis
-        assert "STEM_TEACHES_CANDIDATE_DIFFERENCES_BEFORE_ASKING" in (
-            demand.disallowed_shortcuts
+        assert "TARGET_EXPRESSION_IN_CONTEXT_OR_STEM" in demand.disallowed_shortcuts
+        assert (
+            "TARGET_EXPRESSION_MISSING_FROM_SERVER_CORRECT_OPTION"
+            in demand.disallowed_shortcuts
         )
+        assert "TARGET_EXPRESSION_IN_ANY_OPTION" not in demand.disallowed_shortcuts
+        if band >= 4:
+            assert "STEM_TEACHES_CANDIDATE_DIFFERENCES_BEFORE_ASKING" in (
+                demand.disallowed_shortcuts
+            )
+
+
+@pytest.mark.parametrize("band", [1, 2])
+def test_low_band_meaning_recipe_disallows_target_expression_in_every_option(band):
+    for skill_tag in meaning_relation_skill_cycle(band):
+        demand = _meaning_recipe(skill_tag, band).demand
+        assert isinstance(demand, MeaningRelationDemand)
+        assert "TARGET_EXPRESSION_IN_ANY_OPTION" in demand.disallowed_shortcuts
+        assert "TARGET_EXPRESSION_EQUALS_CORRECT_OPTION" not in demand.disallowed_shortcuts
 
 
 def _meaning_candidate(
@@ -143,13 +160,14 @@ def _meaning_candidate(
     target_expression: str,
     correct_text: str,
     distractor_texts: tuple[str, str, str] = ("公開する", "停止する", "延期する"),
+    complexity_band: int = 5,
 ):
     return PracticeGeneratedQuestion.model_validate(
         {
             "order": 1,
             "questionType": "SINGLE_CHOICE",
             "difficulty": "CHALLENGE",
-            "complexityBand": 5,
+            "complexityBand": complexity_band,
             "passageId": None,
             "passageText": None,
             "prompt": "運用環境への移行について最も適切な関係を選んでください。",
@@ -172,35 +190,333 @@ def _meaning_candidate(
     )
 
 
-def test_target_expression_equal_to_correct_option_is_deterministically_rejected():
+def _raw_distinction_candidate(
+    *,
+    target_expression: str,
+    distractor_texts: tuple[str, str, str],
+    reserve_texts: tuple[str, ...],
+) -> dict:
+    return {
+        "order": 1,
+        "questionType": "SINGLE_CHOICE",
+        "difficulty": "CURRENT",
+        "complexityBand": 4,
+        "passageId": None,
+        "passageText": None,
+        "distractors": [{"text": text} for text in distractor_texts],
+        "skillTag": "DISTINCTION",
+        "evidenceText": None,
+        "explanationLearning": "文脈上の決定的な違いを説明します。",
+        "targetExpression": target_expression,
+        "canonicalKey": "reliability-candidate",
+        "reviewTarget": False,
+        "vocabularyCandidates": [],
+        "meaningContext": "対象を分けて段階ごとに確認しながら進める計画です。",
+        "reserveDistractors": [
+            {"text": text} for text in reserve_texts
+        ],
+    }
+
+
+def _normalize_distinction_candidate(raw: dict, *, previous=()):
+    base = practice_fixtures._vocab_request(
+        mode="MEANING_RELATION",
+        complexity_band=4,
+    )
+    request = practice_fixtures._single_request(base, previous)
+    service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
+    slot = service._build_slots(request, {})[0]
+    normalized = service._normalize_meaning_relation_candidate(request, slot, raw)
+    question = PracticeGeneratedQuestion.model_validate(
+        {**normalized, "explanationOrigin": "결정적인 의미 차이를 설명합니다."}
+    )
+    return service, request, slot, question
+
+
+def test_distinction_internal_schema_requests_surplus_distractors_only():
+    request = practice_fixtures._vocab_request(mode="MEANING_RELATION")
+    service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
+    distinction_slot = next(
+        slot
+        for slot in service._build_slots(request, {})
+        if slot.skill_tag == "DISTINCTION"
+    )
+    schema = service._candidate_schema_for(request, [distinction_slot])
+    question_schema = schema["properties"]["questions"]["items"]
+
+    assert "distractors" in question_schema["properties"]
+    assert "distractors" in question_schema["required"]
+    assert "options" not in question_schema["properties"]
+    assert "correctAnswer" not in question_schema["properties"]
+    assert "prompt" not in question_schema["properties"]
+    assert "reserveDistractors" in question_schema["properties"]
+    assert "reserveDistractors" in question_schema["required"]
+    slot_payload = distinction_slot.prompt_payload()
+    assert slot_payload["reserveDistractorCount"] == 2
+    assert slot_payload["primaryDistractorCount"] == 3
+    assert slot_payload["answerAuthority"] == "APPLICATION_TARGET_EXPRESSION"
+    assert slot_payload["targetVisibility"] == "FINAL_OPTIONS_ONLY"
+    assert "reserveDistractors" not in PracticeGeneratedQuestion.model_json_schema(
+        by_alias=True
+    )["properties"]
+
+
+def test_mixed_b2_b3_schema_keeps_one_call_compatibility_but_ignores_generator_answer():
+    request = practice_fixtures._vocab_request(
+        mode="MEANING_RELATION",
+        complexity_band=3,
+    )
+    service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
+    slots = service._build_slots(request, {})
+    low_slot = next(slot for slot in slots if slot.complexity_band == 2)
+    high_slot = next(slot for slot in slots if slot.complexity_band == 3)
+    question_schema = service._candidate_schema_for(
+        request,
+        [low_slot, high_slot],
+    )["properties"]["questions"]["items"]
+    raw = _raw_distinction_candidate(
+        target_expression="追加の検証期間",
+        distractor_texts=("予備の運用期間", "延長された監視期間", "通常の確認期間"),
+        reserve_texts=("暫定運用期間", "事前確認期間"),
+    )
+    raw["order"] = high_slot.order
+    raw["options"] = [
+        {"key": key, "text": candidate["text"]}
+        for key, candidate in zip(
+            ("A", "B", "C"),
+            raw.pop("distractors"),
+            strict=True,
+        )
+    ]
+    raw["correctAnswer"] = ["C"]
+
+    normalized = service._normalize_meaning_relation_candidate(
+        request,
+        high_slot,
+        raw,
+    )
+
+    assert "options" in question_schema["properties"]
+    assert "correctAnswer" in question_schema["properties"]
+    expected_key = ("A", "B", "C", "D")[(high_slot.order - 1) % 4]
+    assert normalized["correctAnswer"] == [expected_key]
+    assert next(
+        option["text"]
+        for option in normalized["options"]
+        if option["key"] == expected_key
+    ) == "追加の検証期間"
+
+
+def test_high_band_target_literal_in_context_or_final_stem_is_rejected():
+    raw = _raw_distinction_candidate(
+        target_expression="追加の検証期間",
+        distractor_texts=("予備の運用期間", "延長された監視期間", "通常の確認期間"),
+        reserve_texts=("暫定運用期間", "事前確認期間"),
+    )
+    raw["meaningContext"] = "計画には追加の検証期間が必要だと明記されています。"
+
+    with pytest.raises(ValueError, match="context leaks targetExpression"):
+        _normalize_distinction_candidate(raw)
+
+    raw["meaningContext"] = "計画では通常より長く結果を確認する必要があります。"
+    service, _, _, question = _normalize_distinction_candidate(raw)
+    leaked = question.model_copy(
+        update={"prompt": f"{question.prompt} 追加の検証期間"}
+    )
+    with pytest.raises(ValueError, match="stem leaks targetExpression"):
+        service._validate_meaning_relation_candidate(leaked)
+
+
+def test_high_band_target_as_answer_validator_requires_server_correct_key():
+    raw = _raw_distinction_candidate(
+        target_expression="追加の検証期間",
+        distractor_texts=("予備の運用期間", "延長された監視期間", "通常の確認期間"),
+        reserve_texts=("暫定運用期間", "事前確認期間"),
+    )
+    service, _, _, question = _normalize_distinction_candidate(raw)
+    wrong_key = next(
+        option.key
+        for option in question.options
+        if option.key != question.correct_answer[0]
+    )
+
+    with pytest.raises(ValueError, match="must be the correct option"):
+        service._validate_meaning_relation_candidate(
+            question.model_copy(update={"correct_answer": [wrong_key]})
+        )
+
+
+def test_target_duplicate_distractor_is_salvaged_from_surplus_candidates(caplog):
+    caplog.set_level("INFO")
+    raw = _raw_distinction_candidate(
+        target_expression="安全な導入",
+        distractor_texts=("安全な導入", "慎重な展開", "試験的な運用"),
+        reserve_texts=("限定的な稼働", "安定した移行"),
+    )
+
+    service, _, _, question = _normalize_distinction_candidate(raw)
+
+    assert question.correct_answer == ["A"]
+    assert [option.text for option in question.options] == [
+        "安全な導入",
+        "慎重な展開",
+        "試験的な運用",
+        "限定的な稼働",
+    ]
+    service._validate_meaning_relation_candidate(question)
+    assert "target_identity_role=distractor" in caplog.text
+    assert "安全な導入" not in caplog.text
+
+
+def test_server_inserts_target_as_correct_without_generator_answer_authority(caplog):
+    raw = _raw_distinction_candidate(
+        target_expression="安全な導入",
+        distractor_texts=("慎重な展開", "試験的な運用", "限定的な稼働"),
+        reserve_texts=("安定した移行", "限定的な展開"),
+    )
+
+    service, _, _, question = _normalize_distinction_candidate(raw)
+
+    assert question.options[0].text == "安全な導入"
+    assert question.correct_answer == ["A"]
+    service._validate_meaning_relation_candidate(question)
+    assert "target_identity_role=correct" not in caplog.text
+
+
+def test_duplicate_distractors_are_removed_and_replaced_by_reserve():
+    raw = _raw_distinction_candidate(
+        target_expression="安全な導入",
+        distractor_texts=("慎重な展開", "慎重な展開", "試験的な運用"),
+        reserve_texts=("限定的な稼働", "安定した移行"),
+    )
+
+    _, _, _, question = _normalize_distinction_candidate(raw)
+
+    assert [option.text for option in question.options] == [
+        "安全な導入",
+        "慎重な展開",
+        "試験的な運用",
+        "限定的な稼働",
+    ]
+
+
+def test_candidate_is_rejected_when_salvage_leaves_only_two_distractors():
+    raw = _raw_distinction_candidate(
+        target_expression="安全な導入",
+        distractor_texts=("安全な導入", "慎重な展開", "慎重な展開"),
+        reserve_texts=("試験的な運用", "安全な導入"),
+    )
+
+    with pytest.raises(ValueError, match="three valid distinct distractors"):
+        _normalize_distinction_candidate(raw)
+
+
+class _SalvageQualityFailureProvider(practice_fixtures.PipelineProvider):
+    def __init__(self, failure: str):
+        super().__init__()
+        self.failure = failure
+
+    def _candidate(self, payload, slot):
+        candidate = super()._candidate(payload, slot)
+        if slot.get("answerAuthority") == "APPLICATION_TARGET_EXPRESSION":
+            candidate["distractors"][0]["text"] = candidate["targetExpression"]
+        return candidate
+
+    async def call(self, type_name, data, schema=None):
+        response = await super().call(type_name, data, schema)
+        if type_name != ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME:
+            return response
+        verdict = response["verdicts"][0]
+        if self.failure == "ambiguous":
+            verdict["ambiguous"] = True
+        elif self.failure == "weak_distractors":
+            verdict["distractorsPlausible"] = False
+        elif self.failure == "answer_key_mismatch":
+            verdict["bestAnswerKey"] = next(
+                key
+                for key in ("A", "B", "C", "D")
+                if key != verdict["bestAnswerKey"]
+            )
+        return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "quality_failure",
+    ["ambiguous", "weak_distractors", "answer_key_mismatch"],
+)
+async def test_distractor_salvage_never_bypasses_quality_mini(quality_failure):
+    provider = _SalvageQualityFailureProvider(quality_failure)
+    request = practice_fixtures._request(
+        domain="VOCABULARY",
+        mode="MEANING_RELATION",
+        question_count=1,
+        easier=0,
+        current=1,
+        challenge=0,
+        complexity_band=4,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ReadingVocabularyGenerationService(provider).generate(request)
+
+    assert exc_info.value.status_code == 502
+    assert provider.calls[ReadingVocabularyGenerationService.TYPE_NAME] == 3
+    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 3
+    assert all(
+        len(question["options"]) == 4
+        and "reserveDistractors" not in question
+        for payload in provider.verification_payloads
+        for question in payload["questions"]
+    )
+
+
+@pytest.mark.parametrize("band", [1, 2])
+def test_b1_b2_target_expression_equal_to_correct_option_remains_rejected(band):
     service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
     candidate = _meaning_candidate(
         target_expression="配備する",
         correct_text="配備する",
+        complexity_band=band,
     )
 
     with pytest.raises(ValueError, match="option must not repeat targetExpression"):
         service._validate_meaning_relation_candidate(candidate)
 
 
-def test_target_expression_equal_to_wrong_option_is_deterministically_rejected():
+@pytest.mark.parametrize("band", [1, 2])
+def test_b1_b2_target_expression_equal_to_wrong_option_remains_rejected(band):
     service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
     candidate = _meaning_candidate(
         target_expression="安全な導入",
         correct_text="安全な展開",
         distractor_texts=("安全な導入", "安全な運用", "安全な移行"),
+        complexity_band=band,
     )
 
     with pytest.raises(ValueError, match="option must not repeat targetExpression"):
         service._validate_meaning_relation_candidate(candidate)
 
 
-def test_target_expression_and_all_distinct_options_remain_valid():
+def test_high_band_target_as_answer_rejects_target_in_multiple_options():
     service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
     candidate = _meaning_candidate(
-        target_expression="安全な導入",
-        correct_text="安全な展開",
-        distractor_texts=("安全な公開", "安全な運用", "安全な移行"),
+        target_expression="追加の検証期間",
+        correct_text="追加の検証期間",
+        distractor_texts=("追加の検証期間", "臨時の対応期間", "通常の確認期間"),
+    )
+
+    with pytest.raises(ValueError, match="must appear in exactly one option"):
+        service._validate_meaning_relation_candidate(candidate)
+
+
+def test_b1_b2_target_expression_and_all_distinct_options_remain_valid():
+    service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
+    candidate = _meaning_candidate(
+        target_expression="追加の検証期間",
+        correct_text="追加の確認期間",
+        distractor_texts=("延長確認期間", "暫定対応期間", "通常運用期間"),
+        complexity_band=2,
     )
 
     service._validate_meaning_relation_candidate(candidate)
@@ -341,6 +657,24 @@ def test_meaning_calibration_instruction_is_not_added_to_other_vocabulary_modes(
     assert calibration_instruction in meaning_prompt
     assert calibration_instruction not in usage_prompt
     assert calibration_instruction not in composition_prompt
+    all_option_instruction = "targetExpression must not appear in any answer option"
+    assert all_option_instruction in meaning_prompt
+    assert all_option_instruction not in usage_prompt
+    assert all_option_instruction not in composition_prompt
+    assert "reserveDistractors" in meaning_prompt
+    assert "reserveDistractors" not in usage_prompt
+    assert "reserveDistractors" not in composition_prompt
+    assert "freeTargetFocus" in meaning_prompt
+    assert "freeTargetFocus" not in usage_prompt
+    assert "freeTargetFocus" not in composition_prompt
+    assert "must not refer to an option key" in PRACTICE_GENERATION_SYSTEM_PROMPT
+    assert "or position" in PRACTICE_GENERATION_SYSTEM_PROMPT
+    assert "application-owned correct answer" in (
+        PRACTICE_GENERATION_SYSTEM_PROMPT
+    )
+    assert "Do not choose or generate a separate correct alternative" in (
+        PRACTICE_GENERATION_SYSTEM_PROMPT
+    )
 
 
 def test_meaning_shadow_measurement_anchors_remain_frozen_v1():
@@ -392,21 +726,22 @@ def test_b3_plus_final_prompt_uses_server_owned_distinction_shell():
         if slot.skill_tag == "DISTINCTION" and slot.complexity_band >= 3
     )
 
-    normalized = service._normalize_meaning_relation_candidate(
-        request,
-        slot,
-        {
-            "prompt": "AI_GENERATED_QUESTION_WORDING_MUST_NOT_SURVIVE",
-            "targetExpression": "導入する",
-            "meaningContext": "チームは影響を確認しながら、変更を段階的に進めた。",
-        },
+    raw = _raw_distinction_candidate(
+        target_expression="導入する",
+        distractor_texts=("慎重に運用する", "限定的に稼働する", "安定的に移行する"),
+        reserve_texts=("試験的に公開する", "順次適用する"),
     )
+    raw["prompt"] = "AI_GENERATED_QUESTION_WORDING_MUST_NOT_SURVIVE"
+    raw["meaningContext"] = "チームは影響を確認しながら、変更を段階的に進めた。"
+    normalized = service._normalize_meaning_relation_candidate(request, slot, raw)
 
     assert normalized["prompt"].startswith(
         "チームは影響を確認しながら、変更を段階的に進めた。\n\n"
     )
-    assert "意味・使われ方を区別するとき" in normalized["prompt"]
-    assert "導入する" in normalized["prompt"]
+    assert "この状況を最も適切に表す表現はどれですか" in normalized["prompt"]
+    assert "導入する" not in normalized["prompt"]
+    assert normalized["options"][0]["text"] == "導入する"
+    assert normalized["correctAnswer"] == ["A"]
     assert "AI_GENERATED_QUESTION_WORDING_MUST_NOT_SURVIVE" not in normalized["prompt"]
     assert "meaningContext" not in normalized
 
@@ -435,6 +770,8 @@ def test_b1_b2_keep_generator_owned_direct_prompt(band):
         },
     )
 
+    assert slot.target_as_answer is False
+    assert "answerAuthority" not in slot.prompt_payload()
     assert normalized["prompt"] == "最も近い意味の表現はどれですか。"
     assert "meaningContext" not in normalized
 
@@ -649,9 +986,182 @@ async def test_fresh_retry_keeps_same_band_local_skill_for_global_slot():
     assert first_slot.skill_tag == retry_slot.skill_tag == "DISTINCTION"
 
 
+def test_free_target_focus_cycles_deterministically_across_full_progressive_and_retry():
+    focuses = ["development", "customer service", "schedule", "deployment"]
+    base = practice_fixtures._vocab_request(
+        mode="MEANING_RELATION",
+        complexity_band=4,
+        selected_keywords=focuses,
+    )
+    service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
+    full_slots = service._build_slots(base, {})
+    expected = [focuses[index % len(focuses)] for index in range(10)]
+
+    assert [slot.free_target_focus for slot in full_slots] == expected
+    previous = []
+    progressive = []
+    retry_focus = None
+    for global_order in range(1, 11):
+        request = practice_fixtures._single_request(base, previous)
+        slot = service._build_slots(request, {})[0]
+        progressive.append(slot.free_target_focus)
+        if global_order == 7:
+            retry_focus = service._build_slots(request.model_copy(), {})[0].free_target_focus
+        previous.append(
+            _meaning_candidate(
+                target_expression=f"自由表現{global_order}",
+                correct_text=f"別の表現{global_order}",
+            ).model_copy(
+                update={
+                    "order": global_order,
+                    "canonical_key": f"free-key-{global_order}",
+                }
+            )
+        )
+
+    assert progressive == expected
+    assert retry_focus == expected[6]
+
+
+@pytest.mark.asyncio
+async def test_free_slot_contract_excludes_accepted_canonical_and_target_identities():
+    previous = [
+        _meaning_candidate(
+            target_expression="段階的な導入",
+            correct_text="段階的な展開",
+        ).model_copy(update={"order": 1, "canonical_key": "段階的な導入"}),
+        _meaning_candidate(
+            target_expression="段階的なリリース",
+            correct_text="限定的な公開",
+        ).model_copy(update={"order": 2, "canonical_key": "段階的なリリース"}),
+    ]
+    base = practice_fixtures._vocab_request(
+        mode="MEANING_RELATION",
+        complexity_band=4,
+        selected_keywords=["development", "customer service", "schedule"],
+    )
+    request = practice_fixtures._single_request(base, previous)
+    provider = practice_fixtures.ProgressiveProvider()
+    service = ReadingVocabularyGenerationService(provider)
+
+    response = await service.generate(request)
+
+    generation_payload = provider.generation_payloads[0]
+    free_slot = generation_payload["candidateSlots"][0]
+    expected_canonical_keys = {"段階的な導入", "段階的なリリース"}
+    expected_target_expressions = {"段階的な導入", "段階的なリリース"}
+    assert expected_canonical_keys <= set(generation_payload["excludedCanonicalKeys"])
+    assert expected_target_expressions <= set(
+        generation_payload["excludedTargetExpressions"]
+    )
+    assert expected_canonical_keys <= set(free_slot["excludedCanonicalKeys"])
+    assert expected_target_expressions <= set(free_slot["excludedTargetExpressions"])
+    assert free_slot["freeTargetFocus"] == "schedule"
+    generated = response.questions[0]
+    generated_correct = next(
+        option for option in generated.options if option.key == generated.correct_answer[0]
+    )
+    assert generated_correct.text == generated.target_expression
+    assert generated.review_target is False
+
+    repeated = response.questions[0].model_copy(
+        update={"canonical_key": "段階的な導入"}
+    )
+    with pytest.raises(ValueError, match="canonicalKey duplicates an accepted slot"):
+        service._validate_candidate(
+            request,
+            repeated,
+            service._build_slots(request, {})[0],
+            {},
+        )
+
+
+def test_answer_position_rotates_by_global_slot_for_full_progressive_and_retry():
+    base = practice_fixtures._vocab_request(
+        mode="MEANING_RELATION",
+        complexity_band=4,
+    )
+    service = ReadingVocabularyGenerationService(practice_fixtures.PipelineProvider())
+    full_keys = []
+    for slot in service._build_slots(base, {})[:4]:
+        raw = _raw_distinction_candidate(
+            target_expression=f"対象表現{slot.order}",
+            distractor_texts=("慎重な展開", "試験的な運用", "限定的な稼働"),
+            reserve_texts=("安定した移行", "限定的な展開"),
+        )
+        raw["order"] = slot.order
+        normalized = service._normalize_meaning_relation_candidate(base, slot, raw)
+        full_keys.append(normalized["correctAnswer"][0])
+        assert normalized["options"][slot.order - 1]["text"] == (
+            f"対象表現{slot.order}"
+        )
+
+    previous = []
+    progressive_keys = []
+    third_retry_key = None
+    for global_order in range(1, 5):
+        request = practice_fixtures._single_request(base, previous)
+        slot = service._build_slots(request, {})[0]
+        raw = _raw_distinction_candidate(
+            target_expression=f"対象表現{global_order}",
+            distractor_texts=("慎重な展開", "試験的な運用", "限定的な稼働"),
+            reserve_texts=("安定した移行", "限定的な展開"),
+        )
+        normalized = service._normalize_meaning_relation_candidate(request, slot, raw)
+        progressive_keys.append(normalized["correctAnswer"][0])
+        expected_position = (global_order - 1) % 4
+        assert normalized["options"][expected_position]["text"] == (
+            f"対象表現{global_order}"
+        )
+        if global_order == 3:
+            third_retry_key = service._normalize_meaning_relation_candidate(
+                request, slot, raw
+            )["correctAnswer"][0]
+        previous.append(
+            PracticeGeneratedQuestion.model_validate(
+                {**normalized, "explanationOrigin": "정답을 설명합니다."}
+            ).model_copy(update={"order": global_order})
+        )
+
+    assert full_keys == progressive_keys == ["A", "B", "C", "D"]
+    assert third_retry_key == "C"
+
+
 def test_b3_b4_b5_only_plan_provider_supported_distinction_slots():
     for band in (3, 4, 5):
         assert meaning_relation_skill_cycle(band) == ("DISTINCTION",)
+
+
+@pytest.mark.asyncio
+async def test_high_band_pipeline_hides_target_and_preserves_provider_stage_count():
+    provider = practice_fixtures.PipelineProvider()
+    request = practice_fixtures._vocab_request(
+        mode="MEANING_RELATION",
+        complexity_band=4,
+    )
+
+    response = await ReadingVocabularyGenerationService(provider).generate(request)
+
+    assert len(response.questions) == 10
+    for question in response.questions:
+        normalized_target = ReadingVocabularyGenerationService._normalize_for_leak_check(
+            question.target_expression or ""
+        )
+        assert normalized_target
+        assert normalized_target not in (
+            ReadingVocabularyGenerationService._normalize_for_leak_check(question.prompt)
+        )
+        matching_options = [
+            option
+            for option in question.options
+            if ReadingVocabularyGenerationService._normalize_for_leak_check(option.text)
+            == normalized_target
+        ]
+        assert len(matching_options) == 1
+        assert matching_options[0].key == question.correct_answer[0]
+    assert provider.calls[ReadingVocabularyGenerationService.TYPE_NAME] == 5
+    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 1
+    assert provider.calls[ReadingVocabularyGenerationService.PRESCREEN_TYPE_NAME] == 0
 
 
 @pytest.mark.asyncio
@@ -664,6 +1174,7 @@ async def test_b4_review_target_keeps_expression_with_band_compatible_skill():
         current=1,
         challenge=0,
         complexity_band=4,
+        selected_keywords=["development", "deployment"],
         review_targets=[
             {
                 "canonicalKey": "review-fixed",
@@ -674,9 +1185,10 @@ async def test_b4_review_target_keeps_expression_with_band_compatible_skill():
         review_question_count=1,
     )
 
-    response = await ReadingVocabularyGenerationService(
-        practice_fixtures.PipelineProvider()
-    ).generate(request)
+    provider = practice_fixtures.PipelineProvider()
+    service = ReadingVocabularyGenerationService(provider)
+    slot = service._build_slots(request, {})[0]
+    response = await service.generate(request)
 
     question = response.questions[0]
     assert question.complexity_band == 4
@@ -684,6 +1196,29 @@ async def test_b4_review_target_keeps_expression_with_band_compatible_skill():
     assert question.target_expression == "慎重に進める"
     assert question.canonical_key == "review-fixed"
     assert question.review_target is True
+    assert slot.free_target_focus is None
+    review_slot_payload = provider.candidate_slot_payloads[0][0]
+    assert review_slot_payload["boundReviewTarget"] == {
+        "canonicalKey": "review-fixed",
+        "expression": "慎重に進める",
+        "previousQuestionTypes": [],
+    }
+    assert "freeTargetFocus" not in review_slot_payload
+    assert "excludedCanonicalKeys" not in review_slot_payload
+    assert "excludedTargetExpressions" not in review_slot_payload
+    normalized_target = ReadingVocabularyGenerationService._normalize_for_leak_check(
+        question.target_expression
+    )
+    assert sum(
+        ReadingVocabularyGenerationService._normalize_for_leak_check(option.text)
+        == normalized_target
+        for option in question.options
+    ) == 1
+    correct_option = next(
+        option for option in question.options if option.key == question.correct_answer[0]
+    )
+    assert correct_option.text == question.target_expression
+    assert question.target_expression not in question.prompt
 
 
 @pytest.mark.asyncio
@@ -707,6 +1242,34 @@ async def test_meaning_relation_semantic_retry_budget_remains_three():
     assert exc_info.value.status_code == 502
     assert provider.calls[ReadingVocabularyGenerationService.TYPE_NAME] == 3
     assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 3
+
+
+@pytest.mark.asyncio
+async def test_high_band_semantic_retry_preserves_server_owned_target_and_repairs_context():
+    provider = practice_fixtures.PipelineProvider(semantic_ambiguous_once={1})
+    request = practice_fixtures._request(
+        domain="VOCABULARY",
+        mode="MEANING_RELATION",
+        question_count=1,
+        easier=0,
+        current=1,
+        challenge=0,
+        complexity_band=4,
+    )
+
+    response = await ReadingVocabularyGenerationService(provider).generate(request)
+
+    assert len(response.questions) == 1
+    assert provider.calls[ReadingVocabularyGenerationService.TYPE_NAME] == 2
+    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 2
+    first_slot, retry_slot = (
+        payload[0] for payload in provider.candidate_slot_payloads
+    )
+    assert retry_slot["retryTargetExpression"] == response.questions[0].target_expression
+    assert retry_slot["preserveTargetOnRetry"] is True
+    assert "REPAIR_TARGET_AS_ANSWER" in retry_slot["retryFeedback"]
+    assert "application-owned correct answer" in retry_slot["retryFeedback"]
+    assert first_slot["answerAuthority"] == retry_slot["answerAuthority"]
 
 
 def test_meaning_relation_weak_distractors_remain_quality_rejection():
@@ -754,6 +1317,7 @@ def test_correct_option_exactly_exposed_in_context_is_rejected():
     candidate = _meaning_candidate(
         target_expression="配備する",
         correct_text="運用環境に導入する",
+        complexity_band=2,
     ).model_copy(
         update={"prompt": "計画では運用環境に導入すると明記されています。"}
     )
@@ -820,7 +1384,7 @@ async def test_origin_internal_metadata_leak_is_rejected_then_uses_existing_fall
 def test_structural_recipe_version_changes_but_measurement_ruler_stays_frozen():
     assert (
         MEANING_RELATION_DIFFICULTY_RECIPE_VERSION
-        == "vocabulary-meaning-relation-recipe-v5"
+        == "vocabulary-meaning-relation-recipe-v7"
     )
     assert (
         VOCABULARY_DIFFICULTY_SHADOW_RUBRIC_VERSION

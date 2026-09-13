@@ -12,7 +12,7 @@ from app.schemas.language_learning_practice import (
 
 VOCABULARY_DIFFICULTY_RECIPE_VERSION = "vocabulary-difficulty-recipe-v1"
 MEANING_RELATION_DIFFICULTY_RECIPE_VERSION = (
-    "vocabulary-meaning-relation-recipe-v5"
+    "vocabulary-meaning-relation-recipe-v7"
 )
 VOCABULARY_DIFFICULTY_SHADOW_RUBRIC_VERSION = (
     "vocabulary-difficulty-shadow-rubric-v1"
@@ -634,8 +634,16 @@ def _meaning_disallowed_shortcuts(band: int, skill_tag: str) -> tuple[str, ...]:
         "AMBIGUITY_AS_DIFFICULTY",
         "UNRELATED_DISTRACTORS",
         "OUTSIDE_KNOWLEDGE",
-        "TARGET_EXPRESSION_EQUALS_CORRECT_OPTION",
     ]
+    if band >= 3 and skill_tag == VocabularySkill.DISTINCTION.value:
+        shortcuts.extend(
+            [
+                "TARGET_EXPRESSION_IN_CONTEXT_OR_STEM",
+                "TARGET_EXPRESSION_MISSING_FROM_SERVER_CORRECT_OPTION",
+            ]
+        )
+    else:
+        shortcuts.append("TARGET_EXPRESSION_IN_ANY_OPTION")
     if band >= 3:
         shortcuts.extend(
             [
