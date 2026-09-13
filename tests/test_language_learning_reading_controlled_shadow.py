@@ -27,6 +27,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_shadow
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     READING_DIFFICULTY_RECIPE_VERSION,
     READING_DIFFICULTY_SHADOW_RUBRIC_VERSION,
+    READING_PASSAGE_BLUEPRINT_VERSION,
 )
 from app.features.language_learning.reading_vocabulary.service import (
     ReadingVocabularyGenerationService,
@@ -241,6 +242,7 @@ async def test_selected_shadow_adds_exactly_one_call_without_changing_response(c
     assert "input_tokens=321 output_tokens=123" in caplog.text
     assert "sample_percentage=100.0 cohort=selected" in caplog.text
     assert f"recipe_version={READING_DIFFICULTY_RECIPE_VERSION}" in caplog.text
+    assert f"passage_recipe_version={READING_PASSAGE_BLUEPRINT_VERSION}" in caplog.text
     assert (
         f"measurement_rubric_version={READING_DIFFICULTY_SHADOW_RUBRIC_VERSION}"
         in caplog.text

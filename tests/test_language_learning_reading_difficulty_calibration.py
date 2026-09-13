@@ -50,7 +50,16 @@ class ReadingDifficultyProvider(practice_fixtures.PipelineProvider):
             self.passage_prompts.append(data)
         if type_name == ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME:
             self.verification_schemas.append(schema)
-        return await super().call(type_name, data, schema)
+        result = await super().call(type_name, data, schema)
+        if type_name == ReadingVocabularyGenerationService.PASSAGE_TYPE_NAME:
+            payload = practice_fixtures._practice_data(data)
+            passage_demand = payload["difficultyRecipe"]["passageDemand"]
+            if passage_demand["crossParagraphDependencyRequired"]:
+                result["passageText"] = (
+                    "今日は会社で会議があります。担当者は資料を確認しました。\n\n"
+                    "その後、顧客への説明方法について話し合いました。"
+                )
+        return result
 
     async def call_with_image(
         self,

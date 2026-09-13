@@ -22,6 +22,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_spec i
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     passage_difficulty_recipe,
     question_demand_recipe,
+    validate_passage_demand_blueprint,
     validate_question_demand_blueprint,
 )
 from app.schemas.language_learning_practice import (
@@ -41,6 +42,12 @@ def build_reading_passage_difficulty_spec(
     passage_id: str,
     complexity_band: int,
 ) -> ReadingPassageDifficultySpec:
+    recipe = passage_difficulty_recipe(complexity_band, mode=request.mode)
+    validate_passage_demand_blueprint(
+        mode=request.mode,
+        band=complexity_band,
+        recipe=recipe,
+    )
     return ReadingPassageDifficultySpec(
         target=DifficultyTarget(
             service="reading",
@@ -52,7 +59,7 @@ def build_reading_passage_difficulty_spec(
             policy_version=READING_DIFFICULTY_SPEC_VERSION,
         ),
         passage_id=passage_id,
-        recipe=passage_difficulty_recipe(complexity_band, mode=request.mode),
+        recipe=recipe,
     )
 
 
@@ -252,6 +259,14 @@ def validate_reading_passage(
     passage_text: str,
     language_validator: Callable[[], None],
 ) -> DifficultyValidationResult:
+    try:
+        validate_passage_demand_blueprint(
+            mode=spec.target.value.mode,
+            band=spec.target.value.complexity_band,
+            recipe=spec.recipe,
+        )
+    except ValueError as exc:
+        return DifficultyValidationResult.reject(str(exc))
     if observed_passage_id != spec.passage_id:
         return DifficultyValidationResult.reject("reading passageId mismatch")
     if not passage_text:
@@ -260,12 +275,23 @@ def validate_reading_passage(
         language_validator()
     except ValueError as exc:
         return DifficultyValidationResult.reject(str(exc))
+    passage_measurements = measure_reading_passage(passage_text)
+    passage_demand = spec.recipe.passage_demand
+    if (
+        passage_demand is not None
+        and passage_demand.cross_paragraph_dependency_required
+        and passage_measurements.paragraph_count < 2
+    ):
+        return DifficultyValidationResult.reject(
+            "reading passage requires at least two paragraphs for "
+            "cross-paragraph dependency"
+        )
     return DifficultyValidationResult.accept(
         measurements={
             "complexityBand": spec.target.value.complexity_band,
             "passageId": spec.passage_id,
             "recipeVersion": spec.recipe.version,
-            **measure_reading_passage(passage_text).log_fields(),
+            **passage_measurements.log_fields(),
         }
     )
 

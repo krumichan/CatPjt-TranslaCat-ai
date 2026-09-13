@@ -136,6 +136,10 @@ TranslaCat is practical language learning, not exam preparation; do not mention 
 Match complexityBand 1-5 using linguistic complexity rather than test labels.
 The supplied difficultyRecipe is server-owned generation guidance. Realize its passage anchor and semantic
 dimensions, while treating length, paragraphing and surface-unit count only as broad editorial signals.
+When passageDemand is present, treat its relation-category, cross-paragraph dependency, integration,
+interpretive-requirement, and mode-emphasis fields as fixed application-selected requirements rather than
+generator-authored metadata. Realize every interpretiveRequirement through the passage meaning; do not
+return or self-report requirement metadata.
 Use practical, varied scenarios and avoid trivia/background-knowledge dependence.
 previousPassages are already committed source passages. Give the requested new passage a distinct scenario
 and content, without rewriting or returning the previous passages.
