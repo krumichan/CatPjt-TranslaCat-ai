@@ -22,6 +22,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_spec i
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     passage_difficulty_recipe,
     question_demand_recipe,
+    validate_question_demand_blueprint,
 )
 from app.schemas.language_learning_practice import (
     PracticeGeneratedQuestion,
@@ -57,11 +58,23 @@ def build_reading_passage_difficulty_spec(
 
 def build_reading_question_difficulty_spec(
     *,
+    mode: str,
     difficulty: str,
     complexity_band: int,
     skill_tag: str,
     passage_id: str,
 ) -> ReadingQuestionDifficultySpec:
+    recipe = question_demand_recipe(
+        complexity_band,
+        mode=mode,
+        skill_tag=skill_tag,
+    )
+    validate_question_demand_blueprint(
+        mode=mode,
+        band=complexity_band,
+        skill_tag=skill_tag,
+        recipe=recipe,
+    )
     return ReadingQuestionDifficultySpec(
         target=DifficultyTarget(
             service="reading",
@@ -74,7 +87,8 @@ def build_reading_question_difficulty_spec(
             policy_version=READING_DIFFICULTY_SPEC_VERSION,
         ),
         passage_id=passage_id,
-        recipe=question_demand_recipe(complexity_band, skill_tag=skill_tag),
+        mode=mode,
+        recipe=recipe,
     )
 
 
@@ -94,7 +108,7 @@ class ReadingQuestionMeasurements:
 
     ``evidence_to_question_surface_unit_distance`` counts passage surface units
     after the matched evidence, because the learner-visible question follows the
-    passage.  V1 records this value but does not map it to a band.
+    passage. V2 records geometry but does not map it to a band.
     """
 
     prompt_character_count: int
@@ -104,7 +118,11 @@ class ReadingQuestionMeasurements:
     evidence_exact_match: bool
     evidence_offset: int | None
     evidence_paragraph: int | None
+    evidence_end_paragraph: int | None
+    evidence_paragraph_coverage: int | None
     evidence_surface_unit: int | None
+    evidence_end_surface_unit: int | None
+    evidence_surface_unit_coverage: int | None
     evidence_to_question_surface_unit_distance: int | None
     skill_tag: str
     passage_id: str
@@ -149,9 +167,14 @@ def measure_reading_question(
                 evidence_end_unit = index
                 break
     evidence_paragraph = None
+    evidence_end_paragraph = None
     if exact_match:
         evidence_paragraph = len(
             re.findall(r"\r?\n\s*\r?\n", passage[:evidence_offset])
+        ) + 1
+        evidence_end_offset = evidence_offset + len(evidence)
+        evidence_end_paragraph = len(
+            re.findall(r"\r?\n\s*\r?\n", passage[: max(evidence_offset, evidence_end_offset - 1)])
         ) + 1
     return ReadingQuestionMeasurements(
         prompt_character_count=normalized_character_count(question.prompt),
@@ -163,7 +186,19 @@ def measure_reading_question(
         evidence_exact_match=exact_match,
         evidence_offset=evidence_offset if exact_match else None,
         evidence_paragraph=evidence_paragraph,
+        evidence_end_paragraph=evidence_end_paragraph,
+        evidence_paragraph_coverage=(
+            evidence_end_paragraph - evidence_paragraph + 1
+            if evidence_paragraph is not None and evidence_end_paragraph is not None
+            else None
+        ),
         evidence_surface_unit=evidence_unit,
+        evidence_end_surface_unit=evidence_end_unit,
+        evidence_surface_unit_coverage=(
+            evidence_end_unit - evidence_unit + 1
+            if evidence_unit is not None and evidence_end_unit is not None
+            else None
+        ),
         evidence_to_question_surface_unit_distance=(
             len(spans) - evidence_end_unit if evidence_end_unit is not None else None
         ),
@@ -243,6 +278,12 @@ def project_reading_question_validation(
     passage_text: str | None = None,
 ) -> DifficultyValidationResult:
     try:
+        validate_question_demand_blueprint(
+            mode=spec.mode,
+            band=spec.target.value.complexity_band,
+            skill_tag=spec.target.value.skill_tag,
+            recipe=spec.recipe,
+        )
         validator()
     except ValueError as exc:
         return DifficultyValidationResult.reject(str(exc))
@@ -251,6 +292,22 @@ def project_reading_question_validation(
         "skillTag": spec.target.value.skill_tag,
         "recipeVersion": spec.recipe.version,
     }
+    if spec.recipe.question_demand is not None:
+        measurements.update(
+            {
+                "questionDemandKind": spec.recipe.question_demand.kind.value,
+                "requiredEvidenceScope": spec.recipe.question_demand.evidence_scope.value,
+                "requiredMinimumDistinctCues": (
+                    spec.recipe.question_demand.minimum_distinct_cues
+                ),
+                "requiredMinimumEvidenceUnits": (
+                    spec.recipe.question_demand.minimum_evidence_units
+                ),
+                "requiredMinimumEvidenceParagraphs": (
+                    spec.recipe.question_demand.minimum_evidence_paragraphs
+                ),
+            }
+        )
     if question is not None and passage_text is not None:
         measurements.update(
             measure_reading_question(
@@ -336,7 +393,7 @@ class ReadingSemanticQualityPolicy:
 
 @dataclass(frozen=True, kw_only=True)
 class ReadingSemanticDifficultyAssessment(SemanticAssessment[int]):
-    """A blind Reading difficulty classification used for V1 shadow comparison."""
+    """A blind Reading difficulty classification used for recipe shadow comparison."""
 
 
 def normalize_reading_semantic_difficulty_assessment(
@@ -393,7 +450,7 @@ def normalize_reading_semantic_difficulty_assessment(
 
 @dataclass(frozen=True)
 class ReadingSemanticDifficultyPolicy:
-    """Compare blind classifications without granting V1 rejection authority."""
+    """Compare blind classifications without granting rejection authority."""
 
     def decide(
         self,

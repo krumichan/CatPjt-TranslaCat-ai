@@ -23,6 +23,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_adapte
 )
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     READING_DIFFICULTY_RECIPE_VERSION,
+    READING_DIFFICULTY_SHADOW_RUBRIC_VERSION,
     reading_blind_rubric_payload,
 )
 from app.schemas.language_learning_practice import (
@@ -436,6 +437,7 @@ class ReadingDifficultyShadowCollector:
             logger.info(
                 "Reading difficulty shadow. request_id=%s learning_language=%s mode=%s "
                 "scope=passage passage_id=%s requested_band=%d recipe_version=%s "
+                "measurement_rubric_version=%s "
                 "measurements=%s difficulty_status=%s observed_band=%s "
                 "alternative_band=%s comparison=%s difficulty_confidence=%s "
                 "issue_codes=%s evidence_refs=%s provider=%s model=%s latency_ms=%.3f "
@@ -446,6 +448,7 @@ class ReadingDifficultyShadowCollector:
                 raw.passage_id,
                 request.complexity_band,
                 READING_DIFFICULTY_RECIPE_VERSION,
+                READING_DIFFICULTY_SHADOW_RUBRIC_VERSION,
                 measure_reading_passage(passage_text).log_fields(),
                 assessment.difficulty_status,
                 assessment.observed_target,
@@ -481,7 +484,8 @@ class ReadingDifficultyShadowCollector:
             logger.info(
                 "Reading difficulty shadow. request_id=%s learning_language=%s mode=%s "
                 "scope=question passage_id=%s order=%d skill_tag=%s requested_band=%d "
-                "recipe_version=%s measurements=%s difficulty_status=%s observed_band=%s "
+                "recipe_version=%s measurement_rubric_version=%s measurements=%s "
+                "difficulty_status=%s observed_band=%s "
                 "alternative_band=%s comparison=%s difficulty_confidence=%s "
                 "issue_codes=%s evidence_refs=%s provider=%s model=%s latency_ms=%.3f "
                 "input_tokens=%d output_tokens=%d sample_percentage=%s cohort=selected",
@@ -493,6 +497,7 @@ class ReadingDifficultyShadowCollector:
                 question.skill_tag,
                 question.complexity_band,
                 READING_DIFFICULTY_RECIPE_VERSION,
+                READING_DIFFICULTY_SHADOW_RUBRIC_VERSION,
                 measure_reading_question(
                     question,
                     passage_id=passage_id,

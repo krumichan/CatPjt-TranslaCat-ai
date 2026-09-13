@@ -362,12 +362,16 @@ class ProgressiveProvider(PipelineProvider):
 
 def _single_request(base, previous=(), **updates):
     payload = base.model_dump(mode="json", by_alias=True)
+    plan = ReadingVocabularyGenerationService._difficulty_plan(base)
+    difficulty = plan[len(previous)].value if len(previous) < len(plan) else "CURRENT"
+    if "questionCount" in updates:
+        difficulty = "CURRENT"
     payload.update(
         requestId=f"progressive-{len(previous) + 1}",
         questionCount=1,
-        easierCount=0,
-        currentCount=1,
-        challengeCount=0,
+        easierCount=int(difficulty == "EASIER"),
+        currentCount=int(difficulty == "CURRENT"),
+        challengeCount=int(difficulty == "CHALLENGE"),
         previousQuestions=[question.model_dump(mode="json", by_alias=True) for question in previous],
     )
     payload.update(updates)

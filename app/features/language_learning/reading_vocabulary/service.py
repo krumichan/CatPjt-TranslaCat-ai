@@ -21,6 +21,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_adapte
     validate_reading_passage,
 )
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
+    calibrated_reading_skill,
     question_demand_recipe,
 )
 from app.features.language_learning.reading_vocabulary.reading_difficulty_shadow import (
@@ -38,6 +39,7 @@ from app.features.language_learning.reading_vocabulary.prompts import (
     build_origin_explanation_prompt,
     build_practice_generation_prompt,
     build_practice_verification_prompt,
+    build_reading_distractor_repair_prompt,
     build_reading_passage_prompt,
     build_usage_prescreen_prompt,
 )
@@ -60,6 +62,7 @@ logger = logging.getLogger(__name__)
 _MAX_CANDIDATE_ATTEMPTS_PER_SLOT = 3
 _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT = 8
 _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT = 3
+_MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT = 1
 _MAX_USAGE_DISTINCTION_GENERATION_ATTEMPTS_PER_SLOT = 10
 _MAX_USAGE_DISTINCTION_SEMANTIC_ATTEMPTS_PER_SLOT = 5
 _MAX_COMPOSITION_GENERATION_ATTEMPTS_PER_SLOT = 8
@@ -174,6 +177,24 @@ _PRACTICE_VERIFICATION_SCHEMA: dict[str, Any] = {
     "required": ["verdicts"],
 }
 
+_READING_DISTRACTOR_REPAIR_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "wrongOptions": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "key": {"type": "STRING"},
+                    "text": {"type": "STRING"},
+                },
+                "required": ["key", "text"],
+            },
+        }
+    },
+    "required": ["wrongOptions"],
+}
+
 _USAGE_PRESCREEN_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
@@ -231,6 +252,21 @@ class _PracticeVerificationPayload(BaseModel):
     verdicts: list[_PracticeVerificationVerdict]
 
 
+class _ReadingDistractorRepairOption(BaseModel):
+    key: str
+    text: str
+
+
+class _ReadingDistractorRepairPayload(BaseModel):
+    wrongOptions: list[_ReadingDistractorRepairOption]
+
+
+@dataclass(frozen=True)
+class _SemanticVerificationOutcome:
+    failures: dict[int, str]
+    verdicts: dict[int, _PracticeVerificationVerdict]
+
+
 class _UsagePrescreenVerdict(BaseModel):
     order: int
     modeFit: bool = True
@@ -274,6 +310,7 @@ class _QuestionSlot:
     review_expression: str | None = None
     previous_question_types: tuple[str, ...] = ()
     usage_intent: str | None = None
+    reading_mode: str | None = None
 
     @property
     def review_target(self) -> bool:
@@ -292,8 +329,11 @@ class _QuestionSlot:
         if self.question_type is not None:
             payload["questionType"] = self.question_type.value
         if self.passage_id is not None:
+            if self.reading_mode is None:
+                raise ValueError("Reading slot requires its server-selected mode")
             payload["difficultyRecipe"] = question_demand_recipe(
                 self.complexity_band,
+                mode=self.reading_mode,
                 skill_tag=self.skill_tag,
             ).generation_payload()
         if self.usage_intent is not None:
@@ -310,6 +350,7 @@ class _QuestionSlot:
 
 class ReadingVocabularyGenerationService:
     TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION"
+    DISTRACTOR_REPAIR_TYPE_NAME = "LANGUAGE_LEARNING_READING_DISTRACTOR_REPAIR"
     PASSAGE_TYPE_NAME = "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION"
     PRESCREEN_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_USAGE_PRESCREEN"
     VERIFICATION_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION"
@@ -540,19 +581,28 @@ class ReadingVocabularyGenerationService:
                     ReadingSkill.CONTEXT_INFERENCE.value,
                 ],
             }[request.mode]
-            return [
-                _QuestionSlot(
-                    order=index,
-                    difficulty=difficulty,
-                    complexity_band=self._band_for(request, difficulty),
-                    skill_tag=skill_cycle[request.question_offset + index - 1],
-                    passage_id="p1" if request.question_offset + index <= 3 else "p2",
-                    passage_text=passages[
-                        "p1" if request.question_offset + index <= 3 else "p2"
-                    ],
+            slots: list[_QuestionSlot] = []
+            for index, difficulty in enumerate(difficulties, 1):
+                global_index = request.question_offset + index
+                band = self._band_for(request, difficulty)
+                passage_id = "p1" if global_index <= 3 else "p2"
+                skill_tag = calibrated_reading_skill(
+                    mode=request.mode,
+                    band=band,
+                    planned_skill=skill_cycle[global_index - 1],
                 )
-                for index, difficulty in enumerate(difficulties, 1)
-            ]
+                slots.append(
+                    _QuestionSlot(
+                        order=index,
+                        difficulty=difficulty,
+                        complexity_band=band,
+                        skill_tag=skill_tag,
+                        passage_id=passage_id,
+                        passage_text=passages[passage_id],
+                        reading_mode=request.mode,
+                    )
+                )
+            return slots
 
         skill_cycle = {
             VocabularyMode.MEANING_RELATION.value: [
@@ -777,9 +827,14 @@ class ReadingVocabularyGenerationService:
         slot_by_order = {slot.order: slot for slot in slots}
         generation_attempts = {slot.order: 0 for slot in slots}
         semantic_attempts = {slot.order: 0 for slot in slots}
+        repair_attempts = {slot.order: 0 for slot in slots}
         accepted: dict[int, PracticeGeneratedQuestion] = {}
         semantically_verified: set[int] = set()
+        pending_repaired: set[int] = set()
         retry_feedback: dict[int, str] = {}
+        repair_calls = 0
+        repair_accepted = 0
+        repair_rejected = 0
 
         while len(semantically_verified) < len(slots):
             pending_generation = [
@@ -833,14 +888,33 @@ class ReadingVocabularyGenerationService:
 
             for question in unverified:
                 semantic_attempts[question.order] += 1
-            semantic_failures = await self._semantic_failures(request, unverified)
+            semantic_outcome = await self._semantic_verification_outcome(
+                request,
+                unverified,
+            )
 
             semantic_exhausted: list[int] = []
             for question in unverified:
-                failure = semantic_failures.get(question.order)
+                failure = semantic_outcome.failures.get(question.order)
                 if failure is None:
                     semantically_verified.add(question.order)
                     retry_feedback.pop(question.order, None)
+                    if question.order in pending_repaired:
+                        pending_repaired.remove(question.order)
+                        repair_accepted += 1
+                        logger.info(
+                            "Reading distractor repair accepted. request_id=%s order=%d "
+                            "generation_attempt=%d/%d semantic_attempt=%d/%d "
+                            "repair_attempt=%d/%d",
+                            request.request_id,
+                            question.order,
+                            generation_attempts[question.order],
+                            _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT,
+                            semantic_attempts[question.order],
+                            _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT,
+                            repair_attempts[question.order],
+                            _MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT,
+                        )
                     continue
 
                 logger.warning(
@@ -854,6 +928,77 @@ class ReadingVocabularyGenerationService:
                     _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT,
                     failure[:300],
                 )
+                if question.order in pending_repaired:
+                    pending_repaired.remove(question.order)
+                    repair_rejected += 1
+                    logger.warning(
+                        "Reading distractor repair rejected. request_id=%s order=%d "
+                        "generation_attempt=%d/%d semantic_attempt=%d/%d "
+                        "repair_attempt=%d/%d reason=%s",
+                        request.request_id,
+                        question.order,
+                        generation_attempts[question.order],
+                        _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT,
+                        semantic_attempts[question.order],
+                        _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT,
+                        repair_attempts[question.order],
+                        _MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT,
+                        failure[:300],
+                    )
+
+                verdict = semantic_outcome.verdicts.get(question.order)
+                expected_key = question.correct_answer[0]
+                if (
+                    repair_attempts[question.order]
+                    < _MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT
+                    and semantic_attempts[question.order]
+                    < _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT
+                    and verdict is not None
+                    and self._is_reading_distractor_only_failure(
+                        verdict,
+                        expected_answer_key=expected_key,
+                    )
+                ):
+                    repair_attempts[question.order] += 1
+                    repair_calls += 1
+                    logger.info(
+                        "Reading distractor repair attempted. request_id=%s order=%d "
+                        "generation_attempt=%d/%d semantic_attempt=%d/%d "
+                        "repair_attempt=%d/%d",
+                        request.request_id,
+                        question.order,
+                        generation_attempts[question.order],
+                        _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT,
+                        semantic_attempts[question.order],
+                        _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT,
+                        repair_attempts[question.order],
+                        _MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT,
+                    )
+                    repaired = await self._repair_reading_distractors(
+                        request,
+                        question,
+                        slot_by_order[question.order],
+                        accepted,
+                    )
+                    if repaired is not None:
+                        accepted[question.order] = repaired
+                        pending_repaired.add(question.order)
+                        retry_feedback.pop(question.order, None)
+                        continue
+                    repair_rejected += 1
+                    logger.warning(
+                        "Reading distractor repair fallback to full regeneration. "
+                        "request_id=%s order=%d generation_attempt=%d/%d "
+                        "semantic_attempt=%d/%d repair_attempt=%d/%d",
+                        request.request_id,
+                        question.order,
+                        generation_attempts[question.order],
+                        _MAX_READING_GENERATION_ATTEMPTS_PER_SLOT,
+                        semantic_attempts[question.order],
+                        _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT,
+                        repair_attempts[question.order],
+                        _MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT,
+                    )
                 accepted.pop(question.order, None)
                 retry_feedback[question.order] = self._reading_retry_feedback(failure)
                 if semantic_attempts[question.order] >= _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT:
@@ -865,6 +1010,16 @@ class ReadingVocabularyGenerationService:
                     f"{sorted(semantic_exhausted)}"
                 )
 
+        if repair_calls:
+            logger.info(
+                "Reading distractor repair summary. request_id=%s "
+                "distractorRepairCalls=%d distractorRepairAccepted=%d "
+                "distractorRepairRejected=%d",
+                request.request_id,
+                repair_calls,
+                repair_accepted,
+                repair_rejected,
+            )
         return [accepted[order] for order in sorted(accepted)]
 
     async def _generate_verified_usage_distinction_questions(
@@ -1169,11 +1324,17 @@ class ReadingVocabularyGenerationService:
             try:
                 normalized_item = item
                 if request.domain == PracticeDomain.READING:
+                    reading_slot = slot_by_order[order]
                     normalized_item = {
                         **item,
+                        # Difficulty labels are application-owned plan metadata. They do not prove
+                        # that the generated question achieved the intended cognitive demand.
+                        "difficulty": reading_slot.difficulty.value,
+                        "complexityBand": reading_slot.complexity_band,
+                        "skillTag": reading_slot.skill_tag,
                         "vocabularyCandidates": self._sanitize_reading_vocabulary_candidates(
                             item.get("vocabularyCandidates", []),
-                            slot_by_order[order].passage_text or "",
+                            reading_slot.passage_text or "",
                         ),
                     }
                 # Placeholder is internal only and always overwritten after semantic acceptance.
@@ -1210,6 +1371,7 @@ class ReadingVocabularyGenerationService:
                     assert slot.passage_id is not None
                     assert slot.passage_text is not None
                     question_spec = build_reading_question_difficulty_spec(
+                        mode=request.mode,
                         difficulty=slot.difficulty.value,
                         complexity_band=slot.complexity_band,
                         skill_tag=slot.skill_tag,
@@ -1848,14 +2010,147 @@ class ReadingVocabularyGenerationService:
                 failures[order] = "; ".join(reasons) + f" ({verdict.reason})"
         return failures
 
-    async def _semantic_failures(
+    @staticmethod
+    def _is_reading_distractor_only_failure(
+        verdict: _PracticeVerificationVerdict,
+        *,
+        expected_answer_key: str,
+    ) -> bool:
+        return (
+            verdict.bestAnswerKey == expected_answer_key
+            and not verdict.ambiguous
+            and verdict.supported
+            and verdict.modeFit
+            and not verdict.answerLeakage
+            and not verdict.distractorsPlausible
+        )
+
+    async def _repair_reading_distractors(
+        self,
+        request: PracticeGenerationRequest,
+        question: PracticeGeneratedQuestion,
+        slot: _QuestionSlot,
+        accepted: dict[int, PracticeGeneratedQuestion],
+    ) -> PracticeGeneratedQuestion | None:
+        try:
+            if (
+                question.question_type != PracticeQuestionType.SINGLE_CHOICE
+                or len(question.correct_answer) != 1
+                or slot.passage_id is None
+                or slot.passage_text is None
+                or slot.reading_mode is None
+            ):
+                raise ValueError("distractor repair requires a passage-bound single-choice slot")
+            correct_key = question.correct_answer[0]
+            option_by_key = {option.key: option for option in question.options}
+            correct_option = option_by_key.get(correct_key)
+            if correct_option is None:
+                raise ValueError("distractor repair correct key is missing from options")
+            wrong_options = [
+                option for option in question.options if option.key != correct_key
+            ]
+            raw = await asyncio.wait_for(
+                self.provider.call(
+                    type_name=self.DISTRACTOR_REPAIR_TYPE_NAME,
+                    data=build_reading_distractor_repair_prompt(
+                        request,
+                        passage_id=slot.passage_id,
+                        passage_text=slot.passage_text,
+                        prompt=question.prompt,
+                        correct_option=correct_option.model_dump(by_alias=True),
+                        wrong_options=[
+                            option.model_dump(by_alias=True) for option in wrong_options
+                        ],
+                        evidence_text=question.evidence_text,
+                        skill_tag=slot.skill_tag,
+                        difficulty=slot.difficulty.value,
+                        complexity_band=slot.complexity_band,
+                        question_type=question.question_type.value,
+                        difficulty_recipe=question_demand_recipe(
+                            slot.complexity_band,
+                            mode=slot.reading_mode,
+                            skill_tag=slot.skill_tag,
+                        ).generation_payload(),
+                    ),
+                    schema=_READING_DISTRACTOR_REPAIR_SCHEMA,
+                ),
+                timeout=self.timeout_seconds,
+            )
+            repair = _ReadingDistractorRepairPayload.model_validate(raw)
+            repaired = self._reassemble_reading_distractors(question, repair)
+            self._validate_candidate(request, repaired, slot, accepted)
+            return repaired
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Reading distractor repair provider/schema/validation failure. "
+                "request_id=%s order=%d type=%s",
+                request.request_id,
+                question.order,
+                type(exc).__name__,
+            )
+            return None
+
+    @classmethod
+    def _reassemble_reading_distractors(
+        cls,
+        question: PracticeGeneratedQuestion,
+        repair: _ReadingDistractorRepairPayload,
+    ) -> PracticeGeneratedQuestion:
+        if question.question_type != PracticeQuestionType.SINGLE_CHOICE:
+            raise ValueError("distractor repair requires a single-choice question")
+        if len(question.correct_answer) != 1:
+            raise ValueError("distractor repair requires exactly one correct answer")
+
+        correct_key = question.correct_answer[0]
+        option_by_key = {option.key: option for option in question.options}
+        correct_option = option_by_key.get(correct_key)
+        if correct_option is None:
+            raise ValueError("distractor repair correct key is missing from options")
+        expected_wrong_keys = set(option_by_key) - {correct_key}
+        returned_keys = [option.key for option in repair.wrongOptions]
+        if (
+            len(returned_keys) != len(expected_wrong_keys)
+            or len(returned_keys) != len(set(returned_keys))
+            or set(returned_keys) != expected_wrong_keys
+        ):
+            raise ValueError("distractor repair wrong option keys/cardinality mismatch")
+
+        replacement_by_key = {
+            option.key: option.text.strip() for option in repair.wrongOptions
+        }
+        if any(not text for text in replacement_by_key.values()):
+            raise ValueError("distractor repair returned a blank wrong option")
+        normalized_wrong = [
+            cls._normalize_repair_option_text(text)
+            for text in replacement_by_key.values()
+        ]
+        if len(normalized_wrong) != len(set(normalized_wrong)):
+            raise ValueError("distractor repair returned duplicate wrong options")
+        if cls._normalize_repair_option_text(correct_option.text) in normalized_wrong:
+            raise ValueError("distractor repair copied the correct answer into a wrong option")
+
+        repaired_options = [
+            option
+            if option.key == correct_key
+            else option.model_copy(update={"text": replacement_by_key[option.key]})
+            for option in question.options
+        ]
+        return question.model_copy(update={"options": repaired_options})
+
+    @staticmethod
+    def _normalize_repair_option_text(value: str) -> str:
+        return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value)).strip().casefold()
+
+    async def _semantic_verification_outcome(
         self,
         request: PracticeGenerationRequest,
         questions: list[PracticeGeneratedQuestion],
-    ) -> dict[int, str]:
+    ) -> _SemanticVerificationOutcome:
         single_choice = [question for question in questions if question.question_type == PracticeQuestionType.SINGLE_CHOICE]
         if not single_choice:
-            return {}
+            return _SemanticVerificationOutcome(failures={}, verdicts={})
         verification_input = [
             {
                 "order": question.order,
@@ -1926,7 +2221,10 @@ class ReadingVocabularyGenerationService:
                         )
                         if decision.action != "ACCEPT":
                             failures[order] = decision.reason
-                return failures
+                return _SemanticVerificationOutcome(
+                    failures=failures,
+                    verdicts=verdict_by_order,
+                )
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -1939,6 +2237,15 @@ class ReadingVocabularyGenerationService:
             "semantic verifier unavailable after provider retries: "
             f"{type(last_error).__name__ if last_error else 'unknown'}"
         )
+
+    async def _semantic_failures(
+        self,
+        request: PracticeGenerationRequest,
+        questions: list[PracticeGeneratedQuestion],
+    ) -> dict[int, str]:
+        return (
+            await self._semantic_verification_outcome(request, questions)
+        ).failures
 
     async def _attach_origin_explanations(
         self,

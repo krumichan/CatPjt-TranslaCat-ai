@@ -109,6 +109,7 @@ def test_reading_adapter_keeps_passage_and_question_targets_distinct():
         complexity_band=3,
     )
     question_spec = build_reading_question_difficulty_spec(
+        mode="COMPREHENSION",
         difficulty="CURRENT",
         complexity_band=3,
         skill_tag="MAIN_IDEA",
@@ -138,12 +139,14 @@ def test_reading_identity_changes_spec_but_not_difficulty_target():
         complexity_band=3,
     )
     question_p1 = build_reading_question_difficulty_spec(
+        mode="COMPREHENSION",
         difficulty="CURRENT",
         complexity_band=3,
         skill_tag="MAIN_IDEA",
         passage_id="p1",
     )
     question_p2 = build_reading_question_difficulty_spec(
+        mode="COMPREHENSION",
         difficulty="CURRENT",
         complexity_band=3,
         skill_tag="MAIN_IDEA",
@@ -180,6 +183,7 @@ def test_reading_validation_projection_preserves_existing_failure_text():
     assert rejected.primary_issue == "reading passageId mismatch"
 
     question_spec = build_reading_question_difficulty_spec(
+        mode="COMPREHENSION",
         difficulty="CURRENT",
         complexity_band=3,
         skill_tag="MAIN_IDEA",

@@ -60,6 +60,9 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),
+    "LANGUAGE_LEARNING_READING_DISTRACTOR_REPAIR": AiTaskModelPolicy(
+        AiModelTier.LUNA, "none", 2048
+    ),
     "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 4096
     ),

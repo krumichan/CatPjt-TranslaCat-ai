@@ -8,7 +8,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe
 )
 
 
-READING_DIFFICULTY_SPEC_VERSION = "reading-difficulty-contract-v1"
+READING_DIFFICULTY_SPEC_VERSION = "reading-difficulty-contract-v2"
 
 
 @dataclass(frozen=True)
@@ -36,5 +36,6 @@ class ReadingQuestionDifficultyTargetValue:
 class ReadingQuestionDifficultySpec:
     target: DifficultyTarget[ReadingQuestionDifficultyTargetValue]
     passage_id: str
+    mode: str
     recipe: ReadingDifficultyRecipe
     version: str = READING_DIFFICULTY_SPEC_VERSION

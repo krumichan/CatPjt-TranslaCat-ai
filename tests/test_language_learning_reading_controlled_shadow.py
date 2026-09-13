@@ -15,6 +15,7 @@ from app.ai.providers.openai.schema import build_openai_text_config
 from app.core.config import Settings
 from app.features.language_learning.reading_vocabulary.prompts import (
     PRACTICE_VERIFICATION_SYSTEM_PROMPT,
+    READING_STRUCTURE_MODE_FIT_CLARIFICATION,
 )
 from app.features.language_learning.reading_vocabulary.reading_difficulty_shadow import (
     READING_DIFFICULTY_SHADOW_SCHEMA,
@@ -22,6 +23,10 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_shadow
     READING_DIFFICULTY_SHADOW_TYPE_NAME,
     reading_difficulty_shadow_sample_bucket,
     should_sample_reading_difficulty_shadow,
+)
+from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
+    READING_DIFFICULTY_RECIPE_VERSION,
+    READING_DIFFICULTY_SHADOW_RUBRIC_VERSION,
 )
 from app.features.language_learning.reading_vocabulary.service import (
     ReadingVocabularyGenerationService,
@@ -186,10 +191,10 @@ def test_sampling_rejects_invalid_percentage(invalid):
 
 
 def test_shadow_settings_are_default_off_and_validate_bounds():
-    configured = Settings()
-    assert configured.AI_READING_DIFFICULTY_SHADOW_ENABLED is False
-    assert configured.AI_READING_DIFFICULTY_SHADOW_SAMPLE_PERCENT == 0
-    assert configured.AI_READING_DIFFICULTY_SHADOW_TIMEOUT_SECONDS == 12
+    fields = Settings.model_fields
+    assert fields["AI_READING_DIFFICULTY_SHADOW_ENABLED"].default is False
+    assert fields["AI_READING_DIFFICULTY_SHADOW_SAMPLE_PERCENT"].default == 0
+    assert fields["AI_READING_DIFFICULTY_SHADOW_TIMEOUT_SECONDS"].default == 12
     with pytest.raises(ValidationError):
         Settings(AI_READING_DIFFICULTY_SHADOW_SAMPLE_PERCENT=100.01)
 
@@ -235,6 +240,11 @@ async def test_selected_shadow_adds_exactly_one_call_without_changing_response(c
     assert "provider=test-provider model=test-mini" in caplog.text
     assert "input_tokens=321 output_tokens=123" in caplog.text
     assert "sample_percentage=100.0 cohort=selected" in caplog.text
+    assert f"recipe_version={READING_DIFFICULTY_RECIPE_VERSION}" in caplog.text
+    assert (
+        f"measurement_rubric_version={READING_DIFFICULTY_SHADOW_RUBRIC_VERSION}"
+        in caplog.text
+    )
     assert "scope=passage" in caplog.text
     assert "scope=question" in caplog.text
     assert "今日は会社で会議があります" not in caplog.text
@@ -293,6 +303,9 @@ async def test_shadow_payload_is_blind_unique_and_uses_stable_segment_ids():
         4,
         5,
     ]
+    assert payload["readingDifficultyRubric"]["version"] == (
+        READING_DIFFICULTY_SHADOW_RUBRIC_VERSION
+    )
     forbidden_keys = {
         "requestId",
         "complexityBand",
@@ -346,7 +359,11 @@ async def test_vocabulary_never_calls_reading_difficulty_shadow():
 
 
 def test_primary_quality_contract_matches_pre_calibration_snapshot():
-    assert PRACTICE_VERIFICATION_SYSTEM_PROMPT == QUALITY_ONLY_SYSTEM_PROMPT
+    expected = QUALITY_ONLY_SYSTEM_PROMPT.replace(
+        "- answerLeakage=true",
+        f"{READING_STRUCTURE_MODE_FIT_CLARIFICATION}\n- answerLeakage=true",
+    )
+    assert PRACTICE_VERIFICATION_SYSTEM_PROMPT == expected
     assert _PRACTICE_VERIFICATION_SCHEMA == QUALITY_ONLY_SCHEMA
     assert "readingDifficultyRubric" not in PRACTICE_VERIFICATION_SYSTEM_PROMPT
     assert "passageDifficultyAssessments" not in _PRACTICE_VERIFICATION_SCHEMA[
