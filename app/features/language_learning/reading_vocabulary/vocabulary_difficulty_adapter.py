@@ -39,12 +39,12 @@ VOCABULARY_DIFFICULTY_ISSUE_CODES = (
     "INSUFFICIENT_VISIBLE_EVIDENCE",
     "EXTERNAL_KNOWLEDGE_DEPENDENCE",
     "BORDERLINE_ADJACENT_BANDS",
+    "DEFINITION_MATCHING",
+    "SEMANTIC_NEIGHBORHOOD_REPETITION",
 )
 _VOCABULARY_DIFFICULTY_ISSUE_CODE_SET = frozenset(
     VOCABULARY_DIFFICULTY_ISSUE_CODES
 )
-
-
 def build_vocabulary_difficulty_spec(
     *,
     mode: str,
@@ -237,6 +237,9 @@ class VocabularySemanticAssessment(SemanticAssessment[VocabularyDifficultyTarget
     answer_leakage: bool = False
     context_dependent: bool = True
     distractors_plausible: bool = True
+    definition_like: bool = False
+    lexical_concept_repeated: bool = False
+    genuine_competitor_keys: tuple[str, ...] = ()
 
 
 def normalize_vocabulary_semantic_assessment(
@@ -248,6 +251,9 @@ def normalize_vocabulary_semantic_assessment(
     answer_leakage: bool,
     context_dependent: bool,
     distractors_plausible: bool,
+    definition_like: bool = False,
+    lexical_concept_repeated: bool = False,
+    genuine_competitor_keys: tuple[str, ...] = (),
 ) -> VocabularySemanticAssessment:
     rejected = (
         ambiguous
@@ -255,6 +261,8 @@ def normalize_vocabulary_semantic_assessment(
         or not mode_fit
         or answer_leakage
         or not distractors_plausible
+        or definition_like
+        or lexical_concept_repeated
     )
     return VocabularySemanticAssessment(
         status="REJECT" if rejected else "PASS",
@@ -266,12 +274,17 @@ def normalize_vocabulary_semantic_assessment(
         answer_leakage=answer_leakage,
         context_dependent=context_dependent,
         distractors_plausible=distractors_plausible,
+        definition_like=definition_like,
+        lexical_concept_repeated=lexical_concept_repeated,
+        genuine_competitor_keys=genuine_competitor_keys,
     )
 
 
 @dataclass(frozen=True)
 class VocabularyAcceptanceContext:
     expected_answer_key: str
+    minimum_close_distractors: int = 0
+    review_target: bool = False
 
 
 class VocabularySemanticQualityPolicy(Protocol):
@@ -288,6 +301,7 @@ def _base_vocabulary_decision(
     context: VocabularyAcceptanceContext,
     *,
     require_context: bool,
+    context_failure_reason: str = "USAGE_DISTINCTION does not require context",
 ) -> DifficultyAcceptanceDecision:
     reason: str | None = None
     if assessment.ambiguous:
@@ -301,7 +315,7 @@ def _base_vocabulary_decision(
     elif not assessment.distractors_plausible:
         reason = "distractors are too weak or unrelated"
     elif require_context and not assessment.context_dependent:
-        reason = "USAGE_DISTINCTION does not require context"
+        reason = context_failure_reason
     elif assessment.best_answer_key != context.expected_answer_key:
         reason = (
             f"answer mismatch expected={context.expected_answer_key} "
@@ -357,9 +371,52 @@ class CompositionSemanticQualityPolicy:
         )
 
 
+@dataclass(frozen=True)
+class ContextualChoiceSemanticQualityPolicy:
+    def decide(
+        self,
+        *,
+        assessment: VocabularySemanticAssessment,
+        context: VocabularyAcceptanceContext,
+    ) -> DifficultyAcceptanceDecision:
+        reason: str | None = None
+        if assessment.ambiguous:
+            reason = "ambiguous single-choice item"
+        elif not assessment.supported:
+            reason = "answer is not sufficiently supported"
+        elif not assessment.mode_fit:
+            reason = "question does not fit requested skill"
+        elif assessment.best_answer_key != context.expected_answer_key:
+            reason = (
+                f"answer mismatch expected={context.expected_answer_key} "
+                f"verifier={assessment.best_answer_key}"
+            )
+        elif assessment.definition_like:
+            reason = "contextual choice collapsed into definition matching"
+        elif assessment.lexical_concept_repeated and not context.review_target:
+            reason = "new item repeats a same-day lexical concept"
+        elif (
+            len(assessment.genuine_competitor_keys)
+            < context.minimum_close_distractors
+        ):
+            reason = "insufficient genuine distractor competitors"
+        if reason is not None:
+            return DifficultyAcceptanceDecision("REJECT", reason)
+        return DifficultyAcceptanceDecision(
+            "ACCEPT",
+            (
+                "semantic verifier accepted review candidate"
+                if context.review_target
+                else "semantic verifier accepted contextual choice candidate"
+            ),
+        )
+
+
 def semantic_quality_policy_for_vocabulary_mode(
     mode: str,
 ) -> VocabularySemanticQualityPolicy:
+    if mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+        return ContextualChoiceSemanticQualityPolicy()
     if mode == VocabularyMode.MEANING_RELATION.value:
         return MeaningRelationSemanticQualityPolicy()
     if mode == VocabularyMode.USAGE_DISTINCTION.value:

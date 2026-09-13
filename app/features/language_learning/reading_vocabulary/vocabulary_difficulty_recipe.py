@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.features.language_learning.reading_vocabulary.contextual_choice_task import (
+    CONTEXTUAL_CHOICE_RECIPE_VERSION,
+    CONTEXTUAL_CHOICE_SHADOW_RUBRIC_VERSION,
+)
 from app.schemas.language_learning_practice import (
     PracticeQuestionType,
     VocabularyMode,
@@ -103,7 +107,40 @@ class CompositionDemand:
         }
 
 
-VocabularyModeDemand = MeaningRelationDemand | UsageDistinctionDemand | CompositionDemand
+@dataclass(frozen=True)
+class ContextualChoiceDemand:
+    skill: str
+    context_shape: str
+    decisive_dimensions: tuple[str, ...]
+    minimum_close_distractors: int
+    maximum_close_distractors: int
+    direct_context_cues_allowed: bool
+    definition_matching_disallowed: bool
+    context_required: bool = True
+    single_choice_required: bool = True
+
+    def generation_payload(self) -> dict[str, object]:
+        return {
+            "kind": "CONTEXTUAL_CHOICE",
+            "skill": self.skill,
+            "contextShape": self.context_shape,
+            "decisiveDimensions": list(self.decisive_dimensions),
+            "minimumCloseDistractors": self.minimum_close_distractors,
+            "maximumCloseDistractors": self.maximum_close_distractors,
+            "directContextCuesAllowed": self.direct_context_cues_allowed,
+            "definitionMatchingDisallowed": self.definition_matching_disallowed,
+            "contextRequired": self.context_required,
+            "singleChoiceRequired": self.single_choice_required,
+            "authority": "SERVER_SELECTED_REQUIREMENT",
+        }
+
+
+VocabularyModeDemand = (
+    MeaningRelationDemand
+    | UsageDistinctionDemand
+    | CompositionDemand
+    | ContextualChoiceDemand
+)
 
 
 @dataclass(frozen=True)
@@ -135,6 +172,28 @@ class VocabularyDifficultyRecipe:
 
 
 _VOCABULARY_GENERATION_V1_ANCHORS = {
+    VocabularyMode.CONTEXTUAL_CHOICE.value: {
+        1: (
+            "A clear everyday context with direct usable cues and broadly separated "
+            "alternatives."
+        ),
+        2: (
+            "A familiar collocation or basic contextual-fit decision with at least one "
+            "plausible competitor."
+        ),
+        3: (
+            "At least one close alternative requires reading the context rather than matching "
+            "a dictionary meaning."
+        ),
+        4: (
+            "At least two surface-plausible close alternatives are separated by scope, nuance, "
+            "collocation, or a visible situation condition."
+        ),
+        5: (
+            "Two or three close alternatives require register, scope, nuance, or pragmatic fit, "
+            "while ordinary language knowledge still yields one answer."
+        ),
+    },
     VocabularyMode.MEANING_RELATION.value: {
         1: "A direct familiar meaning relation with clearly separated alternatives.",
         2: "A basic relation or paraphrase within a familiar semantic group.",
@@ -196,6 +255,19 @@ _MEANING_RELATION_GENERATION_ANCHORS = {
 # Keep the measurement instrument physically separate from generation recipe anchors.
 # Generation policy may replace its anchors while this V1 measurement ruler stays frozen.
 _VOCABULARY_MEASUREMENT_V1_ANCHORS = {
+    VocabularyMode.CONTEXTUAL_CHOICE.value: {
+        1: "Direct everyday context cues select one choice among clearly separated alternatives.",
+        2: "A familiar collocation or basic contextual-fit cue selects among at least one plausible rival.",
+        3: "Visible context is necessary to distinguish at least one semantically close rival.",
+        4: (
+            "Scope, nuance, collocation, or situation conditions distinguish at least two "
+            "surface-plausible close rivals."
+        ),
+        5: (
+            "Register, scope, nuance, or pragmatic fit precisely separates two or three close "
+            "rivals without outside knowledge."
+        ),
+    },
     VocabularyMode.MEANING_RELATION.value: {
         1: "The visible item asks for a direct familiar relation with clearly separated alternatives.",
         2: "The visible item distinguishes a basic relation in a familiar semantic group.",
@@ -448,6 +520,8 @@ def meaning_relation_skill_for_slot(*, band: int, band_occurrence: int) -> str:
 
 
 def vocabulary_difficulty_recipe_version(mode: str) -> str:
+    if mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+        return CONTEXTUAL_CHOICE_RECIPE_VERSION
     if mode == VocabularyMode.MEANING_RELATION.value:
         return MEANING_RELATION_DIFFICULTY_RECIPE_VERSION
     if mode in {
@@ -475,6 +549,16 @@ def vocabulary_task_subtype(
     skill_tag: str,
     question_type: str,
 ) -> str:
+    if mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+        if skill_tag not in {
+            VocabularySkill.MEANING.value,
+            VocabularySkill.COLLOCATION.value,
+            VocabularySkill.NUANCE.value,
+            VocabularySkill.REGISTER.value,
+            VocabularySkill.PRAGMATIC_FIT.value,
+        }:
+            raise ValueError(f"Unsupported CONTEXTUAL_CHOICE skill: {skill_tag}")
+        return f"CONTEXTUAL_{skill_tag}_CHOICE"
     if mode == VocabularyMode.MEANING_RELATION.value:
         try:
             return _MEANING_RELATION_KIND_BY_SKILL[skill_tag]
@@ -499,8 +583,15 @@ def vocabulary_difficulty_recipe(
     usage_intent: str | None = None,
 ) -> VocabularyDifficultyRecipe:
     _validate_band(band)
-    if mode == VocabularyMode.MEANING_RELATION.value:
-        demand: VocabularyModeDemand = _meaning_relation_demand(band, skill_tag)
+    if mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+        demand: VocabularyModeDemand = _contextual_choice_demand(band, skill_tag)
+        semantic_dimensions = (
+            "contextualDecisionDemand",
+            "skillSpecificFit",
+            "distractorSemanticProximity",
+        )
+    elif mode == VocabularyMode.MEANING_RELATION.value:
+        demand = _meaning_relation_demand(band, skill_tag)
         semantic_dimensions = (
             "semanticDistance",
             "meaningContrastPrecision",
@@ -562,7 +653,9 @@ def validate_vocabulary_difficulty_recipe(
         raise ValueError("Vocabulary difficulty recipe mode/band mismatch")
     if recipe.version != vocabulary_difficulty_recipe_version(mode):
         raise ValueError("Vocabulary difficulty recipe version mismatch")
-    if mode == VocabularyMode.MEANING_RELATION.value:
+    if mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+        expected = _contextual_choice_demand(band, skill_tag)
+    elif mode == VocabularyMode.MEANING_RELATION.value:
         expected = _meaning_relation_demand(band, skill_tag)
     elif mode == VocabularyMode.USAGE_DISTINCTION.value:
         expected = _usage_distinction_demand(band, skill_tag, usage_intent)
@@ -580,7 +673,7 @@ def vocabulary_blind_rubric_payload(mode: str) -> dict[str, object]:
     except KeyError as exc:
         raise ValueError(f"Unsupported Vocabulary mode: {mode}") from exc
     return {
-        "version": VOCABULARY_DIFFICULTY_SHADOW_RUBRIC_VERSION,
+        "version": vocabulary_difficulty_shadow_rubric_version(mode),
         "mode": mode,
         "bands": [
             {"band": band, "anchor": anchors[band]}
@@ -591,6 +684,52 @@ def vocabulary_blind_rubric_payload(mode: str) -> dict[str, object]:
             "outside knowledge, or generator metadata."
         ),
     }
+
+
+def vocabulary_difficulty_shadow_rubric_version(mode: str) -> str:
+    if mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+        return CONTEXTUAL_CHOICE_SHADOW_RUBRIC_VERSION
+    if mode in {
+        VocabularyMode.MEANING_RELATION.value,
+        VocabularyMode.USAGE_DISTINCTION.value,
+        VocabularyMode.COMPOSITION.value,
+    }:
+        return VOCABULARY_DIFFICULTY_SHADOW_RUBRIC_VERSION
+    raise ValueError(f"Unsupported Vocabulary mode: {mode}")
+
+
+_CONTEXTUAL_DECISIVE_DIMENSIONS = {
+    VocabularySkill.MEANING.value: ("CONTEXTUAL_MEANING", "SENSE_FIT"),
+    VocabularySkill.COLLOCATION.value: ("COLLOCATION", "LOCAL_LEXICAL_FRAME"),
+    VocabularySkill.NUANCE.value: ("NUANCE", "SCOPE_OR_IMPLICATION"),
+    VocabularySkill.REGISTER.value: ("REGISTER", "ROLE_FORMALITY_OR_CHANNEL"),
+    VocabularySkill.PRAGMATIC_FIT.value: ("PRAGMATIC_FIT", "SITUATION_OR_INTENT"),
+}
+
+
+def _contextual_choice_demand(band: int, skill_tag: str) -> ContextualChoiceDemand:
+    try:
+        dimensions = _CONTEXTUAL_DECISIVE_DIMENSIONS[skill_tag]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported CONTEXTUAL_CHOICE skill: {skill_tag}") from exc
+    minimum_close = {1: 0, 2: 1, 3: 1, 4: 2, 5: 2}[band]
+    maximum_close = {1: 1, 2: 2, 3: 2, 4: 3, 5: 3}[band]
+    context_shape = {
+        1: "CLEAR_EVERYDAY_ONE_OR_TWO_SENTENCE_BLANK",
+        2: "FAMILIAR_CONTEXTUAL_OR_COLLOCATION_BLANK",
+        3: "CONTEXT_REQUIRED_CLOSE_CHOICE_BLANK",
+        4: "MULTI_CUE_NEAR_NEIGHBOR_BLANK",
+        5: "PRECISE_REGISTER_SCOPE_NUANCE_OR_PRAGMATIC_BLANK",
+    }[band]
+    return ContextualChoiceDemand(
+        skill=skill_tag,
+        context_shape=context_shape,
+        decisive_dimensions=dimensions,
+        minimum_close_distractors=minimum_close,
+        maximum_close_distractors=maximum_close,
+        direct_context_cues_allowed=band <= 2,
+        definition_matching_disallowed=True,
+    )
 
 
 def _meaning_relation_demand(band: int, skill_tag: str) -> MeaningRelationDemand:

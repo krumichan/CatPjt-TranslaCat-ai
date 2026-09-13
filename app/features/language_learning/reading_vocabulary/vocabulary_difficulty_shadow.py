@@ -20,9 +20,9 @@ from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_ada
     normalize_vocabulary_semantic_difficulty_assessment,
 )
 from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_recipe import (
-    VOCABULARY_DIFFICULTY_SHADOW_RUBRIC_VERSION,
     usage_intent_for_skill,
     vocabulary_blind_rubric_payload,
+    vocabulary_difficulty_shadow_rubric_version,
     vocabulary_difficulty_recipe_version,
     vocabulary_task_subtype,
 )
@@ -432,7 +432,7 @@ class VocabularyDifficultyShadowCollector:
                 usage_intent,
                 question.complexity_band,
                 vocabulary_difficulty_recipe_version(request.mode),
-                VOCABULARY_DIFFICULTY_SHADOW_RUBRIC_VERSION,
+                vocabulary_difficulty_shadow_rubric_version(request.mode),
                 assessment.difficulty_status,
                 assessment.observed_target,
                 assessment.alternative_target,

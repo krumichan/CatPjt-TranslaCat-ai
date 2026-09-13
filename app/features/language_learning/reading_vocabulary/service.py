@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import re
 import unicodedata
@@ -12,6 +13,18 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ValidationError
 
 from app.ai.ports import TextGenerationProvider
+from app.features.language_learning.reading_vocabulary.contextual_choice_task import (
+    CONTEXTUAL_CHOICE_ANSWER_KEYS,
+    CONTEXTUAL_CHOICE_BLANK,
+    CONTEXTUAL_CHOICE_CANDIDATES_PER_ROUND,
+    CONTEXTUAL_CHOICE_MAX_ROUNDS,
+    CONTEXTUAL_CHOICE_RECIPE_VERSION,
+    CONTEXTUAL_CHOICE_SKILL_PLAN,
+    contextual_choice_answer_key,
+    contextual_choice_scenario_family,
+    contextual_choice_skill_for_order,
+    render_contextual_choice_prompt,
+)
 from app.features.language_learning.reading_vocabulary.reading_difficulty_adapter import (
     ReadingAcceptanceContext,
     ReadingSemanticQualityPolicy,
@@ -39,6 +52,7 @@ from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_ada
     semantic_quality_policy_for_vocabulary_mode,
 )
 from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_recipe import (
+    ContextualChoiceDemand,
     MeaningRelationDemand,
     meaning_relation_skill_for_slot,
     usage_intent_for_skill,
@@ -49,6 +63,8 @@ from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_sha
 )
 from app.features.language_learning.reading_vocabulary.prompts import (
     PRACTICE_GENERATION_PROMPT_VERSION,
+    build_contextual_choice_candidate_batch_prompt,
+    build_contextual_choice_verification_prompt,
     build_origin_explanation_prompt,
     build_practice_generation_prompt,
     build_practice_verification_prompt,
@@ -88,6 +104,9 @@ _USAGE_DISTINCTION_BATCH_SIZE = 1
 _ORIGIN_EXPLANATION_BATCH_SIZE = 4
 _MEANING_RELATION_RESERVE_DISTRACTOR_COUNT = 2
 _SINGLE_CHOICE_KEYS = ("A", "B", "C", "D")
+_CONTEXTUAL_CHOICE_SKILL_ORDER = tuple(
+    dict.fromkeys(CONTEXTUAL_CHOICE_SKILL_PLAN)
+)
 
 # ASCII-only tokens that are genuinely used as lexical items inside Japanese/Korean practical
 # language. Ordinary English words are intentionally NOT accepted here: selected keywords may
@@ -152,6 +171,38 @@ _WRONG_OPTION_CANDIDATE_SCHEMA = {
     "type": "OBJECT",
     "properties": {"text": {"type": "STRING"}},
     "required": ["text"],
+}
+
+_CONTEXTUAL_CHOICE_CANDIDATE_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "additionalProperties": False,
+    "properties": {
+        "candidates": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "additionalProperties": False,
+                "properties": {
+                    "candidateId": {"type": "STRING"},
+                    "targetExpression": {"type": "STRING"},
+                    "completeSentence": {"type": "STRING"},
+                    "distractors": {
+                        "type": "ARRAY",
+                        "items": _WRONG_OPTION_CANDIDATE_SCHEMA,
+                    },
+                    "explanationLearning": {"type": "STRING"},
+                },
+                "required": [
+                    "candidateId",
+                    "targetExpression",
+                    "completeSentence",
+                    "distractors",
+                    "explanationLearning",
+                ],
+            },
+        }
+    },
+    "required": ["candidates"],
 }
 
 _MEANING_RELATION_CANDIDATE_SCHEMA = copy.deepcopy(_PRACTICE_CANDIDATE_SCHEMA)
@@ -231,6 +282,37 @@ _PRACTICE_VERIFICATION_SCHEMA: dict[str, Any] = {
     "required": ["verdicts"],
 }
 
+_CONTEXTUAL_CHOICE_VERDICT_PROPERTIES: dict[str, Any] = {
+    "candidateId": {"type": "STRING"},
+    "bestAnswerKey": {"type": "STRING", "enum": ["A", "B", "C", "D"]},
+    "ambiguous": {"type": "BOOLEAN"},
+    "supported": {"type": "BOOLEAN"},
+    "skillFit": {"type": "BOOLEAN"},
+    "definitionLike": {"type": "BOOLEAN"},
+    "lexicalConceptRepeated": {"type": "BOOLEAN"},
+    "genuineCompetitorKeys": {
+        "type": "ARRAY",
+        "items": {"type": "STRING", "enum": ["A", "B", "C", "D"]},
+    },
+    "reason": {"type": "STRING"},
+}
+_CONTEXTUAL_CHOICE_VERIFICATION_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "additionalProperties": False,
+    "properties": {
+        "verdicts": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "additionalProperties": False,
+                "properties": _CONTEXTUAL_CHOICE_VERDICT_PROPERTIES,
+                "required": list(_CONTEXTUAL_CHOICE_VERDICT_PROPERTIES),
+            },
+        }
+    },
+    "required": ["verdicts"],
+}
+
 _READING_DISTRACTOR_REPAIR_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
@@ -306,6 +388,32 @@ class _PracticeVerificationPayload(BaseModel):
     verdicts: list[_PracticeVerificationVerdict]
 
 
+class _ContextualChoiceCandidatePayload(BaseModel):
+    candidates: list[dict[str, Any]]
+
+
+class _ContextualChoiceVerificationVerdict(BaseModel):
+    candidateId: str
+    bestAnswerKey: str
+    ambiguous: bool
+    supported: bool
+    skillFit: bool
+    definitionLike: bool
+    lexicalConceptRepeated: bool
+    genuineCompetitorKeys: tuple[str, ...]
+    reason: str
+
+
+class _ContextualChoiceVerificationPayload(BaseModel):
+    verdicts: list[_ContextualChoiceVerificationVerdict]
+
+
+@dataclass(frozen=True)
+class _ContextualChoiceCandidate:
+    candidate_id: str
+    question: PracticeGeneratedQuestion
+
+
 class _ReadingDistractorRepairOption(BaseModel):
     key: str
     text: str
@@ -367,6 +475,7 @@ class _QuestionSlot:
     reading_mode: str | None = None
     vocabulary_mode: str | None = None
     free_target_focus: str | None = None
+    scenario_family: str | None = None
 
     @property
     def review_target(self) -> bool:
@@ -375,9 +484,12 @@ class _QuestionSlot:
     @property
     def target_as_answer(self) -> bool:
         return (
-            self.vocabulary_mode == VocabularyMode.MEANING_RELATION.value
-            and self.skill_tag == VocabularySkill.DISTINCTION.value
-            and self.complexity_band >= 3
+            self.vocabulary_mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+            or (
+                self.vocabulary_mode == VocabularyMode.MEANING_RELATION.value
+                and self.skill_tag == VocabularySkill.DISTINCTION.value
+                and self.complexity_band >= 3
+            )
         )
 
     def prompt_payload(self) -> dict[str, Any]:
@@ -421,6 +533,15 @@ class _QuestionSlot:
                 payload["answerAuthority"] = "APPLICATION_TARGET_EXPRESSION"
                 payload["targetVisibility"] = "FINAL_OPTIONS_ONLY"
                 payload["primaryDistractorCount"] = 3
+            if self.vocabulary_mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                payload["answerAuthority"] = "APPLICATION_TARGET_EXPRESSION"
+                payload["targetVisibility"] = "FINAL_OPTIONS_ONLY"
+                payload["generationShape"] = "COMPLETE_SENTENCE_FIRST"
+                payload["candidateCount"] = CONTEXTUAL_CHOICE_CANDIDATES_PER_ROUND
+                payload["primaryDistractorCount"] = 3
+                if self.scenario_family is not None:
+                    payload["scenarioFamily"] = self.scenario_family
+                    payload["scenarioAuthority"] = "SERVER_SELECTED_REQUIREMENT"
         if self.free_target_focus is not None:
             payload["freeTargetFocus"] = self.free_target_focus
             payload["focusAuthority"] = "SERVER_SELECTED_HINT"
@@ -442,6 +563,9 @@ class ReadingVocabularyGenerationService:
     PASSAGE_TYPE_NAME = "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION"
     PRESCREEN_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_USAGE_PRESCREEN"
     VERIFICATION_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION"
+    CONTEXTUAL_CHOICE_VERIFICATION_TYPE_NAME = (
+        "LANGUAGE_LEARNING_VOCABULARY_CONTEXTUAL_CHOICE_VERIFICATION"
+    )
     ORIGIN_EXPLANATION_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION"
     ORIGIN_EXPLANATION_FALLBACK_TYPE_NAME = (
         "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION_FALLBACK"
@@ -490,7 +614,11 @@ class ReadingVocabularyGenerationService:
             self._validate(request, questions)
             response = PracticeGenerationResponse(
                 request_id=request.request_id,
-                prompt_version=PRACTICE_GENERATION_PROMPT_VERSION,
+                prompt_version=(
+                    CONTEXTUAL_CHOICE_RECIPE_VERSION
+                    if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+                    else PRACTICE_GENERATION_PROMPT_VERSION
+                ),
                 domain=request.domain,
                 mode=request.mode,
                 complexity_band=request.complexity_band,
@@ -726,28 +854,57 @@ class ReadingVocabularyGenerationService:
             not question.review_target for question in request.previous_questions
         )
         meaning_relation_band_occurrences: dict[int, int] = {}
-        if request.mode == VocabularyMode.MEANING_RELATION.value:
+        if request.mode in {
+            VocabularyMode.MEANING_RELATION.value,
+            VocabularyMode.CONTEXTUAL_CHOICE.value,
+        }:
             for question in request.previous_questions:
                 band = question.complexity_band
                 meaning_relation_band_occurrences[band] = (
                     meaning_relation_band_occurrences.get(band, 0) + 1
                 )
+        contextual_choice_skill_counts = {
+            skill: 0 for skill in _CONTEXTUAL_CHOICE_SKILL_ORDER
+        }
+        if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+            for question in request.previous_questions:
+                if question.skill_tag in contextual_choice_skill_counts:
+                    contextual_choice_skill_counts[question.skill_tag] += 1
         slots: list[_QuestionSlot] = []
         for index, difficulty in enumerate(difficulties, 1):
             global_index = request.question_offset + index
             band = self._band_for(request, difficulty)
             review = review_targets[index - 1] if index <= len(review_targets) else None
             free_target_focus = None
+            scenario_family = None
             if (
-                request.mode == VocabularyMode.MEANING_RELATION.value
+                request.mode
+                in {
+                    VocabularyMode.MEANING_RELATION.value,
+                    VocabularyMode.CONTEXTUAL_CHOICE.value,
+                }
                 and review is None
             ):
                 if focus_keywords:
                     free_target_focus = focus_keywords[
                         free_slot_occurrence % len(focus_keywords)
                     ]
+                if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                    scenario_family = contextual_choice_scenario_family(
+                        free_slot_occurrence
+                    )
                 free_slot_occurrence += 1
-            if request.mode == VocabularyMode.MEANING_RELATION.value:
+            if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                skill_tag = (
+                    review.preferred_skill or VocabularySkill.MEANING.value
+                    if review is not None
+                    else self._contextual_choice_balanced_skill(
+                        global_index,
+                        contextual_choice_skill_counts,
+                    )
+                )
+                contextual_choice_skill_counts[skill_tag] += 1
+            elif request.mode == VocabularyMode.MEANING_RELATION.value:
                 band_occurrence = meaning_relation_band_occurrences.get(band, 0) + 1
                 meaning_relation_band_occurrences[band] = band_occurrence
                 skill_tag = meaning_relation_skill_for_slot(
@@ -781,6 +938,7 @@ class ReadingVocabularyGenerationService:
                     ),
                     vocabulary_mode=request.mode,
                     free_target_focus=free_target_focus,
+                    scenario_family=scenario_family,
                 )
             )
         return slots
@@ -797,6 +955,20 @@ class ReadingVocabularyGenerationService:
             seen.add(normalized)
             focuses.append(keyword)
         return focuses
+
+    @staticmethod
+    def _contextual_choice_balanced_skill(
+        global_index: int,
+        skill_counts: dict[str, int],
+    ) -> str:
+        minimum = min(skill_counts.values())
+        planned = contextual_choice_skill_for_order(global_index)
+        start = _CONTEXTUAL_CHOICE_SKILL_ORDER.index(planned)
+        tie_break = (
+            _CONTEXTUAL_CHOICE_SKILL_ORDER[start:]
+            + _CONTEXTUAL_CHOICE_SKILL_ORDER[:start]
+        )
+        return next(skill for skill in tie_break if skill_counts[skill] == minimum)
 
     @staticmethod
     def _difficulty_plan(request: PracticeGenerationRequest) -> list[PracticeDifficulty]:
@@ -847,6 +1019,10 @@ class ReadingVocabularyGenerationService:
             return await self._generate_verified_reading_questions(request, slots)
 
         if request.domain == PracticeDomain.VOCABULARY:
+            if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                return await self._generate_verified_contextual_choice_questions(
+                    request, slots
+                )
             if request.mode == VocabularyMode.USAGE_DISTINCTION.value:
                 return await self._generate_verified_usage_distinction_questions(request, slots)
             if request.mode == VocabularyMode.COMPOSITION.value:
@@ -858,6 +1034,8 @@ class ReadingVocabularyGenerationService:
         semantically_verified: set[int] = set()
         retry_feedback: dict[int, str] = {}
         retry_target_expressions: dict[int, str] = {}
+        retry_excluded_canonical_keys: dict[int, set[str]] = {}
+        retry_excluded_target_expressions: dict[int, set[str]] = {}
         attempt_limit = self._candidate_attempt_limit(request)
         batch_size = self._candidate_batch_size(request)
 
@@ -879,6 +1057,10 @@ class ReadingVocabularyGenerationService:
                         accepted,
                         retry_feedback=retry_feedback,
                         retry_target_expressions=retry_target_expressions,
+                        retry_excluded_canonical_keys=retry_excluded_canonical_keys,
+                        retry_excluded_target_expressions=(
+                            retry_excluded_target_expressions
+                        ),
                     )
                     for order, reason in candidate_failures.items():
                         retry_feedback[order] = reason
@@ -931,6 +1113,8 @@ class ReadingVocabularyGenerationService:
                     semantically_verified.add(question.order)
                     retry_feedback.pop(question.order, None)
                     retry_target_expressions.pop(question.order, None)
+                    retry_excluded_canonical_keys.pop(question.order, None)
+                    retry_excluded_target_expressions.pop(question.order, None)
                     continue
                 logger.warning(
                     "Reading/Vocabulary semantic candidate rejected. request_id=%s order=%d "
@@ -942,15 +1126,17 @@ class ReadingVocabularyGenerationService:
                     failure[:300],
                 )
                 slot = slot_by_order[question.order]
-                if slot.target_as_answer and question.target_expression:
+                preserve_target = slot.target_as_answer
+                if preserve_target and question.target_expression:
                     retry_target_expressions[question.order] = (
                         question.target_expression
                     )
+                else:
+                    retry_target_expressions.pop(question.order, None)
                 accepted.pop(question.order, None)
                 semantically_verified.discard(question.order)
                 retry_feedback[question.order] = self._meaning_relation_retry_feedback(
-                    failure,
-                    slot,
+                    failure, slot
                 )
 
             semantic_exhausted = [
@@ -964,6 +1150,409 @@ class ReadingVocabularyGenerationService:
                 raise ValueError(f"semantic verification exhausted orders={sorted(semantic_exhausted)}")
 
         return [accepted[order] for order in sorted(accepted)]
+
+    async def _generate_verified_contextual_choice_questions(
+        self,
+        request: PracticeGenerationRequest,
+        slots: list[_QuestionSlot],
+    ) -> list[PracticeGeneratedQuestion]:
+        accepted: dict[int, PracticeGeneratedQuestion] = {}
+        for slot in sorted(slots, key=lambda item: item.order):
+            accepted[slot.order] = await self._generate_verified_contextual_choice_slot(
+                request,
+                slot,
+                accepted,
+            )
+        return [accepted[order] for order in sorted(accepted)]
+
+    async def _generate_verified_contextual_choice_slot(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        accepted: dict[int, PracticeGeneratedQuestion],
+    ) -> PracticeGeneratedQuestion:
+        prior_questions = [
+            *request.previous_questions,
+            *(accepted[order] for order in sorted(accepted)),
+        ]
+        eligible_reviews = self._eligible_review_targets(request, log_rejections=False)
+        excluded_canonical_keys = {
+            question.canonical_key
+            for question in prior_questions
+            if question.canonical_key
+        }
+        excluded_target_expressions = {
+            question.target_expression.strip()
+            for question in prior_questions
+            if question.target_expression and question.target_expression.strip()
+        }
+        if not slot.review_target:
+            excluded_canonical_keys.update(
+                target.canonical_key for target in eligible_reviews
+            )
+            excluded_target_expressions.update(
+                target.expression.strip()
+                for target in eligible_reviews
+                if target.expression.strip()
+            )
+
+        last_reasons: list[str] = []
+        for round_number in range(1, CONTEXTUAL_CHOICE_MAX_ROUNDS + 1):
+            candidates, attempted_targets, attempted_keys = (
+                await self._generate_contextual_choice_candidate_round(
+                    request,
+                    slot,
+                    accepted,
+                    round_number=round_number,
+                    excluded_canonical_keys=excluded_canonical_keys,
+                    excluded_target_expressions=excluded_target_expressions,
+                )
+            )
+            if not slot.review_target:
+                excluded_target_expressions.update(attempted_targets)
+                excluded_canonical_keys.update(attempted_keys)
+            if not candidates:
+                last_reasons.append("no candidates survived deterministic validation")
+                continue
+
+            verified, reasons = await self._verify_contextual_choice_candidates(
+                request,
+                slot,
+                candidates,
+                prior_questions=prior_questions,
+            )
+            last_reasons.extend(reasons)
+            if verified:
+                selected, competitor_count = min(
+                    verified,
+                    key=lambda item: (
+                        -item[1],
+                        item[0].candidate_id,
+                    ),
+                )
+                logger.info(
+                    "CONTEXTUAL_CHOICE V2 candidate selected. request_id=%s order=%d "
+                    "round=%d candidate_id=%s scenario_family=%s genuine_competitors=%d",
+                    request.request_id,
+                    slot.order,
+                    round_number,
+                    selected.candidate_id[:80],
+                    slot.scenario_family,
+                    competitor_count,
+                )
+                return selected.question
+
+        logger.warning(
+            "CONTEXTUAL_CHOICE V2 selection exhausted. request_id=%s order=%d rounds=%d reasons=%s",
+            request.request_id,
+            slot.order,
+            CONTEXTUAL_CHOICE_MAX_ROUNDS,
+            last_reasons[-6:],
+        )
+        raise ValueError(
+            f"CONTEXTUAL_CHOICE candidate selection exhausted order={slot.order}"
+        )
+
+    async def _generate_contextual_choice_candidate_round(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        accepted: dict[int, PracticeGeneratedQuestion],
+        *,
+        round_number: int,
+        excluded_canonical_keys: set[str],
+        excluded_target_expressions: set[str],
+    ) -> tuple[list[_ContextualChoiceCandidate], set[str], set[str]]:
+        prior_questions = [
+            *request.previous_questions,
+            *(accepted[order] for order in sorted(accepted)),
+        ]
+        try:
+            raw = await asyncio.wait_for(
+                self.provider.call(
+                    type_name=self.TYPE_NAME,
+                    data=build_contextual_choice_candidate_batch_prompt(
+                        request,
+                        slot=slot.prompt_payload(),
+                        round_number=round_number,
+                        previous_questions=prior_questions,
+                        excluded_canonical_keys=sorted(excluded_canonical_keys),
+                        excluded_target_expressions=sorted(
+                            excluded_target_expressions
+                        ),
+                    ),
+                    schema=_CONTEXTUAL_CHOICE_CANDIDATE_SCHEMA,
+                ),
+                timeout=self.timeout_seconds,
+            )
+            payload = _ContextualChoiceCandidatePayload.model_validate(raw)
+            if len(payload.candidates) != CONTEXTUAL_CHOICE_CANDIDATES_PER_ROUND:
+                raise ValueError(
+                    "CONTEXTUAL_CHOICE generation round must return exactly three candidates"
+                )
+        except Exception as exc:
+            logger.warning(
+                "CONTEXTUAL_CHOICE V2 generation round failed. request_id=%s order=%d "
+                "round=%d/%d type=%s",
+                request.request_id,
+                slot.order,
+                round_number,
+                CONTEXTUAL_CHOICE_MAX_ROUNDS,
+                type(exc).__name__,
+            )
+            return [], set(), set()
+
+        candidate_ids = [
+            item.get("candidateId", "").strip()
+            if isinstance(item.get("candidateId"), str)
+            else ""
+            for item in payload.candidates
+        ]
+        targets = [
+            item.get("targetExpression", "").strip()
+            if isinstance(item.get("targetExpression"), str)
+            else ""
+            for item in payload.candidates
+        ]
+        canonical_keys = [
+            self._canonical_key_for_expression(target) if target else ""
+            for target in targets
+        ]
+        complete_sentences = [
+            item.get("completeSentence", "").strip()
+            if isinstance(item.get("completeSentence"), str)
+            else ""
+            for item in payload.candidates
+        ]
+        attempted_targets = {target for target in targets if target}
+        attempted_keys = {key for key in canonical_keys if key}
+        duplicate_ids = {
+            candidate_id
+            for candidate_id in candidate_ids
+            if candidate_id and candidate_ids.count(candidate_id) > 1
+        }
+        duplicate_targets = {
+            self._normalize_for_leak_check(target)
+            for target in targets
+            if target
+            and sum(
+                self._normalize_for_leak_check(other) == self._normalize_for_leak_check(target)
+                for other in targets
+            )
+            > 1
+        }
+        duplicate_keys = {
+            key for key in canonical_keys if key and canonical_keys.count(key) > 1
+        }
+        duplicate_review_sentences = {
+            self._normalize_for_leak_check(sentence)
+            for sentence in complete_sentences
+            if slot.review_target
+            and sentence
+            and sum(
+                self._normalize_for_leak_check(other)
+                == self._normalize_for_leak_check(sentence)
+                for other in complete_sentences
+            )
+            > 1
+        }
+        previous_complete_sentences = {
+            self._normalize_for_leak_check(
+                question.prompt.replace(
+                    CONTEXTUAL_CHOICE_BLANK,
+                    question.target_expression,
+                    1,
+                )
+            )
+            for question in prior_questions
+            if question.prompt.count(CONTEXTUAL_CHOICE_BLANK) == 1
+            and question.target_expression
+        }
+        normalized_excluded_targets = {
+            self._normalize_for_leak_check(target)
+            for target in excluded_target_expressions
+            if target.strip()
+        }
+
+        survivors: list[_ContextualChoiceCandidate] = []
+        for item, candidate_id, target, canonical_key, complete_sentence in zip(
+            payload.candidates,
+            candidate_ids,
+            targets,
+            canonical_keys,
+            complete_sentences,
+            strict=True,
+        ):
+            try:
+                if not candidate_id:
+                    raise ValueError("CONTEXTUAL_CHOICE candidateId must not be empty")
+                if candidate_id in duplicate_ids:
+                    raise ValueError("CONTEXTUAL_CHOICE candidateId must be unique")
+                if slot.review_target:
+                    normalized_sentence = self._normalize_for_leak_check(
+                        complete_sentence
+                    )
+                    if normalized_sentence in duplicate_review_sentences:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE review candidate sentences must be distinct"
+                        )
+                    if normalized_sentence in previous_complete_sentences:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE review candidate copied a previous sentence"
+                        )
+                else:
+                    normalized_target = self._normalize_for_leak_check(target)
+                    if normalized_target in duplicate_targets:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE batch targetExpression must be unique"
+                        )
+                    if canonical_key in duplicate_keys:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE batch canonicalKey must be unique"
+                        )
+                    if normalized_target in normalized_excluded_targets:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE targetExpression repeats an accepted or excluded target"
+                        )
+                    if canonical_key in excluded_canonical_keys:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE canonicalKey repeats an accepted or excluded target"
+                        )
+                question = self._normalize_contextual_choice_v2_candidate(
+                    request,
+                    slot,
+                    item,
+                    accepted,
+                )
+                survivors.append(
+                    _ContextualChoiceCandidate(
+                        candidate_id=candidate_id,
+                        question=question,
+                    )
+                )
+            except (ValidationError, ValueError) as exc:
+                logger.info(
+                    "CONTEXTUAL_CHOICE V2 deterministic candidate rejected. "
+                    "request_id=%s order=%d round=%d candidate_id=%s reason=%s",
+                    request.request_id,
+                    slot.order,
+                    round_number,
+                    candidate_id[:80],
+                    str(exc)[:300],
+                )
+        return survivors, attempted_targets, attempted_keys
+
+    async def _verify_contextual_choice_candidates(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        candidates: list[_ContextualChoiceCandidate],
+        *,
+        prior_questions: list[PracticeGeneratedQuestion],
+    ) -> tuple[list[tuple[_ContextualChoiceCandidate, int]], list[str]]:
+        verification_input = [
+            {
+                "candidateId": candidate.candidate_id,
+                "prompt": candidate.question.prompt,
+                "options": [
+                    option.model_dump(by_alias=True)
+                    for option in candidate.question.options
+                ],
+                "skillTag": candidate.question.skill_tag,
+                "reviewTarget": candidate.question.review_target,
+            }
+            for candidate in candidates
+        ]
+        try:
+            raw = await asyncio.wait_for(
+                self.provider.call(
+                    type_name=self.CONTEXTUAL_CHOICE_VERIFICATION_TYPE_NAME,
+                    data=build_contextual_choice_verification_prompt(
+                        request,
+                        candidates=verification_input,
+                        previous_questions=prior_questions,
+                    ),
+                    schema=_CONTEXTUAL_CHOICE_VERIFICATION_SCHEMA,
+                ),
+                timeout=self.timeout_seconds,
+            )
+            payload = _ContextualChoiceVerificationPayload.model_validate(raw)
+            verdict_by_id = {
+                verdict.candidateId: verdict for verdict in payload.verdicts
+            }
+            expected_ids = {candidate.candidate_id for candidate in candidates}
+            if (
+                set(verdict_by_id) != expected_ids
+                or len(payload.verdicts) != len(expected_ids)
+            ):
+                raise ValueError("CONTEXTUAL_CHOICE verifier coverage mismatch")
+        except Exception as exc:
+            logger.warning(
+                "CONTEXTUAL_CHOICE V2 verifier round failed. request_id=%s order=%d type=%s",
+                request.request_id,
+                slot.order,
+                type(exc).__name__,
+            )
+            return [], [f"verifier failure: {type(exc).__name__}"]
+
+        demand = vocabulary_difficulty_recipe(
+            mode=request.mode,
+            band=slot.complexity_band,
+            skill_tag=slot.skill_tag,
+            question_type=PracticeQuestionType.SINGLE_CHOICE.value,
+        ).demand
+        if not isinstance(demand, ContextualChoiceDemand):
+            raise ValueError("CONTEXTUAL_CHOICE requires contextual-choice demand")
+        minimum_competitors = (
+            1 if slot.review_target else demand.minimum_close_distractors
+        )
+        accepted: list[tuple[_ContextualChoiceCandidate, int]] = []
+        reasons: list[str] = []
+        for candidate in candidates:
+            verdict = verdict_by_id[candidate.candidate_id]
+            expected_key = candidate.question.correct_answer[0]
+            option_keys = {option.key for option in candidate.question.options}
+            genuine_keys = tuple(dict.fromkeys(verdict.genuineCompetitorKeys))
+            if not set(genuine_keys).issubset(option_keys - {expected_key}):
+                reasons.append("genuine competitor keys include a non-wrong option")
+                continue
+            assessment = normalize_vocabulary_semantic_assessment(
+                best_answer_key=verdict.bestAnswerKey,
+                ambiguous=verdict.ambiguous,
+                supported=verdict.supported,
+                mode_fit=verdict.skillFit,
+                answer_leakage=False,
+                context_dependent=True,
+                distractors_plausible=True,
+                definition_like=verdict.definitionLike,
+                lexical_concept_repeated=(
+                    verdict.lexicalConceptRepeated and not slot.review_target
+                ),
+                genuine_competitor_keys=genuine_keys,
+            )
+            decision = semantic_quality_policy_for_vocabulary_mode(
+                request.mode
+            ).decide(
+                assessment=assessment,
+                context=VocabularyAcceptanceContext(
+                    expected_answer_key=expected_key,
+                    minimum_close_distractors=minimum_competitors,
+                    review_target=slot.review_target,
+                ),
+            )
+            if decision.action == "ACCEPT":
+                accepted.append((candidate, len(genuine_keys)))
+            else:
+                reasons.append(decision.reason)
+                logger.info(
+                    "CONTEXTUAL_CHOICE V2 semantic candidate rejected. request_id=%s "
+                    "order=%d candidate_id=%s reason=%s",
+                    request.request_id,
+                    slot.order,
+                    candidate.candidate_id[:80],
+                    decision.reason[:300],
+                )
+        return accepted, reasons
 
     async def _generate_verified_reading_questions(
         self,
@@ -1394,6 +1983,8 @@ class ReadingVocabularyGenerationService:
         *,
         retry_feedback: dict[int, str] | None = None,
         retry_target_expressions: dict[int, str] | None = None,
+        retry_excluded_canonical_keys: dict[int, set[str]] | None = None,
+        retry_excluded_target_expressions: dict[int, set[str]] | None = None,
     ) -> dict[int, str]:
         expected_orders = {slot.order for slot in slots}
         accepted_keys = {
@@ -1426,12 +2017,27 @@ class ReadingVocabularyGenerationService:
             payload = slot.prompt_payload()
             if (
                 request.domain == PracticeDomain.VOCABULARY
-                and request.mode == VocabularyMode.MEANING_RELATION.value
+                and request.mode
+                in {
+                    VocabularyMode.MEANING_RELATION.value,
+                }
                 and not slot.review_target
             ):
-                payload["excludedCanonicalKeys"] = free_slot_excluded_keys
-                payload["excludedTargetExpressions"] = (
-                    free_slot_excluded_target_expressions
+                payload["excludedCanonicalKeys"] = sorted(
+                    set(free_slot_excluded_keys)
+                    | (
+                        retry_excluded_canonical_keys.get(slot.order, set())
+                        if retry_excluded_canonical_keys
+                        else set()
+                    )
+                )
+                payload["excludedTargetExpressions"] = sorted(
+                    set(free_slot_excluded_target_expressions)
+                    | (
+                        retry_excluded_target_expressions.get(slot.order, set())
+                        if retry_excluded_target_expressions
+                        else set()
+                    )
                 )
             if retry_feedback and retry_feedback.get(slot.order):
                 payload["retryFeedback"] = retry_feedback[slot.order][:600]
@@ -1622,12 +2228,140 @@ class ReadingVocabularyGenerationService:
     ) -> dict[str, Any]:
         if (
             request.domain == PracticeDomain.VOCABULARY
+            and request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+        ):
+            return _CONTEXTUAL_CHOICE_CANDIDATE_SCHEMA
+        if (
+            request.domain == PracticeDomain.VOCABULARY
             and request.mode == VocabularyMode.MEANING_RELATION.value
         ):
             if slots and all(slot.target_as_answer for slot in slots):
                 return _HIGH_BAND_MEANING_RELATION_CANDIDATE_SCHEMA
             return _MEANING_RELATION_CANDIDATE_SCHEMA
         return _PRACTICE_CANDIDATE_SCHEMA
+
+    def _normalize_contextual_choice_v2_candidate(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        item: dict[str, Any],
+        accepted: dict[int, PracticeGeneratedQuestion],
+    ) -> PracticeGeneratedQuestion:
+        target_value = item.get("targetExpression")
+        if not isinstance(target_value, str) or not target_value.strip():
+            raise ValueError("CONTEXTUAL_CHOICE requires targetExpression")
+        target_expression = target_value.strip()
+        if slot.review_target:
+            if target_expression != slot.review_expression:
+                raise ValueError(
+                    "review slot targetExpression does not match bound review target"
+                )
+            if slot.review_canonical_key is None:
+                raise ValueError("review slot requires a bound canonicalKey")
+            canonical_key = slot.review_canonical_key
+        else:
+            canonical_key = self._canonical_key_for_expression(target_expression)
+
+        self._assert_vocabulary_surface_language(
+            request.learning_language,
+            target_expression,
+            reason="CONTEXTUAL_CHOICE targetExpression is not in learningLanguage",
+        )
+        complete_sentence = item.get("completeSentence")
+        if not isinstance(complete_sentence, str):
+            raise ValueError("CONTEXTUAL_CHOICE requires completeSentence")
+        complete_sentence = complete_sentence.strip()
+        self._assert_language_lane(
+            request.learning_language,
+            [complete_sentence],
+            reason="CONTEXTUAL_CHOICE completeSentence is not in learningLanguage",
+        )
+        prompt = render_contextual_choice_prompt(
+            complete_sentence,
+            target_expression,
+        )
+
+        raw_primary = item.get("distractors")
+        if not isinstance(raw_primary, list) or len(raw_primary) != 3:
+            raise ValueError("CONTEXTUAL_CHOICE requires exactly three distractors")
+        selected: list[PracticeOption] = []
+        normalized_target = self._normalize_for_leak_check(target_expression)
+        seen_texts = {normalized_target}
+        for candidate_index, raw_option in enumerate(raw_primary, start=1):
+            option = self._wrong_option_candidate(
+                raw_option,
+                fallback_key=f"candidate-{candidate_index}",
+            )
+            self._assert_vocabulary_surface_language(
+                request.learning_language,
+                option.text,
+                reason="CONTEXTUAL_CHOICE distractor is not in learningLanguage",
+            )
+            normalized_text = self._normalize_for_leak_check(option.text)
+            if not normalized_text or normalized_text in seen_texts:
+                raise ValueError(
+                    "CONTEXTUAL_CHOICE distractors must be distinct from target and each other"
+                )
+            seen_texts.add(normalized_text)
+            selected.append(option)
+
+        global_order = request.question_offset + slot.order
+        correct_key = contextual_choice_answer_key(global_order)
+        correct_position = CONTEXTUAL_CHOICE_ANSWER_KEYS.index(correct_key)
+        final_options = list(selected)
+        final_options.insert(
+            correct_position,
+            PracticeOption(key="server-correct", text=target_expression),
+        )
+        normalized_item = {
+            "order": slot.order,
+            "questionType": PracticeQuestionType.SINGLE_CHOICE.value,
+            "difficulty": slot.difficulty.value,
+            "complexityBand": slot.complexity_band,
+            "passageId": None,
+            "passageText": None,
+            "prompt": prompt,
+            "options": [
+                {"key": key, "text": option.text}
+                for key, option in zip(
+                    CONTEXTUAL_CHOICE_ANSWER_KEYS,
+                    final_options,
+                    strict=True,
+                )
+            ],
+            "correctAnswer": [correct_key],
+            "skillTag": slot.skill_tag,
+            "evidenceText": None,
+            "explanationLearning": item.get("explanationLearning"),
+            "targetExpression": target_expression,
+            "canonicalKey": canonical_key,
+            "reviewTarget": slot.review_target,
+            "vocabularyCandidates": [],
+        }
+        question = PracticeGeneratedQuestion.model_validate(
+            {**normalized_item, "explanationOrigin": "PENDING"}
+        )
+        vocabulary_spec = build_vocabulary_difficulty_spec(
+            mode=request.mode,
+            difficulty=slot.difficulty.value,
+            complexity_band=slot.complexity_band,
+            skill_tag=slot.skill_tag,
+            question_type=question.question_type.value,
+            target_expression=question.target_expression or "",
+            usage_intent=slot.usage_intent,
+        )
+        validation = project_vocabulary_validation(
+            vocabulary_spec,
+            lambda: self._validate_candidate(
+                request,
+                question,
+                slot,
+                accepted,
+            ),
+        )
+        if not validation.passed:
+            raise ValueError(validation.primary_issue)
+        return question
 
     @classmethod
     def _normalize_meaning_relation_candidate(
@@ -2340,7 +3074,9 @@ class ReadingVocabularyGenerationService:
             if question.canonical_key in review_keys:
                 raise ValueError("new vocabulary slot reused a review canonicalKey")
 
-        if request.mode == VocabularyMode.USAGE_DISTINCTION.value:
+        if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+            self._validate_contextual_choice_candidate(request, question, slot)
+        elif request.mode == VocabularyMode.USAGE_DISTINCTION.value:
             self._validate_usage_distinction_candidate(question)
         elif request.mode == VocabularyMode.MEANING_RELATION.value:
             self._validate_meaning_relation_candidate(question)
@@ -2419,6 +3155,46 @@ class ReadingVocabularyGenerationService:
     @staticmethod
     def _base_language(language_code: str) -> str:
         return language_code.strip().lower().split("-")[0].split("_")[0]
+
+    @classmethod
+    def _validate_contextual_choice_candidate(
+        cls,
+        request: PracticeGenerationRequest,
+        question: PracticeGeneratedQuestion,
+        slot: _QuestionSlot,
+    ) -> None:
+        if question.question_type != PracticeQuestionType.SINGLE_CHOICE:
+            raise ValueError("CONTEXTUAL_CHOICE must use single-choice questions")
+        if tuple(option.key for option in question.options) != CONTEXTUAL_CHOICE_ANSWER_KEYS:
+            raise ValueError("CONTEXTUAL_CHOICE options must use A/B/C/D in order")
+        if question.prompt.count(CONTEXTUAL_CHOICE_BLANK) != 1:
+            raise ValueError("CONTEXTUAL_CHOICE must contain exactly one blank")
+
+        normalized_target = cls._normalize_for_leak_check(
+            question.target_expression or ""
+        )
+        if not normalized_target:
+            raise ValueError("CONTEXTUAL_CHOICE requires targetExpression")
+        if normalized_target in cls._normalize_for_leak_check(question.prompt):
+            raise ValueError("CONTEXTUAL_CHOICE prompt leaks targetExpression")
+        target_options = [
+            option
+            for option in question.options
+            if cls._normalize_for_leak_check(option.text) == normalized_target
+        ]
+        if len(target_options) != 1:
+            raise ValueError(
+                "CONTEXTUAL_CHOICE targetExpression must appear in exactly one option"
+            )
+        expected_key = contextual_choice_answer_key(
+            request.question_offset + slot.order
+        )
+        if question.correct_answer != [expected_key]:
+            raise ValueError("CONTEXTUAL_CHOICE correct answer rotation mismatch")
+        if target_options[0].key != expected_key:
+            raise ValueError(
+                "CONTEXTUAL_CHOICE targetExpression must be the application-owned answer"
+            )
 
     @classmethod
     def _validate_meaning_relation_candidate(
@@ -2773,6 +3549,13 @@ class ReadingVocabularyGenerationService:
                 "options": [option.model_dump(by_alias=True) for option in question.options],
                 "skillTag": question.skill_tag,
                 **(
+                    {
+                        "reviewTarget": question.review_target,
+                    }
+                    if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+                    else {}
+                ),
+                **(
                     {"usageIntent": self._usage_intent_for_skill(question.skill_tag)}
                     if request.mode == VocabularyMode.USAGE_DISTINCTION.value
                     else {}
@@ -2987,13 +3770,9 @@ class ReadingVocabularyGenerationService:
             if not text:
                 continue
             try:
-                if (
-                    request.domain == PracticeDomain.VOCABULARY
-                    and request.mode == VocabularyMode.MEANING_RELATION.value
-                    and self._origin_explanation_exposes_internal_metadata(text)
-                ):
+                if self._origin_explanation_exposes_internal_metadata(text):
                     raise ValueError(
-                        "origin explanation exposes internal task metadata"
+                        "origin explanation contains JSON/tool/internal metadata artifacts"
                     )
                 # Validate each explanation independently. One good Korean explanation can no
                 # longer hide nine Japanese explanations in a combined-language check.
@@ -3017,11 +3796,31 @@ class ReadingVocabularyGenerationService:
 
     @staticmethod
     def _origin_explanation_exposes_internal_metadata(text: str) -> bool:
+        stripped = text.strip()
         folded = text.casefold()
-        return any(
+        if any(
             token.casefold() in folded
-            for token in ("immutableTaskFact", "APPLICATION_SELECTED_IMMUTABLE")
-        )
+            for token in (
+                "immutableTaskFact",
+                "APPLICATION_SELECTED_IMMUTABLE",
+                "```json",
+                "tool_call",
+                "function_call",
+            )
+        ):
+            return True
+        if re.match(
+            r"^(?:json|tool|assistant|system|developer|analysis|metadata)\s*:",
+            stripped,
+            flags=re.IGNORECASE,
+        ):
+            return True
+        if stripped.startswith(("{", "[")):
+            try:
+                return isinstance(json.loads(stripped), (dict, list))
+            except json.JSONDecodeError:
+                pass
+        return False
 
     @staticmethod
     def _correct_answer_text(question: PracticeGeneratedQuestion) -> str:
@@ -3122,6 +3921,20 @@ class ReadingVocabularyGenerationService:
             for question in questions:
                 if question.review_target and question.canonical_key not in review_keys:
                     raise ValueError("review question canonicalKey is not in reviewTargets")
+            if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                expected_skill_by_order = {
+                    slot.order: slot.skill_tag
+                    for slot in self._build_slots(request, {})
+                }
+                for question in questions:
+                    if question.question_type != PracticeQuestionType.SINGLE_CHOICE:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE must not generate ordering questions"
+                        )
+                    if question.skill_tag != expected_skill_by_order[question.order]:
+                        raise ValueError(
+                            "CONTEXTUAL_CHOICE skill does not match the daily plan"
+                        )
             if request.mode == VocabularyMode.COMPOSITION.value:
                 ordering_count = sum(
                     1 for q in questions if q.question_type == PracticeQuestionType.ORDERING

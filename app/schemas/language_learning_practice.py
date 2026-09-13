@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -28,6 +29,7 @@ class ReadingMode(str, Enum):
 
 
 class VocabularyMode(str, Enum):
+    CONTEXTUAL_CHOICE = "CONTEXTUAL_CHOICE"
     MEANING_RELATION = "MEANING_RELATION"
     USAGE_DISTINCTION = "USAGE_DISTINCTION"
     COMPOSITION = "COMPOSITION"
@@ -55,11 +57,13 @@ class ReadingSkill(str, Enum):
 
 class VocabularySkill(str, Enum):
     MEANING = "MEANING"
+    NUANCE = "NUANCE"
     SYNONYM = "SYNONYM"
     ANTONYM = "ANTONYM"
     DISTINCTION = "DISTINCTION"
     COLLOCATION = "COLLOCATION"
     REGISTER = "REGISTER"
+    PRAGMATIC_FIT = "PRAGMATIC_FIT"
     CONTEXT_USAGE = "CONTEXT_USAGE"
     COMPOSITION = "COMPOSITION"
 
@@ -78,6 +82,13 @@ class PracticeReviewTarget(CamelCaseModel):
         default_factory=list,
         max_length=10,
     )
+    preferred_skill: Literal[
+        "MEANING",
+        "COLLOCATION",
+        "NUANCE",
+        "REGISTER",
+        "PRAGMATIC_FIT",
+    ] | None = None
 
 
 class PracticeGenerationRequest(CamelCaseModel):
@@ -127,6 +138,11 @@ class PracticeGenerationRequest(CamelCaseModel):
             target_count = 10
             if self.review_question_count > min(self.question_count, len(self.review_targets)):
                 raise ValueError("reviewQuestionCount exceeds available reviewTargets")
+            if (
+                self.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+                and self.review_question_count > 2
+            ):
+                raise ValueError("CONTEXTUAL_CHOICE reviewQuestionCount must not exceed 2")
         if self.previous_questions and self.question_count != 1:
             raise ValueError("previousQuestions requires single-question generation")
         if self.question_offset + self.question_count > target_count:

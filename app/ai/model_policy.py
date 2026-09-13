@@ -72,6 +72,9 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 4096
     ),
+    "LANGUAGE_LEARNING_VOCABULARY_CONTEXTUAL_CHOICE_VERIFICATION": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 4096
+    ),
     "LANGUAGE_LEARNING_READING_DIFFICULTY_SHADOW": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 4096
     ),

@@ -1,0 +1,85 @@
+{
+  "requestId": "practice-item-3-cross-contract",
+  "domain": "VOCABULARY",
+  "mode": "CONTEXTUAL_CHOICE",
+  "originLanguage": "ko",
+  "learningLanguage": "ja",
+  "questionCount": 1,
+  "complexityBand": 4,
+  "easierCount": 0,
+  "currentCount": 1,
+  "challengeCount": 0,
+  "selectedKeywords": ["業務", "協業"],
+  "weakSignals": [],
+  "recentMistakes": [],
+  "reviewTargets": [
+    {
+      "canonicalKey": "追加の検証期間",
+      "expression": "追加の検証期間",
+      "masteryScore": 70.0,
+      "wrongCount": 2,
+      "previousQuestionTypes": ["SINGLE_CHOICE"],
+      "preferredSkill": "MEANING"
+    },
+    {
+      "canonicalKey": "顧客サービスへの影響",
+      "expression": "顧客サービスへの影響",
+      "masteryScore": 65.0,
+      "wrongCount": 1,
+      "previousQuestionTypes": ["SINGLE_CHOICE"],
+      "preferredSkill": "NUANCE"
+    }
+  ],
+  "reviewQuestionCount": 0,
+  "generationDate": "2026-09-09",
+  "previousQuestions": [
+    {
+      "order": 1,
+      "questionType": "SINGLE_CHOICE",
+      "difficulty": "CURRENT",
+      "complexityBand": 4,
+      "passageId": null,
+      "passageText": null,
+      "prompt": "状況を確認した結果、担当者は______ことにしました。",
+      "options": [
+        {"key": "A", "text": "追加の検証期間"},
+        {"key": "B", "text": "通常の対応"},
+        {"key": "C", "text": "限定的な対応"},
+        {"key": "D", "text": "慎重な対応"}
+      ],
+      "correctAnswer": ["A"],
+      "skillTag": "MEANING",
+      "evidenceText": null,
+      "explanationOrigin": "문맥상 이 표현이 가장 자연스럽습니다.",
+      "explanationLearning": "文脈上、この表現が最も自然です。",
+      "targetExpression": "追加の検証期間",
+      "canonicalKey": "追加の検証期間",
+      "reviewTarget": true,
+      "vocabularyCandidates": []
+    },
+    {
+      "order": 2,
+      "questionType": "SINGLE_CHOICE",
+      "difficulty": "EASIER",
+      "complexityBand": 3,
+      "passageId": null,
+      "passageText": null,
+      "prompt": "状況を確認した結果、担当者は______ことにしました。",
+      "options": [
+        {"key": "A", "text": "追加の対応"},
+        {"key": "B", "text": "顧客サービスへの影響"},
+        {"key": "C", "text": "限定的な対応"},
+        {"key": "D", "text": "慎重な対応"}
+      ],
+      "correctAnswer": ["B"],
+      "skillTag": "NUANCE",
+      "evidenceText": null,
+      "explanationOrigin": "문맥상 이 표현이 가장 자연스럽습니다.",
+      "explanationLearning": "文脈上、この表現が最も自然です。",
+      "targetExpression": "顧客サービスへの影響",
+      "canonicalKey": "顧客サービスへの影響",
+      "reviewTarget": true,
+      "vocabularyCandidates": []
+    }
+  ]
+}
