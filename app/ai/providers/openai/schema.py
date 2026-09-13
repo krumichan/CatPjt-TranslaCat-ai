@@ -101,6 +101,7 @@ _STRICT_REVIEW_TASKS = frozenset({
     "LANGUAGE_LEARNING_WRITING_DIFFICULTY_VERIFICATION",
     "LANGUAGE_LEARNING_WRITING_NOTE_VERIFICATION",
     "LANGUAGE_LEARNING_WRITING_NOTE_LOCALIZATION",
+    "LANGUAGE_LEARNING_READING_DIFFICULTY_SHADOW",
 })
 
 
@@ -115,7 +116,9 @@ def _assert_strict_objects(node: Any) -> None:
     elif isinstance(node, dict):
         if node.get("type") == "object":
             if node.get("additionalProperties") is not False or set(node.get("required", [])) != set(node.get("properties", {})):
-                raise OpenAISchemaConfigurationError("Strict Writing review schemas require closed objects and every property required")
+                raise OpenAISchemaConfigurationError(
+                    "Strict structured-output schemas require closed objects and every property required"
+                )
         for child in node.values():
             _assert_strict_objects(child)
 

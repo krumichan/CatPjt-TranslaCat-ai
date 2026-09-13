@@ -24,18 +24,8 @@ from tests import test_language_learning_reading_vocabulary as practice_fixtures
 
 
 class ReadingDifficultyProvider(practice_fixtures.PipelineProvider):
-    def __init__(
-        self,
-        *,
-        observed_band: int = 1,
-        difficulty_confidence: float = 0.99,
-        malformed_shadow: bool = False,
-        **kwargs,
-    ):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.observed_band = observed_band
-        self.difficulty_confidence = difficulty_confidence
-        self.malformed_shadow = malformed_shadow
         self.passage_prompts: list[str] = []
         self.verification_schemas: list[dict | None] = []
 
@@ -44,37 +34,7 @@ class ReadingDifficultyProvider(practice_fixtures.PipelineProvider):
             self.passage_prompts.append(data)
         if type_name == ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME:
             self.verification_schemas.append(schema)
-        response = await super().call(type_name, data, schema)
-        if type_name != ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME:
-            return response
-
-        payload = self.verification_payloads[-1]
-        if payload["domain"] != "READING":
-            return response
-        passage_ids = list(dict.fromkeys(question["passageId"] for question in payload["questions"]))
-        response["passageDifficultyAssessments"] = [
-            {
-                "passageId": passage_id,
-                **self._difficulty(f"passage:{passage_id}:unit:1"),
-            }
-            for passage_id in passage_ids
-        ]
-        for verdict in response["verdicts"]:
-            verdict["difficulty"] = self._difficulty(
-                f"question:{verdict['order']}:prompt"
-            )
-        if self.malformed_shadow:
-            response["passageDifficultyAssessments"] = [
-                {
-                    "passageId": passage_id,
-                    "difficultyStatus": "ASSESSED",
-                    "observedBand": "not-a-band",
-                }
-                for passage_id in passage_ids
-            ]
-            for verdict in response["verdicts"]:
-                verdict["difficulty"] = "not-an-assessment"
-        return response
+        return await super().call(type_name, data, schema)
 
     async def call_with_image(
         self,
@@ -85,17 +45,6 @@ class ReadingDifficultyProvider(practice_fixtures.PipelineProvider):
         schema: dict | None = None,
     ):
         raise AssertionError("Reading calibration must not call an image provider")
-
-    def _difficulty(self, evidence_id: str) -> dict[str, object]:
-        return {
-            "difficultyStatus": "ASSESSED",
-            "observedBand": self.observed_band,
-            "alternativeBand": None,
-            "issueCodes": ["DIRECT_EVIDENCE_DEMAND"],
-            "evidenceSegmentIds": [evidence_id],
-            "difficultyConfidence": self.difficulty_confidence,
-        }
-
 
 def _question(*, passage: str, evidence: str | None = "次です。") -> PracticeGeneratedQuestion:
     return PracticeGeneratedQuestion.model_validate(
@@ -231,7 +180,7 @@ def test_reading_difficulty_confidence_never_changes_shadow_comparison():
 
 @pytest.mark.asyncio
 async def test_reading_generation_binds_recipes_but_verifier_is_blind_and_call_count_is_unchanged():
-    provider = ReadingDifficultyProvider(observed_band=3)
+    provider = ReadingDifficultyProvider()
     response = await ReadingVocabularyGenerationService(provider).generate(
         practice_fixtures._request()
     )
@@ -256,108 +205,18 @@ async def test_reading_generation_binds_recipes_but_verifier_is_blind_and_call_c
             assert slot["difficultyRecipe"]["band"] == slot["complexityBand"]
 
     verification = provider.verification_payloads[0]
-    assert [item["band"] for item in verification["readingDifficultyRubric"]["passageBands"]] == [
-        1,
-        2,
-        3,
-        4,
-        5,
-    ]
+    assert "readingDifficultyRubric" not in verification
     for question in verification["questions"]:
         assert "complexityBand" not in question
         assert "difficulty" not in question
         assert "difficultyRecipe" not in question
-        assert "passageSegments" in question
-        assert "questionSegments" in question
-
-
-@pytest.mark.asyncio
-async def test_reading_difficulty_mismatch_is_shadow_only_and_logs_no_raw_content(caplog):
-    provider = ReadingDifficultyProvider(observed_band=1, difficulty_confidence=0.99)
-    with caplog.at_level("INFO"):
-        response = await ReadingVocabularyGenerationService(provider).generate(
-            practice_fixtures._request()
-        )
-
-    assert len(response.questions) == 5
-    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 1
-    assert provider.candidate_slot_calls == [[1, 2], [3, 4], [5]]
-    assert "comparison=SHADOW_MISMATCH" in caplog.text
-    assert "difficulty_confidence=0.99" in caplog.text
-    assert "learning_language=ja mode=COMPREHENSION" in caplog.text
-    assert "skill_tag=" in caplog.text
-    assert "今日は会社で会議があります" not in caplog.text
-    assert "本文の内容" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_reading_passage_shadow_reject_count_is_scoped_to_its_questions(caplog):
-    provider = ReadingDifficultyProvider(
-        observed_band=3,
-        semantic_ambiguous_once={1},
-    )
-    with caplog.at_level("INFO"):
-        response = await ReadingVocabularyGenerationService(provider).generate(
-            practice_fixtures._request()
-        )
-
-    assert len(response.questions) == 5
-    assert Counter(
-        question["passageId"]
-        for question in provider.verification_payloads[0]["questions"]
-    ) == Counter({"p1": 3, "p2": 2})
-    messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        "scope=passage passage_id=p1" in message
-        and "quality_rejected_question_count=1" in message
-        for message in messages
-    )
-    assert any(
-        "scope=passage passage_id=p2" in message
-        and "quality_rejected_question_count=0" in message
-        for message in messages
-    )
-
-
-@pytest.mark.asyncio
-async def test_malformed_reading_shadow_is_fail_open_without_extra_mini_retry(caplog):
-    provider = ReadingDifficultyProvider(malformed_shadow=True)
-    with caplog.at_level("INFO"):
-        response = await ReadingVocabularyGenerationService(provider).generate(
-            practice_fixtures._request()
-        )
-
-    assert len(response.questions) == 5
-    assert provider.calls[ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME] == 1
-    assert "difficulty_status=UNSURE" in caplog.text
-    assert "difficulty_status=NOT_ASSESSED" in caplog.text
+        assert "passageSegments" not in question
+        assert "questionSegments" not in question
 
     schema = provider.verification_schemas[0]
     assert schema is not None
-    verdict_schema = schema["properties"]["verdicts"]["items"]
-    assert set(verdict_schema["required"]) == {
-        "order",
-        "bestAnswerKey",
-        "ambiguous",
-        "supported",
-        "reason",
-        "modeFit",
-        "answerLeakage",
-        "contextDependent",
-        "distractorsPlausible",
-    }
-    all_json_types = {
-        "OBJECT",
-        "ARRAY",
-        "STRING",
-        "NUMBER",
-        "BOOLEAN",
-        "NULL",
-    }
-    assert set(verdict_schema["properties"]["difficulty"]["type"]) == all_json_types
-    assert set(
-        schema["properties"]["passageDifficultyAssessments"]["type"]
-    ) == all_json_types
+    assert "passageDifficultyAssessments" not in schema["properties"]
+    assert "difficulty" not in schema["properties"]["verdicts"]["items"]["properties"]
 
 
 @pytest.mark.asyncio
@@ -373,12 +232,17 @@ async def test_vocabulary_verification_schema_has_no_reading_shadow_fields():
     assert "passageDifficultyAssessments" not in schema["properties"]
     verdict_properties = schema["properties"]["verdicts"]["items"]["properties"]
     assert "difficulty" not in verdict_properties
+    verification = provider.verification_payloads[0]
+    assert "readingDifficultyRubric" not in verification
+    assert all(
+        "passageSegments" not in question and "questionSegments" not in question
+        for question in verification["questions"]
+    )
 
 
 @pytest.mark.asyncio
-async def test_reading_quality_failure_still_regenerates_only_failed_slot_with_difficulty_enabled():
+async def test_reading_quality_failure_still_regenerates_only_failed_slot():
     provider = ReadingDifficultyProvider(
-        observed_band=1,
         semantic_ambiguous_once={2},
     )
     response = await ReadingVocabularyGenerationService(provider).generate(

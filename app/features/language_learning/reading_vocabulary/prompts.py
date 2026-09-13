@@ -5,7 +5,6 @@ from typing import Any
 
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     passage_difficulty_recipe,
-    reading_blind_rubric_payload,
 )
 from app.schemas.language_learning_practice import PracticeGenerationRequest
 
@@ -153,22 +152,6 @@ For every supplied question:
   option is grammatical if the requested collocation/register/usage cue makes one option materially better;
 - never reconstruct a hidden generator answer key.
 ORDERING questions are omitted and structurally validated by the application.
-
-For READING only, also perform blind semantic difficulty classification in the SAME response:
-- selected/requested bands, generator difficulty labels and generation recipes are intentionally absent;
-- use the complete supplied readingDifficultyRubric to classify actual passage complexity and actual composite
-  question demand independently;
-- passage difficulty means linguistic/discourse complexity of the passage itself;
-- question difficulty includes evidence explicitness/location, inference and discourse-relation demand, and
-  distractor discrimination, but ambiguity, weak distractors and required external knowledge never increase it;
-- return one passageDifficultyAssessment for each unique passageId and one difficulty object in each question verdict;
-- each shadow assessment uses difficultyStatus, observedBand, alternativeBand, issueCodes, evidenceSegmentIds and
-  difficultyConfidence; passage assessments also include passageId;
-- use only supplied passage/question segment IDs in evidenceSegmentIds; never return evidence quotations;
-- difficultyStatus is ASSESSED for one band, BORDERLINE for exactly two adjacent bands, or UNSURE when the
-  visible evidence is insufficient. difficultyConfidence is diagnostic only and does not change quality fields.
-Difficulty classification must never alter bestAnswerKey, ambiguous, supported, modeFit, answerLeakage,
-contextDependent or distractorsPlausible.
 Return exactly one verdict for every supplied item and no extras.
 """.strip()
 
@@ -266,8 +249,6 @@ def build_practice_verification_prompt(
         "learningLanguage": request.learning_language,
         "questions": questions,
     }
-    if request.domain.value == "READING":
-        payload["readingDifficultyRubric"] = reading_blind_rubric_payload()
     return (
         "Independently verify semantic uniqueness/support. Expected answer keys are not included.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

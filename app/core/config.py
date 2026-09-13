@@ -46,6 +46,20 @@ class Settings(BaseSettings):
     AI_LANGUAGE_LEARNING_GENERATION_MAX_RETRIES: int = 3
     AI_LANGUAGE_LEARNING_EVALUATION_MAX_RETRIES: int = 1
 
+    # Reading difficulty is an awaited, observation-only sampled stage. It is
+    # disabled by default so ordinary Reading/Vocabulary behavior is unchanged.
+    AI_READING_DIFFICULTY_SHADOW_ENABLED: bool = False
+    AI_READING_DIFFICULTY_SHADOW_SAMPLE_PERCENT: float = Field(
+        default=0.0,
+        ge=0,
+        le=100,
+    )
+    AI_READING_DIFFICULTY_SHADOW_TIMEOUT_SECONDS: float = Field(
+        default=12.0,
+        gt=0,
+        le=60,
+    )
+
     # Writing generation is multi-stage. Keep the total budget below the EFFECTIVE
     # BE/proxy timeout (the attached BE application.properties sets 300 seconds).
     AI_WRITING_VERIFICATION_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)

@@ -22,10 +22,6 @@ from app.ai.providers.openai.client import OpenAIService  # noqa: E402
 from app.ai.providers.openai.response import decode_response  # noqa: E402
 from app.ai.providers.openai.schema import build_openai_text_config  # noqa: E402
 from app.core.config import settings  # noqa: E402
-from app.features.language_learning.reading_vocabulary.prompts import (  # noqa: E402
-    PRACTICE_VERIFICATION_SYSTEM_PROMPT,
-    build_practice_verification_prompt,
-)
 from app.features.language_learning.reading_vocabulary.reading_difficulty_adapter import (  # noqa: E402
     ReadingAcceptanceContext,
     ReadingSemanticQualityPolicy,
@@ -33,16 +29,14 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_adapte
     normalize_reading_semantic_difficulty_assessment,
     reading_passage_segments,
 )
-from app.features.language_learning.reading_vocabulary.service import (  # noqa: E402
-    ReadingVocabularyGenerationService,
-    _PracticeVerificationPayload,
-    _READING_PRACTICE_VERIFICATION_SCHEMA,
+from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (  # noqa: E402
+    reading_blind_rubric_payload,
 )
 from app.schemas.language_learning_practice import PracticeGenerationRequest  # noqa: E402
 
 
 DEFAULT_CORPUS = PROJECT_ROOT / "tests" / "fixtures" / "reading-quality-parity-v1.json"
-TASK_NAME = ReadingVocabularyGenerationService.VERIFICATION_TYPE_NAME
+TASK_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION"
 QUALITY_FIELDS = (
     "bestAnswerKey",
     "ambiguous",
@@ -110,6 +104,71 @@ QUALITY_ONLY_SCHEMA: dict[str, Any] = {
     },
     "required": ["verdicts"],
 }
+
+# Frozen snapshot of the combined V1 task. Production no longer imports or uses
+# this prompt/schema; the benchmark retains them solely as historical evidence.
+HISTORICAL_COMBINED_SYSTEM_PROMPT = QUALITY_ONLY_SYSTEM_PROMPT.replace(
+    "Return exactly one verdict for every supplied item and no extras.",
+    """
+For READING only, also perform blind semantic difficulty classification in the SAME response:
+- selected/requested bands, generator difficulty labels and generation recipes are intentionally absent;
+- use the complete supplied readingDifficultyRubric to classify actual passage complexity and actual composite
+  question demand independently;
+- passage difficulty means linguistic/discourse complexity of the passage itself;
+- question difficulty includes evidence explicitness/location, inference and discourse-relation demand, and
+  distractor discrimination, but ambiguity, weak distractors and required external knowledge never increase it;
+- return one passageDifficultyAssessment for each unique passageId and one difficulty object in each question verdict;
+- each shadow assessment uses difficultyStatus, observedBand, alternativeBand, issueCodes, evidenceSegmentIds and
+  difficultyConfidence; passage assessments also include passageId;
+- use only supplied passage/question segment IDs in evidenceSegmentIds; never return evidence quotations;
+- difficultyStatus is ASSESSED for one band, BORDERLINE for exactly two adjacent bands, or UNSURE when the
+  visible evidence is insufficient. difficultyConfidence is diagnostic only and does not change quality fields.
+Difficulty classification must never alter bestAnswerKey, ambiguous, supported, modeFit, answerLeakage,
+contextDependent or distractorsPlausible.
+Return exactly one verdict for every supplied item and no extras.""",
+)
+
+_HISTORICAL_SHADOW_VALUE_SCHEMA: dict[str, Any] = {
+    "type": ["OBJECT", "ARRAY", "STRING", "NUMBER", "BOOLEAN", "NULL"]
+}
+HISTORICAL_COMBINED_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "verdicts": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    **QUALITY_ONLY_SCHEMA["properties"]["verdicts"]["items"]["properties"],
+                    "difficulty": _HISTORICAL_SHADOW_VALUE_SCHEMA,
+                },
+                "required": QUALITY_ONLY_SCHEMA["properties"]["verdicts"]["items"][
+                    "required"
+                ],
+            },
+        },
+        "passageDifficultyAssessments": _HISTORICAL_SHADOW_VALUE_SCHEMA,
+    },
+    "required": ["verdicts"],
+}
+
+
+class _HistoricalVerificationVerdict(BaseModel):
+    order: int
+    bestAnswerKey: str
+    ambiguous: bool
+    supported: bool
+    reason: str
+    modeFit: bool
+    answerLeakage: bool
+    contextDependent: bool
+    distractorsPlausible: bool
+    difficulty: Any = None
+
+
+class _HistoricalVerificationPayload(BaseModel):
+    verdicts: list[_HistoricalVerificationVerdict]
+    passageDifficultyAssessments: Any = Field(default_factory=list)
 
 
 class CorpusOption(BaseModel):
@@ -207,6 +266,24 @@ def quality_only_prompt(
         "originLanguage": corpus.origin_language,
         "learningLanguage": corpus.learning_language,
         "questions": questions,
+    }
+    return (
+        "Independently verify semantic uniqueness/support. Expected answer keys are not included.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def historical_combined_prompt(
+    request: PracticeGenerationRequest,
+    questions: list[dict[str, Any]],
+) -> str:
+    payload = {
+        "domain": request.domain.value,
+        "mode": request.mode,
+        "originLanguage": request.origin_language,
+        "learningLanguage": request.learning_language,
+        "questions": questions,
+        "readingDifficultyRubric": reading_blind_rubric_payload(),
     }
     return (
         "Independently verify semantic uniqueness/support. Expected answer keys are not included.\n\n"
@@ -345,7 +422,7 @@ def difficulty_record(raw: object) -> dict[str, Any]:
 
 
 def _verdicts_by_order(raw: object, expected_orders: set[int]) -> dict[int, Any]:
-    payload = _PracticeVerificationPayload.model_validate(raw)
+    payload = _HistoricalVerificationPayload.model_validate(raw)
     result = {verdict.order: verdict for verdict in payload.verdicts}
     if set(result) != expected_orders:
         raise ValueError("benchmark verifier verdict coverage mismatch")
@@ -353,7 +430,7 @@ def _verdicts_by_order(raw: object, expected_orders: set[int]) -> dict[int, Any]
 
 
 def _passage_difficulty(raw: object, passage_id: str) -> dict[str, Any]:
-    payload = _PracticeVerificationPayload.model_validate(raw)
+    payload = _HistoricalVerificationPayload.model_validate(raw)
     assessments = payload.passageDifficultyAssessments
     if isinstance(assessments, list):
         for item in assessments:
@@ -515,18 +592,18 @@ async def run_benchmark(corpus: BenchmarkCorpus, *, rounds: int) -> dict[str, An
                         batch,
                         quality_questions,
                     ),
-                    "QUALITY_AND_DIFFICULTY": build_practice_verification_prompt(
+                    "QUALITY_AND_DIFFICULTY": historical_combined_prompt(
                         request,
                         combined_questions,
                     ),
                 }
                 instructions = {
                     "QUALITY_ONLY": QUALITY_ONLY_SYSTEM_PROMPT,
-                    "QUALITY_AND_DIFFICULTY": PRACTICE_VERIFICATION_SYSTEM_PROMPT,
+                    "QUALITY_AND_DIFFICULTY": HISTORICAL_COMBINED_SYSTEM_PROMPT,
                 }
                 schemas = {
                     "QUALITY_ONLY": QUALITY_ONLY_SCHEMA,
-                    "QUALITY_AND_DIFFICULTY": _READING_PRACTICE_VERIFICATION_SCHEMA,
+                    "QUALITY_AND_DIFFICULTY": HISTORICAL_COMBINED_SCHEMA,
                 }
                 results: dict[str, dict[str, Any]] = {}
                 for condition in ("QUALITY_ONLY", "QUALITY_AND_DIFFICULTY"):

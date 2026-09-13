@@ -3,15 +3,13 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from app.features.language_learning.reading_vocabulary.prompts import (
-    build_practice_verification_prompt,
-)
 from scripts.run_reading_quality_parity_benchmark import (
     DEFAULT_CORPUS,
     QUALITY_FIELDS,
     QUALITY_ONLY_SCHEMA,
     QUALITY_ONLY_SYSTEM_PROMPT,
     build_batch_inputs,
+    historical_combined_prompt,
     load_corpus,
     quality_only_prompt,
     summarize,
@@ -47,7 +45,7 @@ def test_quality_only_and_combined_inputs_share_candidates_but_keep_task_boundar
         quality_only_prompt(corpus, batch, quality_questions).split("\n\n", 1)[1]
     )
     combined_payload = json.loads(
-        build_practice_verification_prompt(request, combined_questions).split("\n\n", 1)[1]
+        historical_combined_prompt(request, combined_questions).split("\n\n", 1)[1]
     )
 
     assert quality_payload["questions"] == quality_questions

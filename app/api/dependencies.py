@@ -89,6 +89,13 @@ _language_learning_writing_service = LanguageLearningWritingService(
 )
 _language_learning_reading_vocabulary_service = ReadingVocabularyGenerationService(
     provider=_ai_provider,
+    difficulty_shadow_enabled=settings.AI_READING_DIFFICULTY_SHADOW_ENABLED,
+    difficulty_shadow_sample_percent=(
+        settings.AI_READING_DIFFICULTY_SHADOW_SAMPLE_PERCENT
+    ),
+    difficulty_shadow_timeout_seconds=(
+        settings.AI_READING_DIFFICULTY_SHADOW_TIMEOUT_SECONDS
+    ),
 )
 
 _listening_audio_store = TemporaryListeningAudioStore(
