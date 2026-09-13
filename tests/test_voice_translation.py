@@ -488,10 +488,10 @@ class VoiceTranslationServiceTest(unittest.IsolatedAsyncioTestCase):
 
 
 class FakeVoiceSttProvider:
-    ready = True
     model_version = "fake-stt-v2"
 
-    def __init__(self) -> None:
+    def __init__(self, *, ready: bool = True) -> None:
+        self.ready = ready
         self.calls: list[bool] = []
 
     async def transcribe_pcm(
@@ -553,6 +553,29 @@ class FailingTranslationProvider(FakeTranslationProvider):
 
 
 class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.original_voice_enabled = settings.AI_VOICE_ENABLED
+        settings.AI_VOICE_ENABLED = True
+
+    def tearDown(self) -> None:
+        settings.AI_VOICE_ENABLED = self.original_voice_enabled
+
+    async def test_open_stream_rejects_not_ready_stt_provider(self):
+        service = VoiceStreamApplicationService(
+            stt_provider=FakeVoiceSttProvider(ready=False),
+            translation_service=VoiceTranslationService(
+                FakeTranslationProvider(),
+                max_retries=0,
+            ),
+        )
+
+        with self.assertRaises(VoicePipelineException) as caught:
+            await service.open_stream(
+                VoiceStreamOpen.model_validate(stream_open_payload())
+            )
+
+        self.assertEqual(caught.exception.code, VoiceErrorCode.MODEL_NOT_READY)
+
     async def test_late_partial_cannot_overwrite_next_utterance_latency(self):
         class DelayedPartialSttProvider(FakeVoiceSttProvider):
             def __init__(self):
