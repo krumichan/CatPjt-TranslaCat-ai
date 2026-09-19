@@ -5,12 +5,13 @@ import copy
 import json
 import logging
 import re
+import time
 import unicodedata
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Literal, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.ai.ports import TextGenerationProvider
 from app.features.language_learning.reading_vocabulary.contextual_choice_task import (
@@ -18,12 +19,16 @@ from app.features.language_learning.reading_vocabulary.contextual_choice_task im
     CONTEXTUAL_CHOICE_BLANK,
     CONTEXTUAL_CHOICE_CANDIDATES_PER_ROUND,
     CONTEXTUAL_CHOICE_MAX_ROUNDS,
+    CONTEXTUAL_CHOICE_PLAN_VERSION,
     CONTEXTUAL_CHOICE_RECIPE_VERSION,
     CONTEXTUAL_CHOICE_SKILL_PLAN,
+    CONTEXTUAL_CHOICE_TEMPLATE_MARKER,
     contextual_choice_answer_key,
+    contextual_choice_required_close_distractors,
     contextual_choice_scenario_family,
     contextual_choice_skill_for_order,
     render_contextual_choice_prompt,
+    render_contextual_choice_template,
 )
 from app.features.language_learning.reading_vocabulary.reading_difficulty_adapter import (
     ReadingAcceptanceContext,
@@ -64,6 +69,11 @@ from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_sha
 from app.features.language_learning.reading_vocabulary.prompts import (
     PRACTICE_GENERATION_PROMPT_VERSION,
     build_contextual_choice_candidate_batch_prompt,
+    build_contextual_choice_context_generation_prompt,
+    build_contextual_choice_context_verification_prompt,
+    build_contextual_choice_plan_generation_prompt,
+    build_contextual_choice_plan_verification_prompt,
+    build_contextual_choice_lexical_repair_prompt,
     build_contextual_choice_verification_prompt,
     build_origin_explanation_prompt,
     build_practice_generation_prompt,
@@ -81,9 +91,12 @@ from app.schemas.language_learning_practice import (
     PracticeOption,
     PracticeQuestionType,
     PracticeReviewTarget,
+    PersonalizedVocabularyPlan,
     ReadingMode,
     ReadingSkill,
     VocabularyMode,
+    VocabularyPlanAnchorType,
+    VocabularyPlanItem,
     VocabularySkill,
 )
 
@@ -203,6 +216,193 @@ _CONTEXTUAL_CHOICE_CANDIDATE_SCHEMA: dict[str, Any] = {
         }
     },
     "required": ["candidates"],
+}
+
+_CONTEXTUAL_CHOICE_PLAN_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "additionalProperties": False,
+    "properties": {
+        "globalOrder": {"type": "INTEGER"},
+        "targetExpression": {"type": ["STRING", "NULL"]},
+        "distractors": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "anchorType": {
+            "type": ["STRING", "NULL"],
+            "enum": [
+                "SELECTED_KEYWORD",
+                "WEAK_SIGNAL",
+                "RECENT_MISTAKE",
+                "LEARNING_PROFILE",
+                None,
+            ],
+        },
+        "anchorValue": {"type": ["STRING", "NULL"]},
+    },
+    "required": [
+        "globalOrder",
+        "targetExpression",
+        "distractors",
+        "anchorType",
+        "anchorValue",
+    ],
+}
+_CONTEXTUAL_CHOICE_PLAN_GENERATION_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "additionalProperties": False,
+    "properties": {
+        "items": {
+            "type": "ARRAY",
+            "items": _CONTEXTUAL_CHOICE_PLAN_ITEM_SCHEMA,
+        }
+    },
+    "required": ["items"],
+}
+def _contextual_choice_lexical_repair_schema(
+    *, global_order: int, allowed_indexes: list[int]
+) -> dict[str, Any]:
+    replacement_count = len(allowed_indexes)
+    return {
+        "type": "OBJECT",
+        "additionalProperties": False,
+        "properties": {
+            "globalOrder": {"type": "INTEGER", "enum": [global_order]},
+            "targetExpression": {"type": ["STRING", "NULL"]},
+            "distractorReplacements": {
+                "type": "ARRAY",
+                "minItems": replacement_count,
+                "maxItems": replacement_count,
+                "items": {
+                    "type": "OBJECT",
+                    "additionalProperties": False,
+                    "properties": {
+                        "index": {"type": "INTEGER", "enum": allowed_indexes},
+                        "text": {"type": "STRING", "minLength": 1},
+                    },
+                    "required": ["index", "text"],
+                },
+            },
+        },
+        "required": ["globalOrder", "targetExpression", "distractorReplacements"],
+    }
+_CONTEXTUAL_CHOICE_PLAN_VERDICT_PROPERTIES: dict[str, Any] = {
+    "globalOrder": {"type": "INTEGER"},
+    "targetExpressionWellFormed": {"type": "BOOLEAN"},
+    "learningValue": {"type": "BOOLEAN"},
+    "sameSurfaceCategory": {"type": "BOOLEAN"},
+    "skillContrastSupported": {"type": "BOOLEAN"},
+    "coveredDecisiveDimensions": {
+        "type": "ARRAY",
+        "items": {"type": "STRING"},
+    },
+    "definitionOnly": {"type": "BOOLEAN"},
+    "lexicalConceptRepeated": {"type": "BOOLEAN"},
+    "rareOrTrivia": {"type": "BOOLEAN"},
+    "targetViableWithDifferentDistractors": {"type": "BOOLEAN"},
+    "distractors": {
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "additionalProperties": False,
+            "properties": {
+                "index": {"type": "INTEGER"},
+                "expressionWellFormed": {"type": "BOOLEAN"},
+                "sameSurfaceCategory": {"type": "BOOLEAN"},
+                "bundleRelevant": {"type": "BOOLEAN"},
+                "closeCompetitor": {"type": "BOOLEAN"},
+                "malformedByGrammar": {"type": "BOOLEAN"},
+                "skillContrastRelevant": {"type": "BOOLEAN"},
+                "coveredDecisiveDimensions": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"},
+                },
+            },
+            "required": [
+                "index", "expressionWellFormed", "sameSurfaceCategory",
+                "bundleRelevant", "closeCompetitor", "malformedByGrammar",
+                "skillContrastRelevant", "coveredDecisiveDimensions",
+            ],
+        },
+    },
+    "reasonCode": {"type": "STRING", "enum": [
+        "PASS", "NATURAL_TARGET", "LEARNING_VALUE",
+        "SAME_SURFACE_CATEGORY", "SKILL_FIT", "DEFINITION_ONLY",
+        "LEXICAL_REPEAT", "RARE_OR_TRIVIA", "INSUFFICIENT_CLOSE_DISTRACTORS",
+        "DISTRACTOR_UNNATURAL", "DISTRACTOR_SURFACE_MISMATCH",
+        "DISTRACTOR_GRAMMAR_ONLY", "DISTRACTOR_NOT_PLAUSIBLE",
+        "DISTRACTOR_SKILL_MISMATCH",
+    ]},
+    "reason": {"type": "STRING"},
+}
+
+
+def _contextual_choice_plan_verification_schema(
+    decisive_dimensions: tuple[str, ...],
+) -> dict[str, Any]:
+    properties = copy.deepcopy(_CONTEXTUAL_CHOICE_PLAN_VERDICT_PROPERTIES)
+    dimension_schema = {
+        "type": "STRING",
+        "enum": list(decisive_dimensions),
+    }
+    properties["coveredDecisiveDimensions"]["items"] = dimension_schema
+    properties["distractors"]["items"]["properties"][
+        "coveredDecisiveDimensions"
+    ]["items"] = copy.deepcopy(dimension_schema)
+    return {
+        "type": "OBJECT",
+        "additionalProperties": False,
+        "properties": {
+            "verdicts": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "additionalProperties": False,
+                    "properties": properties,
+                    "required": list(properties),
+                },
+            }
+        },
+        "required": ["verdicts"],
+    }
+_CONTEXTUAL_CHOICE_CONTEXT_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "additionalProperties": False,
+    "properties": {
+        "globalOrder": {"type": "INTEGER"},
+        "contextTemplate": {"type": "STRING"},
+        "explanationLearning": {"type": "STRING"},
+    },
+    "required": ["globalOrder", "contextTemplate", "explanationLearning"],
+}
+_CONTEXTUAL_CHOICE_CONTEXT_VERDICT_PROPERTIES: dict[str, Any] = {
+    "order": {"type": "INTEGER"},
+    "bestAnswerKey": {"type": "STRING", "enum": ["A", "B", "C", "D"]},
+    "ambiguous": {"type": "BOOLEAN"},
+    "supported": {"type": "BOOLEAN"},
+    "skillFit": {"type": "BOOLEAN"},
+    "definitionLike": {"type": "BOOLEAN"},
+    "structurallyWellFormedKeys": {
+        "type": "ARRAY",
+        "items": {"type": "STRING", "enum": ["A", "B", "C", "D"]},
+    },
+    "reason": {"type": "STRING"},
+}
+_CONTEXTUAL_CHOICE_CONTEXT_VERIFICATION_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "additionalProperties": False,
+    "properties": {
+        "verdicts": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "additionalProperties": False,
+                "properties": _CONTEXTUAL_CHOICE_CONTEXT_VERDICT_PROPERTIES,
+                "required": list(_CONTEXTUAL_CHOICE_CONTEXT_VERDICT_PROPERTIES),
+            },
+        }
+    },
+    "required": ["verdicts"],
 }
 
 _MEANING_RELATION_CANDIDATE_SCHEMA = copy.deepcopy(_PRACTICE_CANDIDATE_SCHEMA)
@@ -370,6 +570,12 @@ _ORIGIN_EXPLANATION_SCHEMA: dict[str, Any] = {
     },
     "required": ["explanations"],
 }
+_CONTEXTUAL_CHOICE_ORIGIN_EXPLANATION_SCHEMA = copy.deepcopy(
+    _ORIGIN_EXPLANATION_SCHEMA
+)
+_CONTEXTUAL_CHOICE_ORIGIN_EXPLANATION_SCHEMA["properties"]["explanations"][
+    "items"
+]["properties"]["explanationLearning"] = {"type": ["STRING", "NULL"]}
 
 
 class _PracticeVerificationVerdict(BaseModel):
@@ -406,6 +612,221 @@ class _ContextualChoiceVerificationVerdict(BaseModel):
 
 class _ContextualChoiceVerificationPayload(BaseModel):
     verdicts: list[_ContextualChoiceVerificationVerdict]
+
+
+class _ContextualChoicePlanGenerationPayload(BaseModel):
+    items: list[dict[str, Any]]
+
+
+class _ContextualChoiceDistractorVerdict(BaseModel):
+    index: int
+    expressionWellFormed: bool
+    sameSurfaceCategory: bool
+    bundleRelevant: bool
+    closeCompetitor: bool
+    malformedByGrammar: bool
+    skillContrastRelevant: bool
+    coveredDecisiveDimensions: tuple[str, ...]
+
+
+class _ContextualChoicePlanVerdict(BaseModel):
+    globalOrder: int
+    targetExpressionWellFormed: bool
+    learningValue: bool
+    sameSurfaceCategory: bool
+    skillContrastSupported: bool
+    coveredDecisiveDimensions: tuple[str, ...]
+    definitionOnly: bool
+    lexicalConceptRepeated: bool
+    rareOrTrivia: bool
+    targetViableWithDifferentDistractors: bool
+    distractors: list[_ContextualChoiceDistractorVerdict]
+    reasonCode: str
+    reason: str
+
+
+class _ContextualChoicePlanVerificationPayload(BaseModel):
+    verdicts: list[_ContextualChoicePlanVerdict]
+
+
+class _ContextualChoiceDistractorReplacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    text: str
+
+
+class _ContextualChoiceLexicalRepairPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    globalOrder: int
+    targetExpression: str | None
+    distractorReplacements: list[_ContextualChoiceDistractorReplacement]
+
+
+_ContextualChoiceLexicalRepairReasonCode = Literal[
+    "LEXICAL_REPAIR_RESPONSE_SCHEMA_INVALID",
+    "LEXICAL_REPAIR_ORDER_MISMATCH",
+    "LEXICAL_REPAIR_SCOPE_MISMATCH",
+    "LEXICAL_REPAIR_TARGET_AUTHORITY_VIOLATION",
+    "LEXICAL_REPAIR_EMPTY_DISTRACTOR",
+    "LEXICAL_REPAIR_UNCHANGED_DISTRACTOR",
+    "LEXICAL_REPAIR_DUPLICATE_TARGET",
+    "LEXICAL_REPAIR_DUPLICATE_DISTRACTOR",
+    "LEXICAL_REPAIR_LANGUAGE_INVALID",
+    "LEXICAL_REPAIR_PLAN_AUTHORITY_VIOLATION",
+]
+
+
+class _ContextualChoiceLexicalRepairContractError(ValueError):
+    def __init__(
+        self,
+        reason_code: _ContextualChoiceLexicalRepairReasonCode,
+        *,
+        index: int | None = None,
+    ) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.index = index
+
+
+@dataclass(frozen=True)
+class _ContextualChoiceDistractorRepairEvidence:
+    index: int
+    expression_well_formed: bool
+    same_surface_category: bool
+    bundle_relevant: bool
+    close_competitor: bool
+    malformed_by_grammar: bool
+    skill_contrast_relevant: bool
+    covered_decisive_dimensions: tuple[str, ...]
+
+    def prompt_payload(self) -> dict[str, bool | list[str]]:
+        return {
+            "expressionWellFormed": self.expression_well_formed,
+            "sameSurfaceCategory": self.same_surface_category,
+            "bundleRelevant": self.bundle_relevant,
+            "closeCompetitor": self.close_competitor,
+            "malformedByGrammar": self.malformed_by_grammar,
+            "skillContrastRelevant": self.skill_contrast_relevant,
+            "coveredDecisiveDimensions": list(
+                self.covered_decisive_dimensions
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class _ContextualChoiceLexicalAssessment:
+    reason_codes: tuple[str, ...]
+    invalid_distractor_indexes: tuple[int, ...]
+    preserve_new_target: bool
+    distractor_repair_evidence: tuple[
+        _ContextualChoiceDistractorRepairEvidence, ...
+    ]
+    required_close_distractors: int
+    current_valid_close_distractor_count: int
+    additional_close_distractors_needed: int
+    close_required_replacement_indexes: tuple[int, ...]
+    skill: str
+    decisive_dimensions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ContextualChoiceContextAssessment:
+    reason_codes: tuple[str, ...]
+    failure_evidence: dict[str, object]
+
+
+_ContextFailureClass = Literal[
+    "CONTRACT_CONTEXT",
+    "STRUCTURAL_CONTEXT",
+    "SEMANTIC_CONTEXT",
+]
+_CONTRACT_CONTEXT_REASON_CODES = frozenset({
+    "CONTEXT_RESPONSE_SCHEMA_INVALID",
+    "CONTEXT_ORDER_MISMATCH",
+    "CONTEXT_MARKER_INVALID",
+    "CONTEXT_UNKNOWN_MARKER",
+    "CONTEXT_LANGUAGE_INVALID",
+    "CONTEXT_TARGET_LEAK",
+    "CONTEXT_TEMPLATE_ROUND_TRIP_INVALID",
+    "CONTEXT_EXPLANATION_INVALID",
+})
+_STRUCTURAL_CONTEXT_REASON_CODES = frozenset({
+    "RENDERED_SENTENCE_STRUCTURALLY_INVALID",
+})
+_SEMANTIC_CONTEXT_REASON_CODES = frozenset({
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "SKILL_FIT",
+    "DEFINITION_LIKE",
+    "BEST_ANSWER_MISMATCH",
+})
+
+
+class _ContextualChoiceContextContractError(ValueError):
+    def __init__(self, reason_code: str, *, repairable: bool) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.repairable = repairable
+
+
+class _ContextualChoiceContextVerifierContractError(ValueError):
+    reason_code = "CONTEXT_VERIFIER_CONTRACT_INVALID"
+
+
+class _ContextualChoiceContextPayload(BaseModel):
+    globalOrder: int
+    contextTemplate: str
+    explanationLearning: str
+
+
+class _ContextualChoiceContextVerdict(BaseModel):
+    order: int
+    bestAnswerKey: str
+    ambiguous: bool
+    supported: bool
+    skillFit: bool
+    definitionLike: bool
+    structurallyWellFormedKeys: tuple[str, ...]
+    reason: str
+
+
+class _ContextualChoiceContextVerificationPayload(BaseModel):
+    verdicts: list[_ContextualChoiceContextVerdict]
+
+
+@dataclass
+class _ContextualChoiceTelemetry:
+    started_at: float
+    plan_generation_calls: int = 0
+    lexical_validation_calls: int = 0
+    plan_repair_calls: int = 0
+    lexical_repair_calls: int = 0
+    context_generation_calls: int = 0
+    context_validation_calls: int = 0
+    context_repair_calls: int = 0
+    origin_explanation_calls: int = 0
+    plan_reused: bool = False
+
+    @property
+    def total_ai_calls(self) -> int:
+        return (
+            self.plan_generation_calls
+            + self.lexical_validation_calls
+            + self.plan_repair_calls
+            + self.lexical_repair_calls
+            + self.context_generation_calls
+            + self.context_validation_calls
+            + self.context_repair_calls
+            + self.origin_explanation_calls
+        )
+
+
+class _ContextualChoiceContentRejected(ValueError):
+    def __init__(self, message: str, *, stage: str = "UNKNOWN") -> None:
+        super().__init__(message)
+        self.stage = stage
 
 
 @dataclass(frozen=True)
@@ -453,6 +874,7 @@ class _ReadingPassagePayload(BaseModel):
 class _OriginExplanationItem(BaseModel):
     order: int
     text: str
+    explanationLearning: str | None = None
 
 
 class _OriginExplanationPayload(BaseModel):
@@ -476,6 +898,7 @@ class _QuestionSlot:
     vocabulary_mode: str | None = None
     free_target_focus: str | None = None
     scenario_family: str | None = None
+    vocabulary_plan_item: VocabularyPlanItem | None = None
 
     @property
     def review_target(self) -> bool:
@@ -566,6 +989,9 @@ class ReadingVocabularyGenerationService:
     CONTEXTUAL_CHOICE_VERIFICATION_TYPE_NAME = (
         "LANGUAGE_LEARNING_VOCABULARY_CONTEXTUAL_CHOICE_VERIFICATION"
     )
+    CONTEXTUAL_CHOICE_PLAN_VERIFICATION_TYPE_NAME = (
+        "LANGUAGE_LEARNING_VOCABULARY_CONTEXTUAL_CHOICE_PLAN_VERIFICATION"
+    )
     ORIGIN_EXPLANATION_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION"
     ORIGIN_EXPLANATION_FALLBACK_TYPE_NAME = (
         "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION_FALLBACK"
@@ -605,11 +1031,76 @@ class ReadingVocabularyGenerationService:
         stages. A bad explanation therefore repairs only the explanation; an ambiguous question
         regenerates only that slot; successful slots are retained.
         """
+        contextual_choice = (
+            request.domain == PracticeDomain.VOCABULARY
+            and request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+        )
+        telemetry = (
+            _ContextualChoiceTelemetry(started_at=time.perf_counter())
+            if contextual_choice
+            else None
+        )
         try:
             passages = await self._generate_reading_passages(request)
-            slots = self._build_slots(request, passages)
-            questions = await self._generate_verified_questions(request, slots)
-            questions = await self._attach_origin_explanations(request, questions)
+            vocabulary_plan = None
+            if contextual_choice:
+                assert telemetry is not None
+                vocabulary_plan = await self._resolve_contextual_choice_plan(
+                    request,
+                    telemetry,
+                )
+                if request.vocabulary_plan_only:
+                    response = PracticeGenerationResponse(
+                        request_id=request.request_id,
+                        prompt_version=CONTEXTUAL_CHOICE_RECIPE_VERSION,
+                        domain=request.domain,
+                        mode=request.mode,
+                        complexity_band=request.complexity_band,
+                        questions=[],
+                        vocabulary_plan=vocabulary_plan,
+                    )
+                    logger.info(
+                        "CONTEXTUAL_CHOICE V3 plan snapshot completed. request_id=%s "
+                        "generated_item_count=0 plan_generation_calls=%d "
+                        "lexical_validation_calls=%d plan_repair_calls=%d "
+                        "plan_reused=%s total_ai_calls=%d total_generation_latency_ms=%d",
+                        request.request_id,
+                        telemetry.plan_generation_calls,
+                        telemetry.lexical_validation_calls,
+                        telemetry.plan_repair_calls,
+                        telemetry.plan_reused,
+                        telemetry.total_ai_calls,
+                        int((time.perf_counter() - telemetry.started_at) * 1000),
+                    )
+                    return response
+                slots = self._contextual_choice_slots_from_plan(
+                    request,
+                    vocabulary_plan,
+                )
+            else:
+                slots = self._build_slots(request, passages)
+            questions = await self._generate_verified_questions(
+                request,
+                slots,
+                contextual_choice_telemetry=telemetry,
+                contextual_choice_plan=vocabulary_plan,
+            )
+            if contextual_choice and vocabulary_plan is not None:
+                revised_items = list(vocabulary_plan.items)
+                for slot in slots:
+                    if slot.vocabulary_plan_item is not None:
+                        revised_items[slot.vocabulary_plan_item.global_order - 1] = (
+                            slot.vocabulary_plan_item
+                        )
+                vocabulary_plan = PersonalizedVocabularyPlan(
+                    version=vocabulary_plan.version, items=revised_items
+                )
+                self._validate_contextual_choice_plan_authority(request, vocabulary_plan)
+            questions = await self._attach_origin_explanations(
+                request,
+                questions,
+                telemetry=telemetry,
+            )
             questions = sorted(questions, key=lambda item: item.order)
             self._validate(request, questions)
             response = PracticeGenerationResponse(
@@ -623,12 +1114,50 @@ class ReadingVocabularyGenerationService:
                 mode=request.mode,
                 complexity_band=request.complexity_band,
                 questions=questions,
+                vocabulary_plan=vocabulary_plan,
             )
             await self.difficulty_shadow.collect_if_selected(request, response.questions)
-            await self.vocabulary_difficulty_shadow.collect_if_selected(
-                request, response.questions
-            )
+            if not contextual_choice:
+                await self.vocabulary_difficulty_shadow.collect_if_selected(
+                    request, response.questions
+                )
+            if telemetry is not None:
+                logger.info(
+                    "CONTEXTUAL_CHOICE V3 generation completed. request_id=%s "
+                    "generated_item_count=%d plan_generation_calls=%d "
+                    "lexical_validation_calls=%d plan_repair_calls=%d "
+                    "lexical_repair_calls=%d "
+                    "context_generation_calls=%d context_validation_calls=%d "
+                    "context_repair_calls=%d plan_reused=%s total_ai_calls=%d "
+                    "total_generation_latency_ms=%d",
+                    request.request_id,
+                    len(response.questions),
+                    telemetry.plan_generation_calls,
+                    telemetry.lexical_validation_calls,
+                    telemetry.plan_repair_calls,
+                    telemetry.lexical_repair_calls,
+                    telemetry.context_generation_calls,
+                    telemetry.context_validation_calls,
+                    telemetry.context_repair_calls,
+                    telemetry.plan_reused,
+                    telemetry.total_ai_calls,
+                    int((time.perf_counter() - telemetry.started_at) * 1000),
+                )
             return response
+        except _ContextualChoiceContentRejected as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": (
+                        "AI_SCHEMA_INVALID" if exc.stage == "PLAN_AUTHORITY"
+                        else "AI_CONTENT_QUALITY_REJECTED"
+                    ),
+                    "retryable": False,
+                    "message": "Vocabulary lexical plan/context 품질 검증에 실패했습니다.",
+                    "cause": type(exc).__name__,
+                    "stage": exc.stage,
+                },
+            ) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -1014,14 +1543,24 @@ class ReadingVocabularyGenerationService:
         self,
         request: PracticeGenerationRequest,
         slots: list[_QuestionSlot],
+        *,
+        contextual_choice_telemetry: _ContextualChoiceTelemetry | None = None,
+        contextual_choice_plan: PersonalizedVocabularyPlan | None = None,
     ) -> list[PracticeGeneratedQuestion]:
         if request.domain == PracticeDomain.READING:
             return await self._generate_verified_reading_questions(request, slots)
 
         if request.domain == PracticeDomain.VOCABULARY:
             if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                if contextual_choice_telemetry is None:
+                    raise ValueError("CONTEXTUAL_CHOICE requires generation telemetry")
+                if contextual_choice_plan is None:
+                    raise ValueError("CONTEXTUAL_CHOICE requires a daily plan")
                 return await self._generate_verified_contextual_choice_questions(
-                    request, slots
+                    request,
+                    slots,
+                    contextual_choice_telemetry,
+                    contextual_choice_plan,
                 )
             if request.mode == VocabularyMode.USAGE_DISTINCTION.value:
                 return await self._generate_verified_usage_distinction_questions(request, slots)
@@ -1151,19 +1690,1557 @@ class ReadingVocabularyGenerationService:
 
         return [accepted[order] for order in sorted(accepted)]
 
+    async def _resolve_contextual_choice_plan(
+        self,
+        request: PracticeGenerationRequest,
+        telemetry: _ContextualChoiceTelemetry,
+    ) -> PersonalizedVocabularyPlan:
+        if request.vocabulary_plan is not None:
+            try:
+                self._validate_contextual_choice_plan_authority(
+                    request,
+                    request.vocabulary_plan,
+                )
+            except ValueError as exc:
+                raise _ContextualChoiceContentRejected(
+                    str(exc), stage="PLAN_AUTHORITY"
+                ) from exc
+            telemetry.plan_reused = True
+            logger.info(
+                "CONTEXTUAL_CHOICE V3 persisted plan reused. request_id=%s plan_reused=true",
+                request.request_id,
+            )
+            return request.vocabulary_plan
+        if request.previous_questions:
+            raise _ContextualChoiceContentRejected(
+                "CONTEXTUAL_CHOICE progressive request is missing persisted vocabularyPlan",
+                stage="PLAN_AUTHORITY",
+            )
+
+        daily_request = self._contextual_choice_daily_request(request)
+        daily_slots = self._build_slots(daily_request, {})
+        slot_by_order = {slot.order: slot for slot in daily_slots}
+        slot_payloads = [
+            self._contextual_choice_plan_slot_payload(slot)
+            for slot in daily_slots
+        ]
+        raw = await self._contextual_choice_provider_call(
+            request,
+            telemetry,
+            counter="plan_generation_calls",
+            stage="plan_generation",
+            type_name=self.TYPE_NAME,
+            data=build_contextual_choice_plan_generation_prompt(
+                request,
+                slots=slot_payloads,
+            ),
+            schema=_CONTEXTUAL_CHOICE_PLAN_GENERATION_SCHEMA,
+        )
+        try:
+            payload = _ContextualChoicePlanGenerationPayload.model_validate(raw)
+        except ValidationError as exc:
+            self._log_contextual_choice_lexical_rejection(
+                request, 0, "structural_initial", ["FINAL_PLAN_AUTHORITY"]
+            )
+            raise _ContextualChoiceContentRejected(
+                "CONTEXTUAL_CHOICE plan response is structurally invalid",
+                stage="PLAN_STRUCTURE",
+            ) from exc
+        raw_items = list(payload.items)
+        if any(type(item.get("globalOrder")) is not int
+               or item["globalOrder"] not in range(1, 11) for item in raw_items):
+            self._log_contextual_choice_lexical_rejection(
+                request, 0, "structural_initial", ["FINAL_PLAN_AUTHORITY"]
+            )
+            raise _ContextualChoiceContentRejected(
+                "CONTEXTUAL_CHOICE plan contains an unknown global order",
+                stage="PLAN_STRUCTURE",
+            )
+        normalized, deterministic_failures = self._normalize_contextual_choice_plan_items(
+            request,
+            raw_items,
+            slot_by_order,
+        )
+        failures = deterministic_failures
+
+        if failures:
+            for order, reason in sorted(failures.items()):
+                self._log_contextual_choice_lexical_rejection(
+                    request, order, "structural_initial",
+                    [self._contextual_choice_structural_reason_code(reason)],
+                )
+            repair_slots = [
+                self._contextual_choice_plan_slot_payload(slot_by_order[order])
+                for order in sorted(failures)
+                if order in slot_by_order
+            ]
+            if len(repair_slots) != len(failures):
+                raise _ContextualChoiceContentRejected(
+                    "CONTEXTUAL_CHOICE plan contains unknown orders",
+                    stage="PLAN_STRUCTURE",
+                )
+            repair_raw = await self._contextual_choice_provider_call(
+                request,
+                telemetry,
+                counter="plan_repair_calls",
+                stage="plan_repair",
+                type_name=self.TYPE_NAME,
+                data=build_contextual_choice_plan_generation_prompt(
+                    request,
+                    slots=repair_slots,
+                    existing_plan_items=[
+                        item.model_dump(mode="json", by_alias=True)
+                        for order, item in sorted(normalized.items())
+                        if order not in failures
+                    ],
+                    repair_reasons=failures,
+                ),
+                schema=_CONTEXTUAL_CHOICE_PLAN_GENERATION_SCHEMA,
+            )
+            try:
+                repaired_payload = _ContextualChoicePlanGenerationPayload.model_validate(
+                    repair_raw
+                )
+            except ValidationError as exc:
+                raise _ContextualChoiceContentRejected(
+                    "CONTEXTUAL_CHOICE structural repair response is invalid",
+                    stage="PLAN_STRUCTURE",
+                ) from exc
+            if {item.get("globalOrder") for item in repaired_payload.items} != set(failures) or len(repaired_payload.items) != len(failures):
+                raise _ContextualChoiceContentRejected(
+                    "CONTEXTUAL_CHOICE structural repair changed non-invalid plan orders",
+                    stage="PLAN_STRUCTURE",
+                )
+            raw_by_order = {
+                item.get("globalOrder"): item
+                for item in raw_items
+                if isinstance(item.get("globalOrder"), int)
+            }
+            for item in repaired_payload.items:
+                order = item.get("globalOrder")
+                if isinstance(order, int):
+                    raw_by_order[order] = item
+            normalized, repair_deterministic_failures = (
+                self._normalize_contextual_choice_plan_items(
+                    request,
+                    list(raw_by_order.values()),
+                    slot_by_order,
+                )
+            )
+            if repair_deterministic_failures:
+                for order, reason in sorted(repair_deterministic_failures.items()):
+                    self._log_contextual_choice_lexical_rejection(
+                        request, order, "structural_repair",
+                        [self._contextual_choice_structural_reason_code(reason)],
+                    )
+                raise _ContextualChoiceContentRejected(
+                    "CONTEXTUAL_CHOICE plan repair failed deterministic validation "
+                    f"orders={sorted(repair_deterministic_failures)}",
+                    stage="PLAN_STRUCTURE",
+                )
+
+        if set(normalized) != set(range(1, 11)):
+            raise _ContextualChoiceContentRejected(
+                "CONTEXTUAL_CHOICE plan must contain global orders 1..10",
+                stage="PLAN_STRUCTURE",
+            )
+        plan = PersonalizedVocabularyPlan(
+            version=CONTEXTUAL_CHOICE_PLAN_VERSION,
+            items=[normalized[order] for order in range(1, 11)],
+        )
+        try:
+            self._validate_contextual_choice_plan_authority(request, plan)
+        except ValueError as exc:
+            raise _ContextualChoiceContentRejected(
+                str(exc), stage="PLAN_STRUCTURE"
+            ) from exc
+        return plan
+
+    def _contextual_choice_daily_request(
+        self,
+        request: PracticeGenerationRequest,
+    ) -> PracticeGenerationRequest:
+        eligible_reviews = self._eligible_review_targets(request, log_rejections=False)
+        review_count = min(len(eligible_reviews), 2)
+        return request.model_copy(
+            update={
+                "question_count": 10,
+                "easier_count": 2,
+                "current_count": 6,
+                "challenge_count": 2,
+                "review_question_count": review_count,
+                "previous_questions": [],
+                "vocabulary_plan": None,
+            }
+        )
+
+    @staticmethod
+    def _contextual_choice_plan_slot_payload(slot: _QuestionSlot) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "globalOrder": slot.order,
+            "reviewTarget": slot.review_target,
+            "skillTag": slot.skill_tag,
+            "difficulty": slot.difficulty.value,
+            "complexityBand": slot.complexity_band,
+            "scenarioFamily": slot.scenario_family,
+        }
+        if slot.review_target:
+            payload["boundReviewTarget"] = {
+                "targetExpression": slot.review_expression,
+                "canonicalKey": slot.review_canonical_key,
+            }
+        return payload
+
+    def _normalize_contextual_choice_plan_items(
+        self,
+        request: PracticeGenerationRequest,
+        raw_items: list[dict[str, Any]],
+        slot_by_order: dict[int, _QuestionSlot],
+    ) -> tuple[dict[int, VocabularyPlanItem], dict[int, str]]:
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for raw_item in raw_items:
+            order = raw_item.get("globalOrder")
+            if isinstance(order, int):
+                grouped.setdefault(order, []).append(raw_item)
+
+        normalized: dict[int, VocabularyPlanItem] = {}
+        failures: dict[int, str] = {}
+        review_keys = {
+            target.canonical_key for target in request.review_targets
+        }
+        review_targets = {
+            self._normalize_for_leak_check(target.expression)
+            for target in request.review_targets
+        }
+        signal_values = {
+            VocabularyPlanAnchorType.SELECTED_KEYWORD: set(request.selected_keywords),
+            VocabularyPlanAnchorType.WEAK_SIGNAL: set(request.weak_signals),
+            VocabularyPlanAnchorType.RECENT_MISTAKE: set(request.recent_mistakes),
+            VocabularyPlanAnchorType.LEARNING_PROFILE: {request.learning_language},
+        }
+        for order, slot in sorted(slot_by_order.items()):
+            candidates = grouped.get(order, [])
+            if len(candidates) != 1:
+                failures[order] = "plan item coverage must be exactly one"
+                continue
+            item = candidates[0]
+            try:
+                if slot.review_target:
+                    target_expression = (slot.review_expression or "").strip()
+                    canonical_key = (slot.review_canonical_key or "").strip()
+                    anchor_type = None
+                    anchor_value = None
+                else:
+                    raw_target = item.get("targetExpression")
+                    if not isinstance(raw_target, str) or not raw_target.strip():
+                        raise ValueError("new plan item requires targetExpression")
+                    target_expression = raw_target.strip()
+                    canonical_key = self._canonical_key_for_expression(
+                        target_expression
+                    )
+                    anchor_type = VocabularyPlanAnchorType(item.get("anchorType"))
+                    raw_anchor = item.get("anchorValue")
+                    if not isinstance(raw_anchor, str) or not raw_anchor.strip():
+                        raise ValueError("new plan item requires anchorValue")
+                    anchor_value = raw_anchor.strip()
+                    if anchor_value not in signal_values[anchor_type]:
+                        raise ValueError(
+                            "new plan anchorValue is not present in the request signal"
+                        )
+                    if (
+                        anchor_type == VocabularyPlanAnchorType.LEARNING_PROFILE
+                        and any(
+                            (
+                                request.selected_keywords,
+                                request.weak_signals,
+                                request.recent_mistakes,
+                            )
+                        )
+                    ):
+                        raise ValueError(
+                            "LEARNING_PROFILE anchor is only allowed without learner signals"
+                        )
+                    if (
+                        canonical_key in review_keys
+                        or self._normalize_for_leak_check(target_expression)
+                        in review_targets
+                    ):
+                        raise ValueError("new plan target reuses a review identity")
+
+                self._assert_vocabulary_surface_language(
+                    request.learning_language,
+                    target_expression,
+                    reason="CONTEXTUAL_CHOICE plan target is not in learningLanguage",
+                )
+                raw_distractors = item.get("distractors")
+                if not isinstance(raw_distractors, list) or len(raw_distractors) != 3:
+                    raise ValueError("plan item requires exactly three distractors")
+                distractors: list[str] = []
+                seen = {self._normalize_for_leak_check(target_expression)}
+                for raw_distractor in raw_distractors:
+                    if not isinstance(raw_distractor, str) or not raw_distractor.strip():
+                        raise ValueError("plan distractor must be a non-empty string")
+                    distractor = raw_distractor.strip()
+                    self._assert_vocabulary_surface_language(
+                        request.learning_language,
+                        distractor,
+                        reason="CONTEXTUAL_CHOICE plan distractor is not in learningLanguage",
+                    )
+                    normalized_distractor = self._normalize_for_leak_check(distractor)
+                    if normalized_distractor in seen:
+                        raise ValueError(
+                            "plan distractors must be distinct from target and each other"
+                        )
+                    seen.add(normalized_distractor)
+                    distractors.append(distractor)
+                normalized[order] = VocabularyPlanItem(
+                    global_order=order,
+                    review_target=slot.review_target,
+                    target_expression=target_expression,
+                    canonical_key=canonical_key,
+                    distractors=distractors,
+                    skill_tag=cast(
+                        Literal[
+                            "MEANING",
+                            "COLLOCATION",
+                            "NUANCE",
+                            "REGISTER",
+                            "PRAGMATIC_FIT",
+                        ],
+                        slot.skill_tag,
+                    ),
+                    difficulty=slot.difficulty,
+                    complexity_band=slot.complexity_band,
+                    scenario_family=slot.scenario_family,
+                    anchor_type=anchor_type,
+                    anchor_value=anchor_value,
+                )
+            except (TypeError, ValueError, ValidationError) as exc:
+                failures[order] = str(exc)[:300]
+
+        target_orders: dict[str, list[int]] = {}
+        canonical_orders: dict[str, list[int]] = {}
+        for order, item in normalized.items():
+            target_orders.setdefault(
+                self._normalize_for_leak_check(item.target_expression), []
+            ).append(order)
+            canonical_orders.setdefault(item.canonical_key, []).append(order)
+        for duplicate_orders in [*target_orders.values(), *canonical_orders.values()]:
+            if len(duplicate_orders) > 1:
+                for order in duplicate_orders:
+                    failures[order] = "plan target/canonical duplicate"
+                    normalized.pop(order, None)
+        if request.selected_keywords and not any(
+            item.anchor_type == VocabularyPlanAnchorType.SELECTED_KEYWORD
+            for item in normalized.values()
+            if not item.review_target
+        ):
+            first_new_order = next(
+                (
+                    order
+                    for order, slot in sorted(slot_by_order.items())
+                    if not slot.review_target
+                ),
+                None,
+            )
+            if first_new_order is not None:
+                failures[first_new_order] = (
+                    "at least one New plan item must be anchored to selectedKeywords"
+                )
+                normalized.pop(first_new_order, None)
+        return normalized, failures
+
+    @staticmethod
+    def _contextual_choice_structural_reason_code(reason: str) -> str:
+        lowered = reason.lower()
+        if "review" in lowered:
+            return "REVIEW_AUTHORITY"
+        if "anchor" in lowered or "selectedkeyword" in lowered:
+            return "ANCHOR_AUTHORITY"
+        if "duplicate" in lowered or "distinct" in lowered:
+            return "STRUCTURAL_DUPLICATE"
+        if "distractor" in lowered:
+            return "STRUCTURAL_DISTRACTOR"
+        if "target" in lowered or "canonical" in lowered:
+            return "STRUCTURAL_TARGET"
+        return "FINAL_PLAN_AUTHORITY"
+
+    @staticmethod
+    def _log_contextual_choice_lexical_rejection(
+        request: PracticeGenerationRequest,
+        order: int,
+        phase: str,
+        reason_codes: list[str],
+        invalid_distractor_indexes: list[int] | None = None,
+    ) -> None:
+        logger.info(
+            "CONTEXTUAL_CHOICE V3.3 lexical validation rejected. "
+            "request_id=%s global_order=%d phase=%s reason_codes=%s "
+            "invalid_distractor_indexes=%s",
+            request.request_id, order, phase, sorted(set(reason_codes)),
+            sorted(set(invalid_distractor_indexes or [])),
+        )
+
+    async def _verify_contextual_choice_plan_item(
+        self,
+        request: PracticeGenerationRequest,
+        telemetry: _ContextualChoiceTelemetry,
+        item: VocabularyPlanItem,
+        accepted: dict[int, PracticeGeneratedQuestion],
+    ) -> _ContextualChoiceLexicalAssessment:
+        demand = vocabulary_difficulty_recipe(
+            mode=VocabularyMode.CONTEXTUAL_CHOICE.value,
+            band=item.complexity_band,
+            skill_tag=item.skill_tag,
+            question_type=PracticeQuestionType.SINGLE_CHOICE.value,
+        ).demand
+        if not isinstance(demand, ContextualChoiceDemand):
+            raise ValueError("CONTEXTUAL_CHOICE requires contextual-choice demand")
+        previous = [*request.previous_questions, *accepted.values()]
+        raw = await self._contextual_choice_provider_call(
+            request,
+            telemetry,
+            counter="lexical_validation_calls",
+            stage="lexical_validation",
+            type_name=self.CONTEXTUAL_CHOICE_PLAN_VERIFICATION_TYPE_NAME,
+            data=build_contextual_choice_plan_verification_prompt(
+                request,
+                plan_item=item.model_dump(mode="json", by_alias=True),
+                structural_demand=demand.generation_payload(),
+                previous_lexical_identities=[
+                    {
+                        "canonicalKey": question.canonical_key,
+                        "targetExpression": question.target_expression,
+                        "skillTag": question.skill_tag,
+                    }
+                    for question in previous
+                ],
+            ),
+            schema=_contextual_choice_plan_verification_schema(
+                demand.decisive_dimensions
+            ),
+        )
+        payload = _ContextualChoicePlanVerificationPayload.model_validate(raw)
+        if len(payload.verdicts) != 1 or payload.verdicts[0].globalOrder != item.global_order:
+            raise ValueError("CONTEXTUAL_CHOICE plan verifier coverage mismatch")
+        verdict = payload.verdicts[0]
+        if len(verdict.distractors) != 3 or {
+            distractor.index for distractor in verdict.distractors
+        } != {0, 1, 2}:
+            raise ValueError("CONTEXTUAL_CHOICE distractor verifier coverage mismatch")
+        # The verifier's reasonCode/reason are diagnostic only. All rejection and
+        # repair authority below is derived from the structured boolean verdicts.
+        codes: list[str] = []
+        invalid_indexes: set[int] = set()
+        if not verdict.targetExpressionWellFormed:
+            codes.append("NATURAL_TARGET")
+        if not verdict.learningValue:
+            codes.append("LEARNING_VALUE")
+        if not verdict.sameSurfaceCategory:
+            codes.append("SAME_SURFACE_CATEGORY")
+        required_decisive_dimensions = set(demand.decisive_dimensions)
+        covered_decisive_dimensions = set(verdict.coveredDecisiveDimensions)
+        bundle_dimension_match = bool(
+            covered_decisive_dimensions & required_decisive_dimensions
+        ) and covered_decisive_dimensions <= required_decisive_dimensions
+        if not verdict.skillContrastSupported or not bundle_dimension_match:
+            codes.append("SKILL_FIT")
+        if verdict.definitionOnly:
+            codes.append("DEFINITION_ONLY")
+        if verdict.lexicalConceptRepeated and not item.review_target:
+            codes.append("LEXICAL_REPEAT")
+        if verdict.rareOrTrivia:
+            codes.append("RARE_OR_TRIVIA")
+        required_close_count = contextual_choice_required_close_distractors(
+            demand.minimum_close_distractors,
+            review_target=item.review_target,
+        )
+        repair_evidence = tuple(
+            _ContextualChoiceDistractorRepairEvidence(
+                index=distractor.index,
+                expression_well_formed=distractor.expressionWellFormed,
+                same_surface_category=distractor.sameSurfaceCategory,
+                bundle_relevant=distractor.bundleRelevant,
+                close_competitor=distractor.closeCompetitor,
+                malformed_by_grammar=distractor.malformedByGrammar,
+                skill_contrast_relevant=distractor.skillContrastRelevant,
+                covered_decisive_dimensions=(
+                    distractor.coveredDecisiveDimensions
+                ),
+            )
+            for distractor in sorted(
+                verdict.distractors,
+                key=lambda candidate: candidate.index,
+            )
+        )
+        close_competitor_indexes: set[int] = set()
+        for distractor in verdict.distractors:
+            index = distractor.index
+            base_valid = True
+            if not distractor.expressionWellFormed:
+                codes.append("DISTRACTOR_UNNATURAL")
+                invalid_indexes.add(index)
+                base_valid = False
+            if not distractor.sameSurfaceCategory:
+                codes.append("DISTRACTOR_SURFACE_MISMATCH")
+                invalid_indexes.add(index)
+                base_valid = False
+            if distractor.malformedByGrammar:
+                codes.append("DISTRACTOR_GRAMMAR_ONLY")
+                invalid_indexes.add(index)
+                base_valid = False
+            if not distractor.bundleRelevant:
+                codes.append("DISTRACTOR_NOT_PLAUSIBLE")
+                invalid_indexes.add(index)
+                base_valid = False
+            distractor_dimensions = set(
+                distractor.coveredDecisiveDimensions
+            )
+            distractor_dimension_match = bool(
+                distractor_dimensions & required_decisive_dimensions
+            ) and distractor_dimensions <= required_decisive_dimensions
+            if (
+                not distractor.skillContrastRelevant
+                or not distractor_dimension_match
+            ):
+                codes.append("DISTRACTOR_SKILL_MISMATCH")
+                invalid_indexes.add(index)
+                base_valid = False
+            if base_valid and distractor.closeCompetitor:
+                close_competitor_indexes.add(index)
+        if len(close_competitor_indexes) < required_close_count:
+            codes.append("INSUFFICIENT_CLOSE_DISTRACTORS")
+            projected_close_count = len(close_competitor_indexes) + len(
+                invalid_indexes
+            )
+            additional_indexes_needed = max(
+                0,
+                required_close_count - projected_close_count,
+            )
+            nonclose_valid_indexes = [
+                distractor.index
+                for distractor in verdict.distractors
+                if distractor.index not in invalid_indexes
+                and distractor.index not in close_competitor_indexes
+            ]
+            invalid_indexes.update(
+                nonclose_valid_indexes[:additional_indexes_needed]
+            )
+        additional_close_needed = max(
+            0,
+            required_close_count - len(close_competitor_indexes),
+        )
+        close_required_replacement_indexes = tuple(
+            sorted(invalid_indexes)[:additional_close_needed]
+        )
+        return _ContextualChoiceLexicalAssessment(
+            reason_codes=tuple(dict.fromkeys(codes)),
+            invalid_distractor_indexes=tuple(sorted(invalid_indexes)),
+            preserve_new_target=(
+                verdict.targetExpressionWellFormed and verdict.learningValue
+                and verdict.targetViableWithDifferentDistractors
+            ),
+            distractor_repair_evidence=repair_evidence,
+            required_close_distractors=required_close_count,
+            current_valid_close_distractor_count=len(close_competitor_indexes),
+            additional_close_distractors_needed=additional_close_needed,
+            close_required_replacement_indexes=close_required_replacement_indexes,
+            skill=demand.skill,
+            decisive_dimensions=demand.decisive_dimensions,
+        )
+
+    def _validate_contextual_choice_plan_authority(
+        self,
+        request: PracticeGenerationRequest,
+        plan: PersonalizedVocabularyPlan,
+    ) -> None:
+        if plan.version != CONTEXTUAL_CHOICE_PLAN_VERSION:
+            raise ValueError("CONTEXTUAL_CHOICE vocabularyPlan version mismatch")
+        review_by_key = {
+            target.canonical_key: target for target in request.review_targets
+        }
+        review_orders = [
+            item.global_order for item in plan.items if item.review_target
+        ]
+        expected_review_count = (
+            len(review_orders)
+            if request.previous_questions
+            else min(
+                len(self._eligible_review_targets(request, log_rejections=False)),
+                2,
+            )
+        )
+        if review_orders != list(range(1, expected_review_count + 1)):
+            raise ValueError("vocabularyPlan review slot authority mismatch")
+        new_index = 0
+        seen_targets: set[str] = set()
+        seen_canonical: set[str] = set()
+        for item in plan.items:
+            expected_band = self._band_for(request, item.difficulty)
+            if item.complexity_band != expected_band:
+                raise ValueError("vocabularyPlan complexityBand authority mismatch")
+            if item.canonical_key != self._canonical_key_for_expression(
+                item.target_expression
+            ) and not item.review_target:
+                raise ValueError("vocabularyPlan canonicalKey normalization mismatch")
+            normalized_target = self._normalize_for_leak_check(item.target_expression)
+            if normalized_target in seen_targets or item.canonical_key in seen_canonical:
+                raise ValueError("vocabularyPlan target/canonical duplicate")
+            seen_targets.add(normalized_target)
+            seen_canonical.add(item.canonical_key)
+            if item.review_target:
+                review = review_by_key.get(item.canonical_key)
+                if review is None or review.expression != item.target_expression:
+                    raise ValueError("vocabularyPlan review identity mismatch")
+                if item.skill_tag != (review.preferred_skill or VocabularySkill.MEANING.value):
+                    raise ValueError("vocabularyPlan review preferredSkill mismatch")
+            else:
+                expected_scenario = contextual_choice_scenario_family(new_index)
+                new_index += 1
+                if item.scenario_family != expected_scenario:
+                    raise ValueError("vocabularyPlan scenarioFamily authority mismatch")
+                if item.anchor_type is None or item.anchor_value is None:
+                    raise ValueError("vocabularyPlan new item requires anchor metadata")
+                signals = {
+                    VocabularyPlanAnchorType.SELECTED_KEYWORD: request.selected_keywords,
+                    VocabularyPlanAnchorType.WEAK_SIGNAL: request.weak_signals,
+                    VocabularyPlanAnchorType.RECENT_MISTAKE: request.recent_mistakes,
+                    VocabularyPlanAnchorType.LEARNING_PROFILE: [
+                        request.learning_language
+                    ],
+                }
+                if item.anchor_value not in signals[item.anchor_type]:
+                    raise ValueError("vocabularyPlan anchor membership mismatch")
+                if (
+                    item.anchor_type == VocabularyPlanAnchorType.LEARNING_PROFILE
+                    and any(
+                        (
+                            request.selected_keywords,
+                            request.weak_signals,
+                            request.recent_mistakes,
+                        )
+                    )
+                ):
+                    raise ValueError("vocabularyPlan profile fallback is not allowed")
+            self._validate_contextual_choice_plan_distractors(request, item)
+        for question in request.previous_questions:
+            item = plan.items[question.order - 1]
+            correct_key = contextual_choice_answer_key(question.order)
+            expected_options = list(item.distractors)
+            expected_options.insert(
+                CONTEXTUAL_CHOICE_ANSWER_KEYS.index(correct_key),
+                item.target_expression,
+            )
+            if (
+                question.target_expression != item.target_expression
+                or question.canonical_key != item.canonical_key
+                or question.skill_tag != item.skill_tag
+                or question.difficulty != item.difficulty
+                or question.complexity_band != item.complexity_band
+                or question.review_target != item.review_target
+                or question.correct_answer != [correct_key]
+                or [(option.key, option.text) for option in question.options]
+                != list(zip(CONTEXTUAL_CHOICE_ANSWER_KEYS, expected_options, strict=True))
+            ):
+                raise ValueError("vocabularyPlan accepted prefix identity mismatch")
+
+    def _validate_contextual_choice_plan_distractors(
+        self,
+        request: PracticeGenerationRequest,
+        item: VocabularyPlanItem,
+    ) -> None:
+        self._assert_vocabulary_surface_language(
+            request.learning_language,
+            item.target_expression,
+            reason="CONTEXTUAL_CHOICE plan target is not in learningLanguage",
+        )
+        seen = {self._normalize_for_leak_check(item.target_expression)}
+        for distractor in item.distractors:
+            self._assert_vocabulary_surface_language(
+                request.learning_language,
+                distractor,
+                reason="CONTEXTUAL_CHOICE plan distractor is not in learningLanguage",
+            )
+            normalized = self._normalize_for_leak_check(distractor)
+            if not normalized or normalized in seen:
+                raise ValueError("vocabularyPlan distractor identity mismatch")
+            seen.add(normalized)
+
+    def _contextual_choice_slots_from_plan(
+        self,
+        request: PracticeGenerationRequest,
+        plan: PersonalizedVocabularyPlan,
+    ) -> list[_QuestionSlot]:
+        by_order = {item.global_order: item for item in plan.items}
+        review_by_key = {
+            target.canonical_key: target for target in request.review_targets
+        }
+        slots: list[_QuestionSlot] = []
+        for local_order in range(1, request.question_count + 1):
+            global_order = request.question_offset + local_order
+            item = by_order[global_order]
+            review = review_by_key.get(item.canonical_key) if item.review_target else None
+            slots.append(
+                _QuestionSlot(
+                    order=local_order,
+                    difficulty=item.difficulty,
+                    complexity_band=item.complexity_band,
+                    skill_tag=item.skill_tag,
+                    question_type=PracticeQuestionType.SINGLE_CHOICE,
+                    review_canonical_key=item.canonical_key if item.review_target else None,
+                    review_expression=item.target_expression if item.review_target else None,
+                    previous_question_types=tuple(
+                        question_type.value
+                        for question_type in (review.previous_question_types if review else [])
+                    ),
+                    vocabulary_mode=VocabularyMode.CONTEXTUAL_CHOICE.value,
+                    scenario_family=item.scenario_family,
+                    vocabulary_plan_item=item,
+                )
+            )
+        return slots
+
+    async def _contextual_choice_provider_call(
+        self,
+        request: PracticeGenerationRequest,
+        telemetry: _ContextualChoiceTelemetry,
+        *,
+        counter: str,
+        stage: str,
+        type_name: str,
+        data: str,
+        schema: dict[str, Any],
+    ) -> Any:
+        setattr(telemetry, counter, getattr(telemetry, counter) + 1)
+        started = time.perf_counter()
+        try:
+            return await asyncio.wait_for(
+                self.provider.call(type_name=type_name, data=data, schema=schema),
+                timeout=self.timeout_seconds,
+            )
+        finally:
+            logger.info(
+                "CONTEXTUAL_CHOICE V3 stage completed. request_id=%s stage=%s latency_ms=%d",
+                request.request_id,
+                stage,
+                int((time.perf_counter() - started) * 1000),
+            )
+
+    async def _repair_contextual_choice_lexical_item(
+        self,
+        request: PracticeGenerationRequest,
+        telemetry: _ContextualChoiceTelemetry,
+        plan: PersonalizedVocabularyPlan,
+        item: VocabularyPlanItem,
+        lexical_assessment: _ContextualChoiceLexicalAssessment,
+        reason_codes: list[str],
+        *,
+        invalid_distractor_indexes: list[int] | None = None,
+        preserve_target: bool = False,
+        repair_trigger: str = "LEXICAL_VALIDATION",
+    ) -> VocabularyPlanItem:
+        preserve_target = preserve_target or item.review_target
+        requested_indexes = sorted(set(invalid_distractor_indexes or []))
+        if any(index not in range(3) for index in requested_indexes):
+            raise ValueError("lexical repair index is outside the current distractor bundle")
+        if preserve_target and requested_indexes:
+            repair_scope = "DISTRACTOR_INDEXES"
+            allowed_indexes = requested_indexes
+        elif preserve_target:
+            repair_scope = "FULL_DISTRACTOR_SET"
+            allowed_indexes = [0, 1, 2]
+        else:
+            repair_scope = "FULL_LEXICAL_BUNDLE"
+            allowed_indexes = [0, 1, 2]
+        evidence_by_index = {
+            evidence.index: evidence
+            for evidence in lexical_assessment.distractor_repair_evidence
+        }
+        forbidden_expressions = list(
+            dict.fromkeys([item.target_expression, *item.distractors])
+        )
+        repair_evidence: dict[str, object] = {
+            "forbiddenExpressions": forbidden_expressions,
+            "distractorEvidence": {
+                str(index): evidence_by_index[index].prompt_payload()
+                for index in allowed_indexes
+            },
+            "requiredCloseDistractors": (
+                lexical_assessment.required_close_distractors
+            ),
+            "currentValidCloseDistractorCount": (
+                lexical_assessment.current_valid_close_distractor_count
+            ),
+            "additionalCloseDistractorsNeeded": (
+                lexical_assessment.additional_close_distractors_needed
+            ),
+            "repairRequirements": {
+                str(index): {
+                    "mustBeNonEmpty": True,
+                    "mustUseLearningLanguage": True,
+                    "mustDifferFromPrevious": True,
+                    "mustDifferFromTarget": True,
+                    "mustDifferFromPreservedDistractors": True,
+                    "mustBeExpressionWellFormed": True,
+                    "mustBeSameSurfaceCategory": True,
+                    "mustBeBundleRelevant": True,
+                    "mustBeSkillContrastRelevant": True,
+                    "mustBeMalformedByGrammar": False,
+                    "mustBeCloseCompetitor": index
+                    in lexical_assessment.close_required_replacement_indexes,
+                }
+                for index in allowed_indexes
+            },
+            "skillDemand": {
+                "skill": lexical_assessment.skill,
+                "decisiveDimensions": list(
+                    lexical_assessment.decisive_dimensions
+                ),
+            },
+            "authority": "APPLICATION_DERIVED_FROM_STRUCTURED_VERDICT",
+        }
+        raw = await self._contextual_choice_provider_call(
+            request,
+            telemetry,
+            counter="lexical_repair_calls",
+            stage="lexical_repair",
+            type_name=self.TYPE_NAME,
+            data=build_contextual_choice_lexical_repair_prompt(
+                request,
+                plan_item=item.model_dump(mode="json", by_alias=True),
+                reason_codes=reason_codes,
+                invalid_distractor_indexes=allowed_indexes,
+                preserve_target=preserve_target,
+                repair_scope=repair_scope,
+                repair_trigger=repair_trigger,
+                repair_evidence=repair_evidence,
+                other_canonical_keys=[
+                    other.canonical_key for other in plan.items
+                    if other.global_order != item.global_order
+                ],
+            ),
+            schema=_contextual_choice_lexical_repair_schema(
+                global_order=item.global_order,
+                allowed_indexes=allowed_indexes,
+            ),
+        )
+        try:
+            try:
+                payload = _ContextualChoiceLexicalRepairPayload.model_validate(raw)
+            except (TypeError, ValidationError) as exc:
+                raise _ContextualChoiceLexicalRepairContractError(
+                    "LEXICAL_REPAIR_RESPONSE_SCHEMA_INVALID"
+                ) from exc
+            if payload.globalOrder != item.global_order:
+                raise _ContextualChoiceLexicalRepairContractError(
+                    "LEXICAL_REPAIR_ORDER_MISMATCH"
+                )
+            raw_target = payload.targetExpression
+            if preserve_target:
+                if raw_target is not None:
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_TARGET_AUTHORITY_VIOLATION"
+                    )
+                target = item.target_expression
+                canonical = item.canonical_key
+            else:
+                if not isinstance(raw_target, str) or not raw_target.strip():
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_TARGET_AUTHORITY_VIOLATION"
+                    )
+                target = raw_target.strip()
+                if self._normalize_contextual_choice_repair_identity(
+                    target
+                ) == self._normalize_contextual_choice_repair_identity(
+                    item.target_expression
+                ):
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_TARGET_AUTHORITY_VIOLATION"
+                    )
+                try:
+                    self._assert_vocabulary_surface_language(
+                        request.learning_language,
+                        target,
+                        reason="lexical repair target is not in learningLanguage",
+                    )
+                except ValueError as exc:
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_LANGUAGE_INVALID"
+                    ) from exc
+                canonical = self._canonical_key_for_expression(target)
+            replacement_indexes = [
+                replacement.index for replacement in payload.distractorReplacements
+            ]
+            if (
+                len(replacement_indexes) != len(set(replacement_indexes))
+                or sorted(replacement_indexes) != allowed_indexes
+            ):
+                raise _ContextualChoiceLexicalRepairContractError(
+                    "LEXICAL_REPAIR_SCOPE_MISMATCH"
+                )
+            distractors = list(item.distractors)
+            normalized_target = self._normalize_contextual_choice_repair_identity(
+                target
+            )
+            previous_distractor_identities = {
+                index: self._normalize_contextual_choice_repair_identity(distractor)
+                for index, distractor in enumerate(item.distractors)
+            }
+            replacement_identities: set[str] = set()
+            for replacement in payload.distractorReplacements:
+                replacement_text = replacement.text.strip()
+                if not replacement_text:
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_EMPTY_DISTRACTOR",
+                        index=replacement.index,
+                    )
+                replacement_identity = (
+                    self._normalize_contextual_choice_repair_identity(replacement_text)
+                )
+                if replacement_identity == previous_distractor_identities[
+                    replacement.index
+                ]:
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_UNCHANGED_DISTRACTOR",
+                        index=replacement.index,
+                    )
+                if replacement_identity == normalized_target:
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_DUPLICATE_TARGET",
+                        index=replacement.index,
+                    )
+                if (
+                    replacement_identity in {
+                        identity
+                        for index, identity in previous_distractor_identities.items()
+                        if index != replacement.index
+                    }
+                    or replacement_identity in replacement_identities
+                ):
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_DUPLICATE_DISTRACTOR",
+                        index=replacement.index,
+                    )
+                try:
+                    self._assert_vocabulary_surface_language(
+                        request.learning_language,
+                        replacement_text,
+                        reason="lexical repair distractor is not in learningLanguage",
+                    )
+                except ValueError as exc:
+                    raise _ContextualChoiceLexicalRepairContractError(
+                        "LEXICAL_REPAIR_LANGUAGE_INVALID",
+                        index=replacement.index,
+                    ) from exc
+                replacement_identities.add(replacement_identity)
+                distractors[replacement.index] = replacement_text
+            try:
+                revised = VocabularyPlanItem.model_validate({
+                    **item.model_dump(mode="json", by_alias=True),
+                    "targetExpression": target,
+                    "canonicalKey": canonical,
+                    "distractors": distractors,
+                })
+            except ValidationError as exc:
+                raise _ContextualChoiceLexicalRepairContractError(
+                    "LEXICAL_REPAIR_PLAN_AUTHORITY_VIOLATION"
+                ) from exc
+            revised_items = list(plan.items)
+            revised_items[item.global_order - 1] = revised
+            try:
+                self._validate_contextual_choice_plan_authority(
+                    request,
+                    PersonalizedVocabularyPlan(version=plan.version, items=revised_items),
+                )
+            except (TypeError, ValueError, ValidationError) as exc:
+                raise _ContextualChoiceLexicalRepairContractError(
+                    "LEXICAL_REPAIR_PLAN_AUTHORITY_VIOLATION"
+                ) from exc
+            logger.info(
+                "CONTEXTUAL_CHOICE V3.3 lexical repair applied. "
+                "request_id=%s global_order=%d repair_scope=%s "
+                "changed_distractor_indexes=%s target_changed=%s",
+                request.request_id,
+                item.global_order,
+                repair_scope,
+                allowed_indexes,
+                target != item.target_expression,
+            )
+            return revised
+        except _ContextualChoiceLexicalRepairContractError as exc:
+            self._log_contextual_choice_lexical_rejection(
+                request, item.global_order, "repair",
+                [exc.reason_code],
+                [] if exc.index is None else [exc.index],
+            )
+            raise _ContextualChoiceContentRejected(
+                f"CONTEXTUAL_CHOICE lexical repair failed structural validation order={item.global_order}",
+                stage="LEXICAL_VALIDATION",
+            ) from exc
+
     async def _generate_verified_contextual_choice_questions(
         self,
         request: PracticeGenerationRequest,
         slots: list[_QuestionSlot],
+        telemetry: _ContextualChoiceTelemetry,
+        plan: PersonalizedVocabularyPlan,
     ) -> list[PracticeGeneratedQuestion]:
         accepted: dict[int, PracticeGeneratedQuestion] = {}
+        current_items = list(plan.items)
         for slot in sorted(slots, key=lambda item: item.order):
-            accepted[slot.order] = await self._generate_verified_contextual_choice_slot(
+            question, validated_item = await self._generate_verified_contextual_choice_v3_slot(
                 request,
                 slot,
                 accepted,
+                telemetry,
+                PersonalizedVocabularyPlan(version=plan.version, items=current_items),
             )
+            accepted[slot.order] = question
+            current_items[validated_item.global_order - 1] = validated_item
+            slots[slot.order - 1] = replace(slot, vocabulary_plan_item=validated_item)
         return [accepted[order] for order in sorted(accepted)]
+
+    async def _generate_verified_contextual_choice_v3_slot(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        accepted: dict[int, PracticeGeneratedQuestion],
+        telemetry: _ContextualChoiceTelemetry,
+        plan: PersonalizedVocabularyPlan,
+    ) -> tuple[PracticeGeneratedQuestion, VocabularyPlanItem]:
+        plan_item = slot.vocabulary_plan_item
+        if plan_item is None:
+            raise ValueError("CONTEXTUAL_CHOICE V3 slot requires a persisted plan item")
+        lexical_assessment = await self._verify_contextual_choice_plan_item(
+            request, telemetry, plan_item, accepted
+        )
+        lexical_repair_used = False
+        if lexical_assessment.reason_codes:
+            self._log_contextual_choice_lexical_rejection(
+                request, plan_item.global_order, "initial",
+                list(lexical_assessment.reason_codes),
+                list(lexical_assessment.invalid_distractor_indexes),
+            )
+            plan_item = await self._repair_contextual_choice_lexical_item(
+                request, telemetry, plan, plan_item,
+                lexical_assessment,
+                list(lexical_assessment.reason_codes),
+                invalid_distractor_indexes=list(
+                    lexical_assessment.invalid_distractor_indexes
+                ),
+                preserve_target=lexical_assessment.preserve_new_target,
+            )
+            lexical_repair_used = True
+            lexical_assessment = await self._verify_contextual_choice_plan_item(
+                request, telemetry, plan_item, accepted
+            )
+            if lexical_assessment.reason_codes:
+                self._log_contextual_choice_lexical_rejection(
+                    request, plan_item.global_order, "repair",
+                    list(lexical_assessment.reason_codes),
+                    list(lexical_assessment.invalid_distractor_indexes),
+                )
+                raise _ContextualChoiceContentRejected(
+                    f"CONTEXTUAL_CHOICE lexical repair exhausted order={plan_item.global_order}",
+                    stage="LEXICAL_VALIDATION",
+                )
+        slot = replace(slot, vocabulary_plan_item=plan_item)
+        demand = vocabulary_difficulty_recipe(
+            mode=VocabularyMode.CONTEXTUAL_CHOICE.value,
+            band=plan_item.complexity_band,
+            skill_tag=plan_item.skill_tag,
+            question_type=PracticeQuestionType.SINGLE_CHOICE.value,
+        ).demand
+        if not isinstance(demand, ContextualChoiceDemand):
+            raise ValueError("CONTEXTUAL_CHOICE requires contextual-choice demand")
+        next_repair_class: _ContextFailureClass | None = None
+        next_repair_codes: list[str] = []
+        next_repair_directive: str | None = None
+        next_previous_candidate: dict[str, object] | None = None
+        next_failure_evidence: dict[str, object] | None = None
+        next_phase = "context_initial"
+        repaired_classes: set[_ContextFailureClass] = set()
+        context_generation_count = 0
+        initial_reason_codes: list[str] = []
+        while context_generation_count < 3:
+            context_generation_count += 1
+            attempt = context_generation_count
+            phase = next_phase
+            raw = await self._contextual_choice_provider_call(
+                request,
+                telemetry,
+                counter=(
+                    "context_generation_calls"
+                    if phase in {"context_initial", "context_lexical_fallback"}
+                    else "context_repair_calls"
+                ),
+                stage=("context_generation" if phase == "context_initial" else phase),
+                type_name=self.TYPE_NAME,
+                data=build_contextual_choice_context_generation_prompt(
+                    request,
+                    plan_item={
+                        "globalOrder": plan_item.global_order,
+                        "reviewTarget": plan_item.review_target,
+                        "targetExpression": plan_item.target_expression,
+                        "distractors": plan_item.distractors,
+                        "skillTag": plan_item.skill_tag,
+                        "difficulty": plan_item.difficulty.value,
+                        "complexityBand": plan_item.complexity_band,
+                        "scenarioFamily": plan_item.scenario_family,
+                        "anchorType": (
+                            plan_item.anchor_type.value
+                            if plan_item.anchor_type is not None else None
+                        ),
+                        "anchorValue": plan_item.anchor_value,
+                    },
+                    difficulty_demand=demand.generation_payload(),
+                    repair_class=next_repair_class,
+                    reason_codes=next_repair_codes,
+                    repair_directive=next_repair_directive,
+                    previous_candidate=next_previous_candidate,
+                    failure_evidence=next_failure_evidence,
+                ),
+                schema=_CONTEXTUAL_CHOICE_CONTEXT_SCHEMA,
+            )
+            previous_candidate = self._contextual_choice_context_candidate_snapshot(raw)
+            failure_evidence: dict[str, object]
+            try:
+                payload = _ContextualChoiceContextPayload.model_validate(raw)
+            except ValidationError:
+                reason_codes = ["CONTEXT_RESPONSE_SCHEMA_INVALID"]
+                failure_evidence = {"contractReasonCodes": reason_codes}
+            else:
+                try:
+                    question = self._normalize_contextual_choice_v3_context(
+                        request,
+                        slot,
+                        plan_item,
+                        payload,
+                        accepted,
+                    )
+                except _ContextualChoiceContextContractError as exc:
+                    if not exc.repairable:
+                        logger.warning(
+                            "CONTEXTUAL_CHOICE V3.3.3 internal context contract failed. "
+                            "request_id=%s global_order=%d attempt=%d phase=%s "
+                            "reason_code=%s",
+                            request.request_id,
+                            plan_item.global_order,
+                            attempt,
+                            phase,
+                            exc.reason_code,
+                        )
+                        raise
+                    reason_codes = [exc.reason_code]
+                    failure_evidence = {"contractReasonCodes": reason_codes}
+                else:
+                    previous_candidate = self._contextual_choice_context_candidate_snapshot(
+                        raw, question=question
+                    )
+                    try:
+                        assessment = await self._contextual_choice_context_failure(
+                            request,
+                            slot,
+                            question,
+                            telemetry,
+                        )
+                    except _ContextualChoiceContextVerifierContractError as exc:
+                        logger.warning(
+                            "CONTEXTUAL_CHOICE V3.3.3 verifier contract failed. "
+                            "request_id=%s global_order=%d attempt=%d phase=%s "
+                            "reason_code=%s",
+                            request.request_id,
+                            plan_item.global_order,
+                            attempt,
+                            phase,
+                            exc.reason_code,
+                        )
+                        raise
+                    reason_codes = list(assessment.reason_codes)
+                    failure_evidence = assessment.failure_evidence
+                    if not reason_codes:
+                        return question, plan_item
+            if attempt == 1:
+                initial_reason_codes = reason_codes
+            failure_class = self._contextual_choice_failure_class(reason_codes)
+            logger.info(
+                "CONTEXTUAL_CHOICE V3.3.3 context validation rejected. "
+                "request_id=%s global_order=%d attempt=%d phase=%s "
+                "failure_class=%s reason_codes=%s",
+                request.request_id,
+                plan_item.global_order,
+                attempt,
+                phase,
+                failure_class,
+                reason_codes,
+            )
+            if attempt >= 3:
+                break
+            if failure_class not in repaired_classes:
+                repaired_classes.add(failure_class)
+                class_reason_codes = self._contextual_choice_reason_codes_for_class(
+                    reason_codes, failure_class
+                )
+                next_repair_class = failure_class
+                next_repair_codes = class_reason_codes
+                next_repair_directive = self._contextual_choice_context_repair_reason(
+                    class_reason_codes
+                )
+                next_previous_candidate = previous_candidate
+                next_failure_evidence = failure_evidence
+                next_phase = {
+                    "CONTRACT_CONTEXT": "context_contract_repair",
+                    "STRUCTURAL_CONTEXT": "context_structural_repair",
+                    "SEMANTIC_CONTEXT": "context_semantic_repair",
+                }[failure_class]
+                continue
+            if (
+                not lexical_repair_used
+                and self._contextual_choice_bundle_suspect(
+                    initial_reason_codes, reason_codes
+                )
+            ):
+                plan_item = await self._repair_contextual_choice_lexical_item(
+                    request, telemetry, plan, plan_item, lexical_assessment,
+                    reason_codes,
+                    preserve_target=lexical_assessment.preserve_new_target,
+                    repair_trigger="CONTEXT_VALIDATION",
+                )
+                lexical_repair_used = True
+                lexical_assessment = await self._verify_contextual_choice_plan_item(
+                    request, telemetry, plan_item, accepted
+                )
+                if lexical_assessment.reason_codes:
+                    self._log_contextual_choice_lexical_rejection(
+                        request, plan_item.global_order, "context_fallback",
+                        list(lexical_assessment.reason_codes),
+                        list(lexical_assessment.invalid_distractor_indexes),
+                    )
+                    raise _ContextualChoiceContentRejected(
+                        f"CONTEXTUAL_CHOICE context-triggered lexical repair failed order={plan_item.global_order}",
+                        stage="LEXICAL_VALIDATION",
+                    )
+                slot = replace(slot, vocabulary_plan_item=plan_item)
+                next_repair_class = None
+                next_repair_codes = []
+                next_repair_directive = None
+                next_previous_candidate = None
+                next_failure_evidence = None
+                next_phase = "context_lexical_fallback"
+                continue
+            break
+        raise _ContextualChoiceContentRejected(
+            f"CONTEXTUAL_CHOICE context repair exhausted order={plan_item.global_order}",
+            stage="CONTEXT_VALIDATION",
+        )
+
+    def _normalize_contextual_choice_v3_context(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        plan_item: VocabularyPlanItem,
+        payload: _ContextualChoiceContextPayload,
+        accepted: dict[int, PracticeGeneratedQuestion],
+    ) -> PracticeGeneratedQuestion:
+        if payload.globalOrder != plan_item.global_order:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_ORDER_MISMATCH", repairable=True
+            )
+        template = payload.contextTemplate.strip()
+        unknown_markers = {
+            marker
+            for marker in re.findall(r"\{\{[^{}]*\}\}", template)
+            if marker != CONTEXTUAL_CHOICE_TEMPLATE_MARKER
+        }
+        if unknown_markers:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_UNKNOWN_MARKER", repairable=True
+            )
+        if template.count(CONTEXTUAL_CHOICE_TEMPLATE_MARKER) != 1:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_MARKER_INVALID", repairable=True
+            )
+        normalized_target = self._normalize_for_leak_check(
+            plan_item.target_expression
+        )
+        context_without_marker = template.replace(
+            CONTEXTUAL_CHOICE_TEMPLATE_MARKER, "", 1
+        )
+        if (
+            normalized_target
+            and normalized_target
+            in self._normalize_for_leak_check(context_without_marker)
+        ):
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_TARGET_LEAK", repairable=True
+            )
+        explanation = payload.explanationLearning.strip()
+        if not explanation or len(explanation) > 3000:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_EXPLANATION_INVALID", repairable=True
+            )
+        try:
+            complete_sentence, learner_prompt = render_contextual_choice_template(
+                template,
+                plan_item.target_expression,
+            )
+        except ValueError as exc:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_TEMPLATE_ROUND_TRIP_INVALID", repairable=True
+            ) from exc
+        if len(learner_prompt) > 3000:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_TEMPLATE_ROUND_TRIP_INVALID", repairable=True
+            )
+        try:
+            self._assert_language_lane(
+                request.learning_language,
+                [complete_sentence, explanation],
+                reason="CONTEXTUAL_CHOICE context is not in learningLanguage",
+            )
+        except ValueError as exc:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_LANGUAGE_INVALID", repairable=True
+            ) from exc
+        correct_key = contextual_choice_answer_key(plan_item.global_order)
+        correct_position = CONTEXTUAL_CHOICE_ANSWER_KEYS.index(correct_key)
+        option_texts = list(plan_item.distractors)
+        option_texts.insert(correct_position, plan_item.target_expression)
+        try:
+            question = PracticeGeneratedQuestion(
+                order=slot.order,
+                question_type=PracticeQuestionType.SINGLE_CHOICE,
+                difficulty=plan_item.difficulty,
+                complexity_band=plan_item.complexity_band,
+                passage_id=None,
+                passage_text=None,
+                prompt=learner_prompt,
+                options=[
+                    PracticeOption(key=key, text=text)
+                    for key, text in zip(
+                        CONTEXTUAL_CHOICE_ANSWER_KEYS,
+                        option_texts,
+                        strict=True,
+                    )
+                ],
+                correct_answer=[correct_key],
+                skill_tag=plan_item.skill_tag,
+                evidence_text=None,
+                explanation_origin="PENDING",
+                explanation_learning=explanation,
+                target_expression=plan_item.target_expression,
+                canonical_key=plan_item.canonical_key,
+                review_target=plan_item.review_target,
+                vocabulary_candidates=[],
+            )
+            self._validate_candidate(request, question, slot, accepted)
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise _ContextualChoiceContextContractError(
+                "CONTEXT_INTERNAL_CONTRACT_INVALID", repairable=False
+            ) from exc
+        return question
+
+    @staticmethod
+    def _contextual_choice_context_candidate_snapshot(
+        raw: Any,
+        *,
+        question: PracticeGeneratedQuestion | None = None,
+    ) -> dict[str, object]:
+        """Keep only the immediately previous, bounded learner-visible candidate."""
+        snapshot: dict[str, object] = {}
+        if isinstance(raw, dict):
+            order = raw.get("globalOrder")
+            if isinstance(order, int):
+                snapshot["globalOrder"] = order
+            for source_key, output_key in (
+                ("contextTemplate", "contextTemplate"),
+                ("explanationLearning", "explanationLearning"),
+            ):
+                value = raw.get(source_key)
+                if isinstance(value, str):
+                    snapshot[output_key] = value[:3000]
+        if question is not None:
+            snapshot["renderedOptions"] = [
+                {
+                    "key": option.key,
+                    "sentence": question.prompt.replace(
+                        CONTEXTUAL_CHOICE_BLANK, option.text, 1
+                    )[:3000],
+                }
+                for option in question.options
+            ]
+        return snapshot
+
+    async def _contextual_choice_context_failure(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        question: PracticeGeneratedQuestion,
+        telemetry: _ContextualChoiceTelemetry,
+    ) -> _ContextualChoiceContextAssessment:
+        plan_item = slot.vocabulary_plan_item
+        if plan_item is None:
+            raise ValueError("CONTEXTUAL_CHOICE V3 slot requires a plan item")
+        visible = {
+            "order": plan_item.global_order,
+            "prompt": question.prompt,
+            "options": [
+                option.model_dump(mode="json", by_alias=True)
+                for option in question.options
+            ],
+            "renderedOptions": [
+                {
+                    "key": option.key,
+                    "sentence": question.prompt.replace(
+                        CONTEXTUAL_CHOICE_BLANK, option.text, 1
+                    ),
+                }
+                for option in question.options
+            ],
+            "skillTag": question.skill_tag,
+            "reviewTarget": question.review_target,
+        }
+        raw = await self._contextual_choice_provider_call(
+            request,
+            telemetry,
+            counter="context_validation_calls",
+            stage="context_validation",
+            type_name=self.CONTEXTUAL_CHOICE_VERIFICATION_TYPE_NAME,
+            data=build_contextual_choice_context_verification_prompt(
+                request,
+                question=visible,
+            ),
+            schema=_CONTEXTUAL_CHOICE_CONTEXT_VERIFICATION_SCHEMA,
+        )
+        try:
+            payload = _ContextualChoiceContextVerificationPayload.model_validate(raw)
+        except ValidationError as exc:
+            raise _ContextualChoiceContextVerifierContractError from exc
+        if (
+            len(payload.verdicts) != 1
+            or payload.verdicts[0].order != plan_item.global_order
+        ):
+            raise _ContextualChoiceContextVerifierContractError
+        verdict = payload.verdicts[0]
+        structural_keys = tuple(dict.fromkeys(verdict.structurallyWellFormedKeys))
+        if (
+            verdict.bestAnswerKey not in CONTEXTUAL_CHOICE_ANSWER_KEYS
+            or len(structural_keys) != len(verdict.structurallyWellFormedKeys)
+            or not set(structural_keys).issubset(CONTEXTUAL_CHOICE_ANSWER_KEYS)
+        ):
+            raise _ContextualChoiceContextVerifierContractError
+        expected_key = question.correct_answer[0]
+        reason_codes: list[str] = []
+        if verdict.ambiguous:
+            reason_codes.append("AMBIGUOUS")
+        if not verdict.supported:
+            reason_codes.append("UNSUPPORTED")
+        if not verdict.skillFit:
+            reason_codes.append("SKILL_FIT")
+        if verdict.definitionLike:
+            reason_codes.append("DEFINITION_LIKE")
+        if verdict.bestAnswerKey != expected_key:
+            reason_codes.append("BEST_ANSWER_MISMATCH")
+        if set(structural_keys) != set(CONTEXTUAL_CHOICE_ANSWER_KEYS):
+            reason_codes.append("RENDERED_SENTENCE_STRUCTURALLY_INVALID")
+        return _ContextualChoiceContextAssessment(
+            reason_codes=tuple(reason_codes),
+            failure_evidence={
+                "ambiguous": verdict.ambiguous,
+                "supported": verdict.supported,
+                "skillFit": verdict.skillFit,
+                "definitionLike": verdict.definitionLike,
+                "bestAnswerKey": verdict.bestAnswerKey,
+                "structurallyInvalidOptionKeys": [
+                    key for key in CONTEXTUAL_CHOICE_ANSWER_KEYS
+                    if key not in structural_keys
+                ],
+            },
+        )
+
+    @staticmethod
+    def _contextual_choice_context_repair_reason(reason_codes: list[str]) -> str:
+        instructions = {
+            "CONTEXT_RESPONSE_SCHEMA_INVALID": (
+                "Return only globalOrder, contextTemplate, and explanationLearning with the required types."
+            ),
+            "CONTEXT_ORDER_MISMATCH": (
+                "Preserve the supplied globalOrder exactly."
+            ),
+            "CONTEXT_MARKER_INVALID": (
+                "Return exactly one literal {{TARGET}} insertion marker."
+            ),
+            "CONTEXT_UNKNOWN_MARKER": (
+                "Use no {{...}} marker other than the single literal {{TARGET}} marker."
+            ),
+            "CONTEXT_LANGUAGE_INVALID": (
+                "Write contextTemplate and explanationLearning in the supplied learningLanguage."
+            ),
+            "CONTEXT_TARGET_LEAK": (
+                "Do not copy the target literal outside the single {{TARGET}} marker."
+            ),
+            "CONTEXT_TEMPLATE_ROUND_TRIP_INVALID": (
+                "Return a simple grammatical template with exactly one insertion site and no literal blank."
+            ),
+            "CONTEXT_EXPLANATION_INVALID": (
+                "Return a non-empty concise explanationLearning in the learning language."
+            ),
+            "AMBIGUOUS": "Make the fixed target the unique best answer; remove visible ambiguity.",
+            "UNSUPPORTED": "Strengthen visible support for the fixed target without changing the lexical bundle.",
+            "SKILL_FIT": "Revise the context to test the assigned skill with the fixed bundle.",
+            "DEFINITION_LIKE": "Replace the definition-like context with a natural usage decision.",
+            "BEST_ANSWER_MISMATCH": "Revise context only so the fixed target is the unique best answer.",
+            "RENDERED_SENTENCE_STRUCTURALLY_INVALID": (
+                "Revise the blank frame so all four completed sentences are structurally well-formed "
+                "without argument duplication."
+            ),
+        }
+        return " ".join(instructions[code] for code in reason_codes)
+
+    @staticmethod
+    def _contextual_choice_failure_class(
+        reason_codes: list[str],
+    ) -> _ContextFailureClass:
+        codes = set(reason_codes)
+        if codes & _CONTRACT_CONTEXT_REASON_CODES:
+            return "CONTRACT_CONTEXT"
+        if codes & _STRUCTURAL_CONTEXT_REASON_CODES:
+            return "STRUCTURAL_CONTEXT"
+        if codes and codes.issubset(_SEMANTIC_CONTEXT_REASON_CODES):
+            return "SEMANTIC_CONTEXT"
+        raise _ContextualChoiceContextContractError(
+            "CONTEXT_INTERNAL_CONTRACT_INVALID", repairable=False
+        )
+
+    @staticmethod
+    def _contextual_choice_reason_codes_for_class(
+        reason_codes: list[str], failure_class: _ContextFailureClass
+    ) -> list[str]:
+        if failure_class == "CONTRACT_CONTEXT":
+            return [
+                code for code in reason_codes
+                if code in _CONTRACT_CONTEXT_REASON_CODES
+            ]
+        if failure_class == "STRUCTURAL_CONTEXT":
+            return [
+                code for code in reason_codes
+                if code in _STRUCTURAL_CONTEXT_REASON_CODES
+            ]
+        return [
+            code for code in reason_codes
+            if code in _SEMANTIC_CONTEXT_REASON_CODES
+        ]
+
+    @staticmethod
+    def _contextual_choice_bundle_suspect(
+        initial_reason_codes: list[str], repair_reason_codes: list[str]
+    ) -> bool:
+        last = set(repair_reason_codes)
+        if not last or last & {"UNSUPPORTED", "DEFINITION_LIKE"}:
+            return False
+        if last & {"AMBIGUOUS", "BEST_ANSWER_MISMATCH"}:
+            return True
+        return "SKILL_FIT" in initial_reason_codes and "SKILL_FIT" in last
 
     async def _generate_verified_contextual_choice_slot(
         self,
@@ -1503,8 +3580,9 @@ class ReadingVocabularyGenerationService:
         ).demand
         if not isinstance(demand, ContextualChoiceDemand):
             raise ValueError("CONTEXTUAL_CHOICE requires contextual-choice demand")
-        minimum_competitors = (
-            1 if slot.review_target else demand.minimum_close_distractors
+        minimum_competitors = contextual_choice_required_close_distractors(
+            demand.minimum_close_distractors,
+            review_target=slot.review_target,
         )
         accepted: list[tuple[_ContextualChoiceCandidate, int]] = []
         reasons: list[str] = []
@@ -3281,6 +5359,10 @@ class ReadingVocabularyGenerationService:
     def _normalize_for_leak_check(value: str) -> str:
         return re.sub(r"[^0-9A-Za-z\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3]+", "", value).casefold()
 
+    @classmethod
+    def _normalize_contextual_choice_repair_identity(cls, value: str) -> str:
+        return cls._normalize_for_leak_check(unicodedata.normalize("NFKC", value))
+
     @staticmethod
     def _validate_question_shape(question: PracticeGeneratedQuestion) -> None:
         option_keys = [option.key for option in question.options]
@@ -3660,16 +5742,39 @@ class ReadingVocabularyGenerationService:
         self,
         request: PracticeGenerationRequest,
         questions: list[PracticeGeneratedQuestion],
+        *,
+        telemetry: _ContextualChoiceTelemetry | None = None,
     ) -> list[PracticeGeneratedQuestion]:
         by_order = {question.order: question for question in questions}
         explanations: dict[int, str] = {}
+        learning_explanations: dict[int, str] = {}
+        learning_repairs_required = {
+            question.order
+            for question in questions
+            if (
+                request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+                and self._contextual_choice_explanation_learning_requires_repair(
+                    question.explanation_learning
+                )
+            )
+        }
         attempts = {question.order: 0 for question in questions}
 
-        while len(explanations) < len(questions):
+        def complete(order: int) -> bool:
+            return (
+                order in explanations
+                and (
+                    order not in learning_repairs_required
+                    or order in learning_explanations
+                )
+            )
+
+        while not all(complete(order) for order in by_order):
             pending = [
                 order
                 for order in sorted(by_order)
-                if order not in explanations and attempts[order] < _MAX_ORIGIN_EXPLANATION_ATTEMPTS
+                if not complete(order)
+                and attempts[order] < _MAX_ORIGIN_EXPLANATION_ATTEMPTS
             ]
             if not pending:
                 break
@@ -3681,10 +5786,13 @@ class ReadingVocabularyGenerationService:
                     request,
                     [by_order[order] for order in batch_orders],
                     explanations,
+                    learning_explanations,
+                    learning_repairs_required,
                     type_name=self.ORIGIN_EXPLANATION_TYPE_NAME,
+                    telemetry=telemetry,
                 )
 
-        remaining = [order for order in sorted(by_order) if order not in explanations]
+        remaining = [order for order in sorted(by_order) if not complete(order)]
         if remaining:
             logger.warning(
                 "Reading/Vocabulary Nano explanation exhausted; using Mini fallback. request_id=%s orders=%s",
@@ -3697,15 +5805,23 @@ class ReadingVocabularyGenerationService:
                     request,
                     [by_order[order] for order in batch_orders],
                     explanations,
+                    learning_explanations,
+                    learning_repairs_required,
                     type_name=self.ORIGIN_EXPLANATION_FALLBACK_TYPE_NAME,
+                    telemetry=telemetry,
                 )
 
-        remaining = [order for order in sorted(by_order) if order not in explanations]
+        remaining = [order for order in sorted(by_order) if not complete(order)]
         if remaining:
             raise ValueError(f"origin explanation generation exhausted orders={remaining}")
 
         return [
-            question.model_copy(update={"explanation_origin": explanations[question.order]})
+            question.model_copy(update={
+                "explanation_origin": explanations[question.order],
+                "explanation_learning": learning_explanations.get(
+                    question.order, question.explanation_learning
+                ),
+            })
             for question in questions
         ]
 
@@ -3714,8 +5830,11 @@ class ReadingVocabularyGenerationService:
         request: PracticeGenerationRequest,
         questions: list[PracticeGeneratedQuestion],
         explanations: dict[int, str],
+        learning_explanations: dict[int, str],
+        learning_repairs_required: set[int],
         *,
         type_name: str,
+        telemetry: _ContextualChoiceTelemetry | None = None,
     ) -> None:
         expected_orders = {question.order for question in questions}
         payload_questions = []
@@ -3730,6 +5849,10 @@ class ReadingVocabularyGenerationService:
                 "evidenceText": question.evidence_text,
                 "explanationLearning": question.explanation_learning,
             }
+            if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
+                payload_question["repairExplanationLearning"] = (
+                    question.order in learning_repairs_required
+                )
             if (
                 request.domain == PracticeDomain.VOCABULARY
                 and request.mode == VocabularyMode.MEANING_RELATION.value
@@ -3741,11 +5864,17 @@ class ReadingVocabularyGenerationService:
                 }
             payload_questions.append(payload_question)
         try:
+            if telemetry is not None:
+                telemetry.origin_explanation_calls += 1
             raw = await asyncio.wait_for(
                 self.provider.call(
                     type_name=type_name,
                     data=build_origin_explanation_prompt(request, payload_questions),
-                    schema=_ORIGIN_EXPLANATION_SCHEMA,
+                    schema=(
+                        _CONTEXTUAL_CHOICE_ORIGIN_EXPLANATION_SCHEMA
+                        if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+                        else _ORIGIN_EXPLANATION_SCHEMA
+                    ),
                 ),
                 timeout=self.timeout_seconds,
             )
@@ -3769,11 +5898,19 @@ class ReadingVocabularyGenerationService:
             text = item.text.strip()
             if not text:
                 continue
+            repaired_learning: str | None = None
             try:
                 if self._origin_explanation_exposes_internal_metadata(text):
                     raise ValueError(
                         "origin explanation contains JSON/tool/internal metadata artifacts"
                     )
+                if (
+                    request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
+                    and self._contextual_choice_origin_explanation_incomplete(
+                        text, request.origin_language
+                    )
+                ):
+                    raise ValueError("ORIGIN_EXPLANATION_INCOMPLETE")
                 # Validate each explanation independently. One good Korean explanation can no
                 # longer hide nine Japanese explanations in a combined-language check.
                 self._assert_language_lane(
@@ -3782,17 +5919,83 @@ class ReadingVocabularyGenerationService:
                     reason=f"origin explanation order={item.order} is not in originLanguage",
                     allow_mixed_scripts=True,
                 )
+                if item.order in learning_repairs_required:
+                    repaired_learning = (item.explanationLearning or "").strip()
+                    if self._contextual_choice_explanation_learning_requires_repair(
+                        repaired_learning
+                    ):
+                        raise ValueError("LEARNING_EXPLANATION_INVALID")
+                    self._assert_language_lane(
+                        request.learning_language,
+                        [repaired_learning],
+                        reason=(
+                            f"learning explanation order={item.order} is not in "
+                            "learningLanguage"
+                        ),
+                        allow_mixed_scripts=True,
+                    )
             except ValueError as exc:
                 logger.warning(
                     "Reading/Vocabulary origin explanation rejected. request_id=%s order=%d "
-                    "modelTask=%s reason=%s",
+                    "modelTask=%s reason_code=%s",
                     request.request_id,
                     item.order,
                     type_name,
-                    str(exc)[:240],
+                    (
+                        "ORIGIN_EXPLANATION_INCOMPLETE"
+                        if str(exc) == "ORIGIN_EXPLANATION_INCOMPLETE"
+                        else "LEARNING_EXPLANATION_INVALID"
+                        if str(exc) == "LEARNING_EXPLANATION_INVALID"
+                        else "ORIGIN_EXPLANATION_INVALID"
+                    ),
                 )
                 continue
             explanations[item.order] = text
+            if repaired_learning is not None:
+                learning_explanations[item.order] = repaired_learning
+
+    @classmethod
+    def _contextual_choice_explanation_learning_requires_repair(
+        cls, text: str
+    ) -> bool:
+        stripped = unicodedata.normalize("NFKC", text).strip()
+        folded = stripped.casefold().rstrip(".!?。！？")
+        placeholders = {
+            "該当なし",
+            "該当無し",
+            "なし",
+            "不明",
+            "n/a",
+            "na",
+            "none",
+            "not applicable",
+            "해당 없음",
+            "없음",
+            "모름",
+        }
+        return (
+            not stripped
+            or folded in placeholders
+            or cls._origin_explanation_exposes_internal_metadata(stripped)
+        )
+
+    @staticmethod
+    def _contextual_choice_origin_explanation_incomplete(
+        text: str, origin_language: str
+    ) -> bool:
+        stripped = text.strip()
+        if (
+            len(stripped) < 12
+            or stripped.endswith(("...", "…", ":", ",", "、", "-", "—", "(", "["))
+            or stripped.startswith(("{", "[{", '["', "```"))
+        ):
+            return True
+        if origin_language.lower() in {"ko", "kr"}:
+            return stripped.split()[-1] in {
+                "인", "은", "는", "이", "가", "을", "를", "의", "와", "과",
+                "에게", "따라서", "또는", "및",
+            }
+        return False
 
     @staticmethod
     def _origin_explanation_exposes_internal_metadata(text: str) -> bool:
@@ -3803,6 +6006,11 @@ class ReadingVocabularyGenerationService:
             for token in (
                 "immutableTaskFact",
                 "APPLICATION_SELECTED_IMMUTABLE",
+                "evidenceLearning",
+                "explanationLearning",
+                "evidenceText",
+                "correctAnswerText",
+                "targetExpression",
                 "```json",
                 "tool_call",
                 "function_call",
@@ -3922,10 +6130,18 @@ class ReadingVocabularyGenerationService:
                 if question.review_target and question.canonical_key not in review_keys:
                     raise ValueError("review question canonicalKey is not in reviewTargets")
             if request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value:
-                expected_skill_by_order = {
-                    slot.order: slot.skill_tag
-                    for slot in self._build_slots(request, {})
-                }
+                if request.vocabulary_plan is not None:
+                    expected_skill_by_order = {
+                        local_order: request.vocabulary_plan.items[
+                            request.question_offset + local_order - 1
+                        ].skill_tag
+                        for local_order in range(1, request.question_count + 1)
+                    }
+                else:
+                    expected_skill_by_order = {
+                        slot.order: slot.skill_tag
+                        for slot in self._build_slots(request, {})
+                    }
                 for question in questions:
                     if question.question_type != PracticeQuestionType.SINGLE_CHOICE:
                         raise ValueError(

@@ -1,0 +1,56 @@
+{
+  "version": "contextual-choice-stabilization-qa-v1",
+  "generationDate": "2026-09-16",
+  "originLanguage": "ko",
+  "learningLanguage": "ja",
+  "historicalCases": [
+    {
+      "caseId": "practice-set-510006-order-6",
+      "status": "UNAVAILABLE",
+      "reason": "The supplied artifacts do not contain the exact request, accepted five-question prefix, rejected provider candidate, or full verifier verdict. Synthetic content must not be labeled a replay."
+    }
+  ],
+  "profiles": [
+    {
+      "profileId": "fresh-no-review-b3",
+      "complexityBand": 3,
+      "selectedKeywords": ["협업", "일정 조율"],
+      "weakSignals": ["회의 표현"],
+      "recentMistakes": ["COLLOCATION:업무 표현"],
+      "reviewTargets": []
+    },
+    {
+      "profileId": "fresh-two-review-b4",
+      "complexityBand": 4,
+      "selectedKeywords": ["검토", "프로젝트 보고"],
+      "weakSignals": ["REGISTER:상황별 표현"],
+      "recentMistakes": ["NUANCE:비슷한 표현"],
+      "reviewTargets": [
+        {
+          "canonicalKey": "再確認する",
+          "expression": "再確認する",
+          "preferredSkill": "MEANING"
+        },
+        {
+          "canonicalKey": "慎重に進める",
+          "expression": "慎重に進める",
+          "preferredSkill": "NUANCE"
+        }
+      ]
+    },
+    {
+      "profileId": "fresh-one-review-b5",
+      "complexityBand": 5,
+      "selectedKeywords": ["고객 대응", "리스크 설명"],
+      "weakSignals": ["PRAGMATIC_FIT:의도 전달"],
+      "recentMistakes": ["REGISTER:격식 표현"],
+      "reviewTargets": [
+        {
+          "canonicalKey": "状況を見極める",
+          "expression": "状況を見極める",
+          "preferredSkill": "PRAGMATIC_FIT"
+        }
+      ]
+    }
+  ]
+}

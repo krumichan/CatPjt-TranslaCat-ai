@@ -1,0 +1,91 @@
+{
+  "version": "contextual-choice-order-4-lexical-verifier-flips-v1",
+  "caseSha256": "d7a355ab5adf516390678812355adfc4ef4a0c0ae99c340ff3cacf7b36d7a3b8",
+  "sourceSha256": {
+    "app/features/language_learning/reading_vocabulary/service.py": "8545bc65396327468062d36d5449d38536ead608827e222661a1049f607e9c3e",
+    "app/features/language_learning/reading_vocabulary/prompts.py": "f9895a90aa2ed4dcf036aa558dc1b3f2cbcef32e33640970a681fa7c9f2870e1",
+    "app/features/language_learning/reading_vocabulary/contextual_choice_task.py": "e1d3e43e4b6b89be33bc8fa7f0d2420cd1335b5af5f29c4f9125c81985dd0ae7",
+    "app/schemas/language_learning_practice.py": "eb139f49ff29601ca85a707e49bf22dc74162a539824477a25c6de2cf873fe84"
+  },
+  "lexicalBundle": {
+    "globalOrder": 4,
+    "targetExpression": "ご不便をおかけしております",
+    "initialDistractors": [
+      "ご不便をおかけしました",
+      "ご不便をおかけいたします",
+      "ご不便をおかけしません"
+    ],
+    "replacement": {
+      "index": 2,
+      "text": "ご迷惑をおかけしております"
+    },
+    "skillTag": "REGISTER",
+    "decisiveDimensions": ["REGISTER", "ROLE_FORMALITY_OR_CHANNEL"]
+  },
+  "runs": [
+    {
+      "sourceArtifactSha256": "271e6feeee617306fcc83955d67fb4c05fa2f87c7d80a70e4b9e85315cfddc37",
+      "createdAt": "2026-09-17T13:56:16.929466+00:00",
+      "status": "FAILED",
+      "initialIndex1": {
+        "naturalExpression": true,
+        "plausibleWrongAlternative": true,
+        "closeCompetitor": true,
+        "wrongByGrammarOnly": false,
+        "skillRelevant": true
+      },
+      "revalidationIndex1": {
+        "naturalExpression": false,
+        "plausibleWrongAlternative": false,
+        "closeCompetitor": false,
+        "wrongByGrammarOnly": false,
+        "skillRelevant": false
+      },
+      "revalidationIndex2": {
+        "naturalExpression": true,
+        "plausibleWrongAlternative": true,
+        "closeCompetitor": true,
+        "wrongByGrammarOnly": false,
+        "skillRelevant": true
+      },
+      "revalidationReasonCode": "DISTRACTOR_UNNATURAL"
+    },
+    {
+      "sourceArtifactSha256": "c4588dfe64819d9278510dcc890fe34b132d1bbe5aa56978f7a5c5bf6681776b",
+      "createdAt": "2026-09-17T13:57:35.957807+00:00",
+      "status": "FAILED",
+      "initialIndex1": {
+        "naturalExpression": true,
+        "plausibleWrongAlternative": true,
+        "closeCompetitor": true,
+        "wrongByGrammarOnly": false,
+        "skillRelevant": true
+      },
+      "revalidationIndex1": {
+        "naturalExpression": false,
+        "plausibleWrongAlternative": false,
+        "closeCompetitor": false,
+        "wrongByGrammarOnly": true,
+        "skillRelevant": false
+      },
+      "revalidationIndex2": {
+        "naturalExpression": true,
+        "plausibleWrongAlternative": true,
+        "closeCompetitor": true,
+        "wrongByGrammarOnly": false,
+        "skillRelevant": true
+      },
+      "revalidationReasonCode": "PASS"
+    }
+  ],
+  "offlineResponsibilityReference": {
+    "scheduledNoticeExpression": "ご不便をおかけいたします",
+    "scheduledNoticeExpressionWellFormed": true,
+    "scheduledNoticeMalformedByGrammar": false,
+    "intrinsicallyMalformedExpression": "ご不便をおかけにいたします",
+    "intrinsicallyMalformedExpressionWellFormed": false,
+    "intrinsicallyMalformedByGrammar": true,
+    "currentBundleSkillContrastSupported": false,
+    "currentBundleFinding": "The choices primarily contrast tense/aspect, polarity, or lexical synonymy; a polite target alone does not establish a role/formality/channel REGISTER distinction."
+  }
+}

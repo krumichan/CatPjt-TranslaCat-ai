@@ -91,6 +91,77 @@ class PracticeReviewTarget(CamelCaseModel):
     ] | None = None
 
 
+class VocabularyPlanAnchorType(str, Enum):
+    SELECTED_KEYWORD = "SELECTED_KEYWORD"
+    WEAK_SIGNAL = "WEAK_SIGNAL"
+    RECENT_MISTAKE = "RECENT_MISTAKE"
+    LEARNING_PROFILE = "LEARNING_PROFILE"
+
+
+class VocabularyPlanItem(CamelCaseModel):
+    global_order: int = Field(..., ge=1, le=10)
+    review_target: bool
+    target_expression: str = Field(..., min_length=1, max_length=300)
+    canonical_key: str = Field(..., min_length=1, max_length=200)
+    distractors: list[str] = Field(..., min_length=3, max_length=3)
+    skill_tag: Literal[
+        "MEANING",
+        "COLLOCATION",
+        "NUANCE",
+        "REGISTER",
+        "PRAGMATIC_FIT",
+    ]
+    difficulty: PracticeDifficulty
+    complexity_band: int = Field(..., ge=1, le=5)
+    scenario_family: str | None = Field(default=None, min_length=1, max_length=80)
+    anchor_type: VocabularyPlanAnchorType | None = None
+    anchor_value: str | None = Field(default=None, min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def validate_binding_shape(self) -> "VocabularyPlanItem":
+        if self.review_target:
+            if any(
+                value is not None
+                for value in (self.scenario_family, self.anchor_type, self.anchor_value)
+            ):
+                raise ValueError("review plan items must not contain new-item metadata")
+        elif any(
+            value is None
+            for value in (self.scenario_family, self.anchor_type, self.anchor_value)
+        ):
+            raise ValueError("new plan items require scenarioFamily and anchor metadata")
+        return self
+
+
+class PersonalizedVocabularyPlan(CamelCaseModel):
+    version: str = Field(..., min_length=1, max_length=100)
+    items: list[VocabularyPlanItem] = Field(..., min_length=10, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_daily_shape(self) -> "PersonalizedVocabularyPlan":
+        if [item.global_order for item in self.items] != list(range(1, 11)):
+            raise ValueError("vocabularyPlan items must use contiguous globalOrder 1..10")
+        if sum(item.review_target for item in self.items) > 2:
+            raise ValueError("vocabularyPlan review count must not exceed 2")
+        difficulty_counts = {
+            difficulty: sum(item.difficulty == difficulty for item in self.items)
+            for difficulty in PracticeDifficulty
+        }
+        if difficulty_counts != {
+            PracticeDifficulty.EASIER: 2,
+            PracticeDifficulty.CURRENT: 6,
+            PracticeDifficulty.CHALLENGE: 2,
+        }:
+            raise ValueError("vocabularyPlan difficulty mix must be 2/6/2")
+        expected_skills = {"MEANING", "COLLOCATION", "NUANCE", "REGISTER", "PRAGMATIC_FIT"}
+        if {
+            skill: sum(item.skill_tag == skill for item in self.items)
+            for skill in expected_skills
+        } != {skill: 2 for skill in expected_skills}:
+            raise ValueError("vocabularyPlan must contain each skill exactly twice")
+        return self
+
+
 class PracticeGenerationRequest(CamelCaseModel):
     request_id: str = Field(..., min_length=1, max_length=120)
     domain: PracticeDomain
@@ -117,6 +188,8 @@ class PracticeGenerationRequest(CamelCaseModel):
             "The generated response still uses local order starting at 1."
         ),
     )
+    vocabulary_plan: PersonalizedVocabularyPlan | None = None
+    vocabulary_plan_only: bool = False
 
     @property
     def question_offset(self) -> int:
@@ -164,6 +237,20 @@ class PracticeGenerationRequest(CamelCaseModel):
             for question in self.previous_questions
         ):
             raise ValueError("previousQuestions requires vocabulary identities")
+        if self.vocabulary_plan is not None and (
+            self.domain != PracticeDomain.VOCABULARY
+            or self.mode != VocabularyMode.CONTEXTUAL_CHOICE.value
+        ):
+            raise ValueError("vocabularyPlan is only supported for CONTEXTUAL_CHOICE")
+        if self.vocabulary_plan_only and (
+            self.domain != PracticeDomain.VOCABULARY
+            or self.mode != VocabularyMode.CONTEXTUAL_CHOICE.value
+            or self.vocabulary_plan is not None
+            or self.previous_questions
+        ):
+            raise ValueError(
+                "vocabularyPlanOnly requires an initial CONTEXTUAL_CHOICE request"
+            )
         return self
 
 
@@ -194,3 +281,4 @@ class PracticeGenerationResponse(CamelCaseModel):
     mode: str
     complexity_band: int = Field(..., ge=1, le=5)
     questions: list[PracticeGeneratedQuestion]
+    vocabulary_plan: PersonalizedVocabularyPlan | None = None
