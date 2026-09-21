@@ -12,7 +12,7 @@ from app.ai.model_policy import AiModelTier, get_task_model_policy
 from app.ai.ports import StructuredGenerationResult
 from app.ai.prompt_registry import PROMPT_MAP
 from app.ai.providers.openai.schema import build_openai_text_config
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.features.language_learning.reading_vocabulary.service import (
     ReadingVocabularyGenerationService,
     _PRACTICE_VERIFICATION_SCHEMA,
@@ -30,6 +30,12 @@ from app.features.language_learning.reading_vocabulary.vocabulary_difficulty_sha
     vocabulary_difficulty_shadow_sample_bucket,
 )
 from tests import test_language_learning_reading_vocabulary as practice_fixtures
+
+
+@pytest.fixture(autouse=True)
+def historical_shared_pipeline_fake_uses_luna(monkeypatch):
+    """The Reading negative-control fixture uses the pre-selection task route."""
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "LUNA")
 
 
 def _shadow_data(prompt: str) -> dict:

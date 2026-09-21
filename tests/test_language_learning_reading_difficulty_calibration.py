@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.core.config import settings
 from app.features.language_learning.reading_vocabulary.reading_difficulty_adapter import (
     ReadingSemanticDifficultyPolicy,
     build_reading_passage_difficulty_spec,
@@ -37,6 +38,12 @@ from app.schemas.language_learning_practice import (
     PracticeGenerationRequest,
 )
 from tests import test_language_learning_reading_vocabulary as practice_fixtures
+
+
+@pytest.fixture(autouse=True)
+def historical_calibration_fake_uses_luna(monkeypatch):
+    """Old deterministic calibration fixtures do not implement the Sol task route."""
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "LUNA")
 
 
 class ReadingDifficultyProvider(practice_fixtures.PipelineProvider):

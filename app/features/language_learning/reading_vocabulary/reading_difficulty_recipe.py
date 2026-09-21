@@ -14,6 +14,7 @@ from typing import Literal
 READING_DIFFICULTY_RECIPE_VERSION = "reading-difficulty-recipe-v2"
 READING_PASSAGE_BLUEPRINT_VERSION = "reading-passage-blueprint-b4-v2"
 READING_DIFFICULTY_SHADOW_RUBRIC_VERSION = "reading-difficulty-recipe-v1-shadow"
+READING_B5_STRUCTURE_JUDGMENT_VERSION = "reading-b5-structure-judgment-v1"
 
 ReadingRecipeKind = Literal["PASSAGE", "QUESTION_DEMAND"]
 
@@ -63,6 +64,31 @@ class ReadingQuestionDemand:
             "disallowedShortcuts": list(self.disallowed_shortcuts),
             "authority": "SERVER_SELECTED_REQUIREMENT",
         }
+
+
+def structure_judgment_contract(
+    *, band: int, position: int, count: int,
+) -> dict[str, object] | None:
+    """Separate B5 whole-text evidence from one slot's judgment authority.
+
+    Earlier slots may integrate evidence across the argument, but only the
+    final slot owns the complete progression/map. This does not weaken the
+    B5 whole-text synthesis demand or assert semantic quality by position.
+    """
+    if band != 5:
+        return None
+    if count not in {2, 3} or not 1 <= position <= count:
+        raise ValueError("Invalid B5 passage slot position")
+    return {
+        "version": READING_B5_STRUCTURE_JUDGMENT_VERSION,
+        "evidenceScope": EvidenceScope.WHOLE_TEXT.value,
+        "judgmentScope": (
+            "ONE_BOUNDED_ARGUMENT_FUNCTION" if position < count
+            else "WHOLE_ARGUMENT_PROGRESSION"
+        ),
+        "inferenceRequirement": "WHOLE_ARGUMENT_STRUCTURE",
+        "minimumEvidenceParagraphs": 2,
+    }
 
 
 @dataclass(frozen=True)

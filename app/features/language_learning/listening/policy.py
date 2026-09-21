@@ -182,7 +182,10 @@ def build_profile_signals(
         return []
 
     scores = _profile_scores(task)
-    evidence_ids = [f"evidence-{index + 1}" for index, _ in enumerate(task.evidence)]
+    # Profile signals carry bounded references, not the full alignment evidence.
+    # Keep the existing public ListeningProfileSignal.evidence_ids max_length=50
+    # contract without dropping any task evidence or changing the computed score.
+    evidence_ids = [f"evidence-{index + 1}" for index in range(min(len(task.evidence), 50))]
     return [
         ListeningProfileSignal(
             metric=metric,

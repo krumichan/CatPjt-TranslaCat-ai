@@ -13,10 +13,10 @@ from app.schemas.language_learning_speaking import (
     SpeakingMetricType,
 )
 
-SPEAKING_SCORING_POLICY_VERSION = "speaking-scoring-policy"
-SPEAKING_EVALUATION_VERSION = "speaking-evaluation"
-SPEAKING_EVALUATION_PROMPT_VERSION = "speaking-evaluation-prompt"
-SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation"
+SPEAKING_SCORING_POLICY_VERSION = "speaking-scoring-policy-v2"
+SPEAKING_EVALUATION_VERSION = "speaking-evaluation-v2"
+SPEAKING_EVALUATION_PROMPT_VERSION = "speaking-evaluation-prompt-v3"
+SPEAKING_CONVERSATION_PROMPT_VERSION = "speaking-conversation-v2"
 SPEAKING_TTS_VERSION = "speaking-tts"
 AUDIO_NORMALIZATION_VERSION = "speaking-audio-normalization"
 STT_HINT_VERSION = "speaking-stt-hint"
@@ -93,17 +93,8 @@ def has_pronunciation_evidence(
     *,
     min_stt_confidence: float = 0.55,
 ) -> bool:
-    for turn in turns:
-        if turn.excluded_from_evaluation or not turn.audio_available:
-            continue
-        quality = turn.audio_quality_signals
-        if quality is None or not turn.segments:
-            continue
-        if turn.duration_seconds < 1.0 or turn.stt_confidence < min_stt_confidence:
-            continue
-        if quality.rms < 0.003 or quality.silence_ratio >= 0.98:
-            continue
-        return True
+    # Kept for callers of the old helper. The current evaluator receives text,
+    # never waveform/alignment/scorer output; metadata cannot grant capability.
     return False
 
 def calculate_speaking_overall(metrics: list[SpeakingMetricPayload]) -> int | None:

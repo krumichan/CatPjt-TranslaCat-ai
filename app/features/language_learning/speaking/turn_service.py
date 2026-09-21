@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.features.language_learning.speaking.audio_processor import SpeakingAudioProcessor
+from app.core.config import settings
+from app.features.language_learning.speaking.audio_processor import (
+    NormalizedAudio,
+    SpeakingAudioProcessor,
+)
 from app.features.language_learning.speaking.conversation_service import SpeakingConversationService
 from app.features.language_learning.speaking.errors import SpeakingStageException
 from app.features.language_learning.speaking.idempotency import InMemoryIdempotencyStore
@@ -13,6 +17,7 @@ from app.schemas.language_learning_speaking import (
     SessionStartRequest,
     SessionStartResponse,
     SpeakingError,
+    SpeakingErrorCode,
     SpeakingPracticeMode,
     SpeakingStage,
     SpeakingUsage,
@@ -114,28 +119,46 @@ class SpeakingTurnService:
         usage = SpeakingUsage()
         transcript = None
         try:
-            stt = await self.transcribe_audio(
-                context=SttRequestContext(
-                    request_id=context.request_id,
-                    idempotency_key=context.idempotency_key,
-                    session_id=context.session_id,
-                    turn_index=context.turn_index,
-                    learning_language=context.learning_language,
-                    phrase_hints=[
-                        keyword.text for keyword in context.selected_keywords
-                    ],
-                    audio_reference=context.audio_reference,
-                    audio_format=context.audio_format,
-                    duration_seconds=context.duration_seconds,
-                    session_policy_snapshot=context.session_policy_snapshot,
-                    manual_retry_attempt=context.manual_retry_attempt,
-                ),
-                audio_bytes=audio_bytes,
-                file_name=file_name,
-                content_type=content_type,
-            )
-            transcript = stt.transcript
-            usage = self._merge_usage(usage, stt.usage)
+            if context.transcript is not None and context.transcript.text.strip():
+                # BE restores a successful STT result on downstream-stage retry;
+                # a new recording explicitly supplies transcript=None.
+                self._normalize_audio(
+                    context=context,
+                    audio_bytes=audio_bytes,
+                    file_name=file_name,
+                    content_type=content_type,
+                )
+                if context.manual_retry_attempt > settings.AI_SPEAKING_MANUAL_RETRY_LIMIT:
+                    raise SpeakingStageException(
+                        code=SpeakingErrorCode.MANUAL_RETRY_LIMIT_EXCEEDED,
+                        stage=SpeakingStage.STT,
+                        message="STT 수동 재시도 가능 횟수를 초과했습니다.",
+                        retryable=False,
+                    )
+                transcript = context.transcript.model_copy(deep=True)
+            else:
+                stt = await self.transcribe_audio(
+                    context=SttRequestContext(
+                        request_id=context.request_id,
+                        idempotency_key=context.idempotency_key,
+                        session_id=context.session_id,
+                        turn_index=context.turn_index,
+                        learning_language=context.learning_language,
+                        phrase_hints=[
+                            keyword.text for keyword in context.selected_keywords
+                        ],
+                        audio_reference=context.audio_reference,
+                        audio_format=context.audio_format,
+                        duration_seconds=context.duration_seconds,
+                        session_policy_snapshot=context.session_policy_snapshot,
+                        manual_retry_attempt=context.manual_retry_attempt,
+                    ),
+                    audio_bytes=audio_bytes,
+                    file_name=file_name,
+                    content_type=content_type,
+                )
+                transcript = stt.transcript
+                usage = self._merge_usage(usage, stt.usage)
         except SpeakingStageException as exc:
             return self._partial_failure(
                 context=context,
@@ -226,14 +249,11 @@ class SpeakingTurnService:
         file_name: str | None,
         content_type: str | None,
     ) -> SttResponse:
-        policy = context.session_policy_snapshot
-        normalized = self.audio_processor.validate_and_normalize(
-            audio_bytes,
+        normalized = self._normalize_audio(
+            context=context,
+            audio_bytes=audio_bytes,
             file_name=file_name,
             content_type=content_type,
-            min_seconds=policy.min_valid_audio_seconds,
-            max_seconds=policy.max_turn_audio_seconds,
-            max_bytes=policy.max_audio_file_bytes,
         )
         return await self.stt_service.transcribe(
             request_id=context.request_id,
@@ -243,8 +263,26 @@ class SpeakingTurnService:
             normalized_audio=normalized,
             phrase_hints=context.phrase_hints,
             idempotency_key=context.idempotency_key,
-            automatic_retry_limit=policy.automatic_retry_limit_per_stage,
+            automatic_retry_limit=context.session_policy_snapshot.automatic_retry_limit_per_stage,
             manual_retry_attempt=context.manual_retry_attempt,
+        )
+
+    def _normalize_audio(
+        self,
+        *,
+        context: ConversationGenerationRequest | SttRequestContext,
+        audio_bytes: bytes,
+        file_name: str | None,
+        content_type: str | None,
+    ) -> NormalizedAudio:
+        policy = context.session_policy_snapshot
+        return self.audio_processor.validate_and_normalize(
+            audio_bytes,
+            file_name=file_name,
+            content_type=content_type,
+            min_seconds=policy.min_valid_audio_seconds,
+            max_seconds=policy.max_turn_audio_seconds,
+            max_bytes=policy.max_audio_file_bytes,
         )
 
     async def _assistant_with_tts(

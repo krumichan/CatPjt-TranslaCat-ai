@@ -11,7 +11,8 @@ from tests.test_speaking_release_contract import contract_cases, make_case
 
 
 async def main():
-    destinations = [Path("tests/fixtures/speaking-release")]
+    # V1 fixtures are immutable history compatibility cases, not rewritten by V2.
+    destinations = [Path("tests/fixtures/speaking-release-v2")]
     if len(sys.argv) > 1:
         destinations.append(Path(sys.argv[1]))
     for destination in destinations:

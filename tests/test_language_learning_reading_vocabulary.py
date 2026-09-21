@@ -6,8 +6,18 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.features.language_learning.reading_vocabulary.service import ReadingVocabularyGenerationService
 from app.schemas.language_learning_practice import PracticeGeneratedQuestion, PracticeGenerationRequest
+
+
+@pytest.fixture(autouse=True)
+def legacy_pipeline_fixture_uses_luna(monkeypatch):
+    """Keep the historical fake's task routing explicit after Reading selects Sol.
+
+    The scoped Sol test overrides this locally and checks the selected route.
+    """
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "LUNA")
 
 
 def _practice_data(prompt: str) -> dict:
@@ -69,18 +79,43 @@ class PipelineProvider:
         self.verification_payloads: list[dict] = []
         self.server_answer_keys: dict[int, str] = {}
 
+    async def call_with_image(self, type_name, prompt, image_bytes, mime_type, schema=None):
+        raise AssertionError("Reading/Vocabulary fixtures must not invoke an image provider")
+
     async def call(self, type_name, data, schema=None):
         self.calls[type_name] += 1
         if type_name == ReadingVocabularyGenerationService.PASSAGE_TYPE_NAME:
             payload = _practice_data(data)
             passage_id = payload["passageId"]
-            return {
+            passage = (
+                "今日は会社で会議があります。担当者は資料を確認しました。"
+                "その後、顧客への説明方法について話し合いました。"
+                "参加人数が増えたとの連絡を受け、担当者は資料を追加しました。"
+                "顧客から数字について質問が届き、担当者は表を見直しました。"
+                "外は雨の予報なので、帰り道の交通情報も調べています。"
+            )
+            result = {
                 "passageId": passage_id,
-                "passageText": (
-                    "今日は会社で会議があります。担当者は資料を確認しました。"
-                    "その後、顧客への説明方法について話し合いました。"
-                ),
+                "passageText": passage,
             }
+            if payload["mode"] == "CONTEXT_INFERENCE":
+                clues = (
+                    "参加人数が増えたとの連絡を受け、担当者は資料を追加しました。",
+                    "顧客から数字について質問が届き、担当者は表を見直しました。",
+                    "外は雨の予報なので、帰り道の交通情報も調べています。",
+                )
+                inferences = (
+                    "追加の参加者にも資料を渡すつもりです。",
+                    "説明前に数字の正確さを確かめたいようです。",
+                    "帰りの交通手段を変更する可能性があります。",
+                )
+                orders = (1, 2, 3) if passage_id == "p1" else (4, 5)
+                result["inferencePlans"] = [
+                    {"questionOrder": order, "clueQuote": clues[index],
+                     "unstatedInference": inferences[index]}
+                    for index, order in enumerate(orders)
+                ]
+            return result
 
         if type_name == ReadingVocabularyGenerationService.TYPE_NAME:
             payload = _practice_data(data)
@@ -155,6 +190,24 @@ class PipelineProvider:
                         "contextDependent": occurrence
                         > self.semantic_context_independent_rounds_by_order.get(order, 0),
                         "distractorsPlausible": True,
+                        **(
+                            {
+                                "stemPresuppositionsSupported": True,
+                                "stemEvidenceSpanIds": [next(
+                                    span["id"] for span in payload["readingEvidenceSpans"]
+                                    if span["passageId"] == question["passageId"]
+                                )],
+                                "readingOperation": (
+                                    "DISCOURSE_STRUCTURE" if question["skillTag"] == "STRUCTURE"
+                                    else "INFERENCE" if question["skillTag"] in {"INFERENCE", "CONTEXT_INFERENCE"}
+                                    else "DIRECT_RETRIEVAL"
+                                ),
+                                "distinctReadingTask": True,
+                                **({"boundedStructureScope": True}
+                                   if payload["mode"] == "STRUCTURE" else {}),
+                            }
+                            if payload["domain"] == "READING" else {}
+                        ),
                     }
                 )
             return {"verdicts": verdicts}
@@ -206,7 +259,10 @@ class PipelineProvider:
             ]
             correct = ["A"]
 
-        prompt = "最も適切なものはどれですか。"
+        prompt = (
+            f"第{len(payload['previousQuestions']) + order}問では何を確認しますか。"
+            if not vocab else "最も適切なものはどれですか。"
+        )
         if (
             (order in self.bad_learning_lane_once and self.slot_occurrences[order] == 1)
             or self.slot_occurrences[order] <= self.candidate_reject_rounds_by_order.get(order, 0)
@@ -259,6 +315,7 @@ class PipelineProvider:
             retry_target = slot.get("retryTargetExpression")
             if retry_target:
                 target_expression = retry_target
+            assert isinstance(target_expression, str)
             options[0] = {"key": "A", "text": target_expression}
 
         skill_tag = slot["skillTag"]
@@ -435,6 +492,30 @@ def _single_request(base, previous=(), **updates):
     )
     payload.update(updates)
     return PracticeGenerationRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_sol_reading_only_task_replaces_one_generation_call_without_affecting_vocabulary(monkeypatch):
+    class ScopedProvider(ProgressiveProvider):
+        async def call(self, type_name, data, schema=None):
+            if type_name == ReadingVocabularyGenerationService.READING_SOL_TYPE_NAME:
+                self.calls[type_name] += 1
+                return await super().call(ReadingVocabularyGenerationService.TYPE_NAME, data, schema)
+            return await super().call(type_name, data, schema)
+
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "SOL")
+    provider = ScopedProvider()
+    service = ReadingVocabularyGenerationService(provider)
+    reading = _single_request(_request(mode="COMPREHENSION"), [])
+    assert service._generation_timeout_for(reading) == 80
+    result = await service.generate(reading)
+    assert len(result.questions) == 1
+    assert provider.calls[service.READING_SOL_TYPE_NAME] == 1
+    assert provider.calls[service.PASSAGE_TYPE_NAME] == 1
+    assert provider.calls[service.VERIFICATION_TYPE_NAME] == 1
+    vocabulary = _request(domain="VOCABULARY", mode="MEANING_RELATION",
+                          question_count=10, easier=2, current=6, challenge=2)
+    assert service._generation_timeout_for(vocabulary) == service.timeout_seconds
 
 
 @pytest.mark.asyncio
@@ -652,6 +733,31 @@ async def test_reading_invalid_vocabulary_candidates_are_sanitized_without_regen
     question = next(item for item in response.questions if item.order == 3)
     assert provider.slot_occurrences[3] == 1
     assert question.vocabulary_candidates == ["資料", "顧客への説明"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("optional_metadata", [None, "not-a-list", {"expression": "資料"}, [None, 7, "absent"]])
+async def test_reading_optional_expression_metadata_cannot_change_question_or_call_budget(optional_metadata):
+    class MalformedOptionalProvider(PipelineProvider):
+        def _candidate(self, payload, slot):
+            candidate = super()._candidate(payload, slot)
+            candidate["vocabularyCandidates"] = optional_metadata
+            return candidate
+
+    baseline = PipelineProvider()
+    candidate = MalformedOptionalProvider()
+    request = _request(mode="CONTEXT_INFERENCE")
+    normal = await ReadingVocabularyGenerationService(baseline).generate(request)
+    observed = await ReadingVocabularyGenerationService(candidate).generate(request)
+
+    assert len(observed.questions) == 5
+    assert candidate.calls == baseline.calls
+    assert candidate.slot_occurrences == baseline.slot_occurrences
+    assert candidate.verification_occurrences == baseline.verification_occurrences
+    assert all(question.vocabulary_candidates == [] for question in observed.questions)
+    assert [question.model_dump(exclude={"vocabulary_candidates"}) for question in observed.questions] == [
+        question.model_dump(exclude={"vocabulary_candidates"}) for question in normal.questions
+    ]
 
 
 @pytest.mark.asyncio
@@ -1072,6 +1178,7 @@ async def test_usage_distinction_normalizes_application_owned_metadata_without_r
     assert question.skill_tag == "CONTEXT_USAGE"
     assert question.review_target is False
     assert question.correct_answer == ["A"]
+    assert question.target_expression is not None
     assert question.canonical_key == question.target_expression.casefold()
 
 

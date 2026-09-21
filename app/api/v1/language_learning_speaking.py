@@ -8,6 +8,7 @@ from app.api.dependencies import (
     get_language_learning_speaking_assistance_service,
     get_language_learning_speaking_audio_store,
     get_language_learning_speaking_conversation_service,
+    get_language_learning_speaking_coaching_service,
     get_language_learning_speaking_evaluation_service,
     get_language_learning_speaking_tts_service,
     get_language_learning_speaking_turn_service,
@@ -17,6 +18,7 @@ from app.features.language_learning.speaking.audio_store import TemporaryTtsAudi
 from app.features.language_learning.speaking.conversation_service import SpeakingConversationService
 from app.features.language_learning.speaking.errors import SpeakingStageException
 from app.features.language_learning.speaking.evaluation_service import SpeakingEvaluationService
+from app.features.language_learning.speaking.coaching_service import SpeakingSessionCoachingService
 from app.features.language_learning.speaking.tts_service import SpeakingTtsService
 from app.features.language_learning.speaking.turn_service import SpeakingTurnService
 from app.schemas.language_learning_speaking import (
@@ -28,6 +30,8 @@ from app.schemas.language_learning_speaking import (
     SessionStartResponse,
     SpeakingEvaluationRequest,
     SpeakingEvaluationResponse,
+    SpeakingCoachingRequest,
+    SpeakingCoachingResponse,
     SttRequestContext,
     SttResponse,
     TtsRequest,
@@ -170,6 +174,20 @@ async def evaluate_speaking_session(
 ) -> SpeakingEvaluationResponse:
     try:
         return await service.evaluate(request)
+    except SpeakingStageException as exc:
+        _raise_speaking_error(exc)
+        raise AssertionError("unreachable")
+
+
+@router.post("/coach", response_model=SpeakingCoachingResponse)
+async def coach_speaking_session(
+    request: SpeakingCoachingRequest,
+    service: SpeakingSessionCoachingService = Depends(
+        get_language_learning_speaking_coaching_service
+    ),
+) -> SpeakingCoachingResponse:
+    try:
+        return await service.coach(request)
     except SpeakingStageException as exc:
         _raise_speaking_error(exc)
         raise AssertionError("unreachable")

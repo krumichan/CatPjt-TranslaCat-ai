@@ -14,13 +14,16 @@ from app.core.config import settings
 from app.features.language_learning.listening.difficulty_adapter import (
     validate_listening_candidate,
 )
+from app.features.language_learning.listening.duration import (
+    duration_demand,
+    minimum_short_correction_characters,
+)
 from app.features.language_learning.listening.errors import ListeningStageException
 from app.features.language_learning.listening.normalization import (
     normalize_text,
     similarity_key,
 )
 from app.features.language_learning.listening.policy import (
-    DIFFICULTY_DURATION_RANGES,
     LISTENING_GENERATION_PROMPT_VERSION,
     LISTENING_GENERATION_VERSION,
 )
@@ -111,6 +114,12 @@ class ListeningGenerationService:
             request.model_config_version,
         )
         self._validate_manual_retry(request.manual_retry_attempt)
+        self._duration_range(request)
+        if request.duration_correction is not None and request.set_context.item_count != 1:
+            raise ListeningStageException(
+                ListeningErrorCode.INVALID_REQUEST, ListeningStage.GENERATION,
+                "Duration 교정은 미게시 문항 한 개에만 적용할 수 있습니다.", False,
+            )
         key = "|".join(
             [
                 request.idempotency_key,
@@ -145,6 +154,7 @@ class ListeningGenerationService:
         total_output_tokens = 0
         last_provider = None
         last_model = None
+        transient_retries = 0
 
         for provider_attempt in range(3):
             missing = expected_count - len(accepted_items)
@@ -212,7 +222,8 @@ class ListeningGenerationService:
                     timeout=self.timeout_seconds,
                 )
             except (TimeoutError, asyncio.TimeoutError) as exc:
-                if provider_attempt < 2:
+                if provider_attempt < 2 and transient_retries < self.automatic_retries:
+                    transient_retries += 1
                     continue
                 raise ListeningStageException(
                     ListeningErrorCode.PROVIDER_TIMEOUT,
@@ -229,7 +240,12 @@ class ListeningGenerationService:
                     fallback_code=ListeningErrorCode.GENERATION_FAILED,
                     fallback_message="Listening 문항 생성에 실패했습니다.",
                 )
-                if mapped.retryable and provider_attempt < 2:
+                if (
+                    mapped.retryable
+                    and provider_attempt < 2
+                    and transient_retries < self.automatic_retries
+                ):
+                    transient_retries += 1
                     continue
                 raise mapped from exc
 
@@ -445,6 +461,13 @@ class ListeningGenerationService:
         if not validation.passed:
             return None
         normalized = normalize_text(item.source_text, request.user_context.learning_language)
+        if request.duration_correction is not None and normalized.text == normalize_text(
+            request.duration_correction.previous_source_text, request.user_context.learning_language
+        ).text:
+            return None
+        correction_floor = minimum_short_correction_characters(request)
+        if correction_floor is not None and len(item.source_text.strip()) < correction_floor:
+            return None
         content_hash = hashlib.sha256(normalized.text.encode("utf-8")).hexdigest()
         key = similarity_key(item.source_text, request.user_context.learning_language)
         return ListeningItem(
@@ -465,6 +488,11 @@ class ListeningGenerationService:
             correct_option_key=item.correct_option_key,
             comprehension_focus=item.comprehension_focus,
             summary_key_points=item.summary_key_points,
+            duration_demand=duration_demand(request),
+            quality_correction_count=(
+                request.duration_correction.quality_correction_count
+                if request.duration_correction else 0
+            ),
         )
 
     @staticmethod
@@ -526,21 +554,8 @@ class ListeningGenerationService:
 
     @staticmethod
     def _duration_range(request: ListeningSetGenerationRequest) -> tuple[float, float]:
-        policy_minimum, policy_maximum = DIFFICULTY_DURATION_RANGES[
-            request.set_context.difficulty.value
-        ]
-        minimum = request.constraints.audio_seconds_min or policy_minimum
-        maximum = request.constraints.audio_seconds_max or policy_maximum
-        minimum = max(minimum, policy_minimum)
-        maximum = min(maximum, policy_maximum)
-        if minimum > maximum:
-            raise ListeningStageException(
-                ListeningErrorCode.INVALID_REQUEST,
-                ListeningStage.GENERATION,
-                "요청 Duration 범위와 Difficulty 정책 범위가 겹치지 않습니다.",
-                False,
-            )
-        return minimum, maximum
+        demand = duration_demand(request)
+        return demand.min_seconds, demand.max_seconds
 
     @staticmethod
     def _validate_manual_retry(attempt: int) -> None:

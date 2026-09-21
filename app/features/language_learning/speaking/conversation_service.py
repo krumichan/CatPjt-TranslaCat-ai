@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -30,6 +31,11 @@ from app.schemas.language_learning_speaking import (
     SpeakingUsage,
     StageUsage,
 )
+
+
+def _conversation_response_schema(request: ConversationGenerationRequest) -> dict[str, Any]:
+    """Keep the legacy optional link; there is no supported link catalogue/consumer."""
+    return ConversationPayload.model_json_schema()
 
 
 class SpeakingConversationService:
@@ -78,7 +84,7 @@ class SpeakingConversationService:
         request: ConversationGenerationRequest,
     ) -> ConversationGenerationResponse:
         prompt = build_conversation_prompt(request)
-        schema = ConversationPayload.model_json_schema()
+        schema = _conversation_response_schema(request)
         difficulty_spec = build_speaking_generation_difficulty_spec(request)
         started = time.perf_counter()
 
@@ -95,13 +101,6 @@ class SpeakingConversationService:
                 if not isinstance(result.data, dict):
                     raise ValueError("structured conversation response must be object")
                 payload = ConversationPayload.model_validate(result.data)
-                if request.correction_mode.value == "COACHING" and any(
-                    correction.improvement_link is None
-                    for correction in payload.coaching_corrections
-                ):
-                    raise ValueError(
-                        "COACHING correction에는 improvementLink가 필요합니다."
-                    )
                 validation = project_speaking_generation_validation(
                     difficulty_spec,
                     lambda: self._validate_practice_mode_payload(request, payload),

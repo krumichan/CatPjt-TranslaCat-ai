@@ -74,7 +74,7 @@ class SpeakingSessionContext(CamelCaseModel):
     audio_reference: str | None = Field(default=None, max_length=500)
     audio_format: str | None = Field(default=None, max_length=100)
     duration_seconds: float | None = Field(default=None, ge=0, le=60)
-    voice: str = Field(default="Kore", min_length=1, max_length=100)
+    voice: str = Field(default="marin", min_length=1, max_length=100)
     playback_speed: str = Field(default="NORMAL", pattern="^(SLOW|NORMAL)$")
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)
 
@@ -288,7 +288,7 @@ class TtsRequest(CamelCaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     text: str = Field(..., min_length=1, max_length=4000)
     learning_language: str = Field(..., min_length=2, max_length=20)
-    voice: str = Field(default="Kore", min_length=1, max_length=100)
+    voice: str = Field(default="marin", min_length=1, max_length=100)
     playback_speed: str = Field(default="NORMAL", pattern="^(SLOW|NORMAL)$")
     automatic_retry_limit: int = Field(default=2, ge=0, le=2)
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)

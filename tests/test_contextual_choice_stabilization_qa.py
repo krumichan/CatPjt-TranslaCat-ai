@@ -17,15 +17,20 @@ from app.features.language_learning.reading_vocabulary.contextual_choice_task im
 )
 from app.features.language_learning.reading_vocabulary.service import (
     ReadingVocabularyGenerationService,
+    _ContextualChoiceLexicalVerifierContractError,
 )
+from fastapi import HTTPException
 from scripts.run_contextual_choice_stabilization_qa import (
     DEFAULT_FIXTURE,
     QaBudgetExceeded,
     QaCallTimeout,
     QaCaps,
+    QaOverallTimeout,
     RecordingProvider,
     _call_summary,
+    _diagnostic_outcome,
     _safe_call_diagnostic,
+    _write_payload,
     build_order_diagnostic_request,
     compare_results,
     dry_run_manifest,
@@ -138,6 +143,20 @@ def test_default_cli_is_dry_run(capsys):
 def test_live_cli_refuses_to_construct_provider_without_all_caps(capsys):
     assert main(["--live", "--variant", "candidate"]) == 2
     assert "requires explicit" in capsys.readouterr().err
+
+
+def test_private_output_does_not_duplicate_diagnostic_text_to_stdout(tmp_path, capsys):
+    from scripts.run_contextual_choice_stabilization_qa import _emit
+
+    payload = {"mode": "ORDER_DIAGNOSTIC_LIVE", "status": "FAILED", "partial": True,
+               "diagnosticCapture": {"request": "private learner expression", "response": "private verdict"}}
+    output = tmp_path / "private.json"
+    _emit(payload, output)
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
+    printed = capsys.readouterr().out
+    assert "private learner expression" not in printed
+    assert "private verdict" not in printed
+    assert json.loads(printed)["diagnosticContent"] == "PRIVATE_ARTIFACT_ONLY"
 
 
 def test_safe_repair_diagnostic_keeps_codes_and_indexes_but_not_content():
@@ -768,3 +787,196 @@ async def test_order_diagnostic_flushes_partial_ledger_on_termination(
         "REGISTER"
     )
     assert ledger[1]["diagnosticCapture"]["response"] == repair_response
+
+
+@pytest.mark.asyncio
+async def test_provider_timeout_is_not_misreported_as_qa_deadline():
+    provider = _MetadataProvider([TimeoutError("provider deadline")])
+    recorder = RecordingProvider(provider, QaCaps(3, 100, 100, 90, 600))
+    with pytest.raises(TimeoutError, match="provider deadline") as failure:
+        await recorder.call("TASK", "payload")
+    assert not isinstance(failure.value, QaCallTimeout)
+    assert recorder.calls[0]["failure"] == {"type": "TimeoutError", "source": "PROVIDER"}
+
+
+@pytest.mark.asyncio
+async def test_overall_deadline_bounds_inflight_call_separately_from_per_call_limit():
+    provider = _BlockingMetadataProvider()
+    recorder = RecordingProvider(provider, QaCaps(3, 100, 100, 90, 0.02))
+    with pytest.raises(QaOverallTimeout):
+        await recorder.call("TASK", "payload")
+    with pytest.raises(QaBudgetExceeded):
+        await recorder.call("TASK", "must not start")
+    assert provider.started == 1
+    assert recorder.calls[0]["failure"]["type"] == "QA_OVERALL_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_retains_completed_response_and_inflight_request_before_cancel(
+    tmp_path, monkeypatch,
+):
+    blocked = asyncio.Event()
+    output = tmp_path / "checkpoint.json"
+
+    class Provider(_MetadataProvider):
+        async def call_with_metadata(self, **kwargs):
+            if self.started == 1:
+                self.started += 1
+                blocked.set()
+                await asyncio.Event().wait()
+            return await super().call_with_metadata(**kwargs)
+
+    provider = Provider([StructuredGenerationResult(data={"lexical": "captured"})])
+
+    async def generate(self, request):
+        await self.provider.call("VERIFY", "first")
+        await self.provider.call("REPAIR", "second")
+        pytest.fail("cancelled flow must not resume")
+
+    monkeypatch.setattr(ReadingVocabularyGenerationService, "generate", generate)
+    case = validate_order_diagnostic_case(_order_diagnostic_case(target_order=4))
+    case_path = tmp_path / "case.json"
+    case_path.write_text(json.dumps(case), encoding="utf-8")
+    task = asyncio.create_task(run_order_diagnostic_live(
+        case_path, case, variant="candidate", caps=QaCaps(12, 120000, 40000, 90, 600),
+        partial_output=output, provider_factory=lambda: provider,
+    ))
+    await asyncio.wait_for(blocked.wait(), 2)
+    # This file exists before finally, including if an external runner kills us.
+    checkpoint = json.loads(output.read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "RUNNING"
+    assert checkpoint["partial"] is True
+    ledger = checkpoint["calls"]["attemptLedger"]
+    assert ledger[0]["diagnosticCapture"]["response"] == {"lexical": "captured"}
+    assert ledger[1]["status"] == "STARTED"
+    task.cancel()
+    result = await task
+    assert result["status"] == "INTERRUPTED"
+    assert result["outcomeCategory"] == "INTERRUPTED"
+    assert result["calls"]["attemptsStarted"] == 2
+    last = result["calls"]["attemptLedger"][-1]
+    assert last["failure"]["source"] == "EXTERNAL_OR_UPSTREAM_UNDETERMINED"
+    assert last["failure"]["taskCancellationCount"] >= 1
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "INTERRUPTED"
+
+
+def test_atomic_checkpoint_failed_replace_preserves_previous_artifact(tmp_path, monkeypatch):
+    output = tmp_path / "result.json"
+    _write_payload({"status": "RUNNING", "calls": [1]}, output)
+
+    def fail_replace(source, destination):
+        raise OSError("simulated atomic replace failure")
+
+    monkeypatch.setattr("scripts.run_contextual_choice_stabilization_qa.os.replace", fail_replace)
+    with pytest.raises(OSError):
+        _write_payload({"status": "RUNNING", "calls": [1, 2]}, output)
+    assert json.loads(output.read_text(encoding="utf-8"))["calls"] == [1]
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_checkpoint_retries_transient_windows_sharing_violation(tmp_path, monkeypatch):
+    output = tmp_path / "result.json"
+    _write_payload({"status": "RUNNING", "calls": [1]}, output)
+    from scripts import run_contextual_choice_stabilization_qa as qa
+
+    original = qa.os.replace
+    starts = 0
+
+    def sharing_once(source, destination):
+        nonlocal starts
+        starts += 1
+        if starts == 1:
+            raise PermissionError(5, "temporary sharing violation")
+        return original(source, destination)
+
+    monkeypatch.setattr(qa.os, "replace", sharing_once)
+    _write_payload({"status": "INTERRUPTED", "calls": [1, 2]}, output)
+    assert starts == 2
+    assert json.loads(output.read_text(encoding="utf-8")) == {
+        "status": "INTERRUPTED", "calls": [1, 2],
+    }
+
+
+@pytest.mark.asyncio
+async def test_late_provider_result_cannot_undo_expired_call_deadline():
+    class SuppressesCancellation(_MetadataProvider):
+        async def call_with_metadata(self, **kwargs):
+            self.started += 1
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return StructuredGenerationResult(data={"late": True})
+            raise AssertionError("The private event cannot complete normally")
+
+    provider = SuppressesCancellation([])
+    recorder = RecordingProvider(provider, QaCaps(3, 100, 100, 0.01, 1))
+    with pytest.raises(QaCallTimeout):
+        await recorder.call("TASK", "payload")
+    with pytest.raises(QaBudgetExceeded):
+        await recorder.call("TASK", "must not start")
+    assert provider.started == 1
+    assert recorder.calls[0]["status"] == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_exact_token_cap_blocks_next_start():
+    provider = _MetadataProvider([StructuredGenerationResult(data={}, input_tokens=10)])
+    recorder = RecordingProvider(provider, QaCaps(3, 10, 100, 1, 2))
+    await recorder.call("TASK", "payload")
+    with pytest.raises(QaBudgetExceeded, match="token cap reached"):
+        await recorder.call("TASK", "must not start")
+    assert provider.started == 1
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_exhausting_wall_budget_never_enters_provider():
+    provider = _MetadataProvider([])
+    recorder = RecordingProvider(provider, QaCaps(3, 100, 100, 90, 600))
+
+    def consume_remaining_budget():
+        recorder.started_at -= 601
+
+    recorder.checkpoint = consume_remaining_budget
+    with pytest.raises(QaOverallTimeout):
+        await recorder.call("TASK", "payload")
+    assert provider.started == 0
+    assert recorder.calls[0]["failure"]["source"] == "BEFORE_PROVIDER_ENTRY"
+
+
+def test_diagnostic_separates_contract_failure_from_content_rejection():
+    contract = _ContextualChoiceLexicalVerifierContractError(
+        "LEXICAL_VERIFIER_DISTRACTOR_COVERAGE_INVALID", expected_order=4,
+    )
+    outer = HTTPException(status_code=502, detail={"code": "AI_GENERATION_FAILED"})
+    outer.__cause__ = contract
+    assert _diagnostic_outcome(outer, "FAILED") == "VERIFIER_CONTRACT_FAILURE"
+    assert _diagnostic_outcome(HTTPException(status_code=422), "FAILED") == "CONTENT_REJECTED"
+    assert _diagnostic_outcome(TimeoutError(), "FAILED") == "INFRA_FAILURE"
+    assert _diagnostic_outcome(asyncio.CancelledError(), "INTERRUPTED") == "INTERRUPTED"
+
+
+@pytest.mark.asyncio
+async def test_suppressed_external_cancellation_cannot_continue_diagnostic():
+    started = asyncio.Event()
+
+    class SuppressesCancellation(_MetadataProvider):
+        async def call_with_metadata(self, **kwargs):
+            self.started += 1
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return StructuredGenerationResult(data={"late": True})
+            raise AssertionError("The private event cannot complete normally")
+
+    provider = SuppressesCancellation([])
+    recorder = RecordingProvider(provider, QaCaps(3, 100, 100, 90, 600))
+    task = asyncio.create_task(recorder.call("TASK", "payload"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(QaBudgetExceeded):
+        await recorder.call("TASK", "must not start")
+    assert provider.started == 1
+    assert recorder.calls[0]["status"] == "CANCELLED"

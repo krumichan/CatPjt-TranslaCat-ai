@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from app.features.language_learning.listening.errors import ListeningStageException
 from app.schemas.language_learning_listening import ListeningErrorCode, ListeningStage
 
@@ -27,6 +29,7 @@ def map_provider_exception(
             stage,
             "AI Provider 요청 한도에 도달했습니다.",
             True,
+            _retry_after_details(exc),
         )
     if status in {408, 504} or "deadline exceeded" in message:
         return ListeningStageException(
@@ -55,6 +58,20 @@ def map_provider_exception(
         fallback_message,
         False,
     )
+
+
+def _retry_after_details(exc: Exception) -> dict[str, int]:
+    """Preserve typed provider cooldown metadata without parsing its message."""
+    value = getattr(exc, "retry_after_seconds", None)
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 < value <= 2**31 - 1
+    ):
+        # Round up so the durable worker never resumes inside the cooldown.
+        return {"retryAfterSeconds": math.ceil(value)}
+    return {}
 
 
 def _read_status_code(exc: Exception) -> int | None:

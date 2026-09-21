@@ -8,6 +8,8 @@ from app.api.dependencies import (
     get_ai_provider,
     get_ocr_service,
     get_speech_runtime,
+    get_speaking_speech_runtime,
+    get_speaking_speech_evidence_guard,
     get_speech_synthesis_provider,
     get_voice_speech_evidence_guard,
     get_voice_stream_service,
@@ -38,6 +40,9 @@ async def lifespan(app: FastAPI):
     finally:
         await get_voice_stream_service().shutdown()
         await get_speech_runtime().shutdown()
+        if get_speaking_speech_runtime() is not get_speech_runtime():
+            await get_speaking_speech_runtime().shutdown()
+        await get_speaking_speech_evidence_guard().shutdown()
         await get_voice_speech_evidence_guard().shutdown()
         shutdown_provider = getattr(get_ai_provider(), "shutdown", None)
         if shutdown_provider is not None:

@@ -77,15 +77,8 @@ def validate_listening_candidate(
     duration_range = duration_range_resolver()
     spec = build_listening_difficulty_spec(request, duration_range=duration_range)
     target = spec.target.value
-    if not spec.duration_min_seconds <= item.estimated_audio_seconds <= spec.duration_max_seconds:
-        return spec, DifficultyValidationResult.reject(
-            "LISTENING_DURATION_OUT_OF_PROFILE",
-            measurements={
-                "estimatedAudioSeconds": item.estimated_audio_seconds,
-                "durationMinSeconds": spec.duration_min_seconds,
-                "durationMaxSeconds": spec.duration_max_seconds,
-            },
-        )
+    # A model's duration estimate is planning metadata, not acoustic evidence.
+    # Final NORMAL waveform duration is enforced by TTS and BE publication.
     if not mode_payload_validator():
         return spec, DifficultyValidationResult.reject(
             "LISTENING_MODE_PAYLOAD_INVALID",

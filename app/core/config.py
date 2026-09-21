@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,6 +29,13 @@ class Settings(BaseSettings):
     OPENAI_MODEL_MINI: str = "gpt-5-mini"
     OPENAI_MODEL_NANO: str = "gpt-5-nano"
     OPENAI_REQUEST_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=300)
+    # Selected after a fixed six-case A/B comparison. Only Reading passage,
+    # question and existing distractor repair use Sol; all verifiers and other
+    # features retain their existing model policy. LUNA remains a rollback.
+    AI_READING_GENERATION_MODEL: Literal["LUNA", "SOL"] = "SOL"
+    OPENAI_SPEECH_MODEL: str = "gpt-4o-mini-tts-2025-12-15"
+    OPENAI_SPEECH_VOICE: str = "marin"
+    OPENAI_SPEECH_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=300)
 
     # AI Chat Member Reply
     AI_CHAT_CONTEXT_DEFAULT_MAX_MESSAGES: int = 30
@@ -80,9 +89,13 @@ class Settings(BaseSettings):
     AI_WRITING_GENERATION_TOTAL_TIMEOUT_SECONDS: float = Field(default=240.0, gt=0, le=900)
 
     # Language Learning / AI Speaking
-    AI_SPEAKING_STT_MODEL_NAME: str = "tiny"
+    # Speaking owns this runtime; Voice/Listening retain their shared runtime.
+    AI_SPEAKING_STT_MODEL_NAME: str = "small"
+    AI_SPEAKING_STT_MODEL_REVISION: str | None = None
     AI_SPEAKING_STT_DEVICE: str = "cpu"
     AI_SPEAKING_STT_COMPUTE_TYPE: str = "int8"
+    AI_SPEAKING_STT_CPU_THREADS: int = Field(default=4, ge=1, le=64)
+    AI_SPEAKING_STT_BEAM_SIZE: int = Field(default=5, ge=1, le=5)
     AI_SPEAKING_STT_TIMEOUT_SECONDS: float = 30.0
     AI_SPEAKING_CONVERSATION_TIMEOUT_SECONDS: float = 30.0
     AI_SPEAKING_TTS_TIMEOUT_SECONDS: float = 30.0

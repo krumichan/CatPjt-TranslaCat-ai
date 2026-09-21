@@ -12,7 +12,7 @@ from app.ai.model_policy import AiModelTier, get_task_model_policy
 from app.ai.ports import StructuredGenerationResult
 from app.ai.prompt_registry import PROMPT_MAP
 from app.ai.providers.openai.schema import build_openai_text_config
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.features.language_learning.reading_vocabulary.prompts import (
     PRACTICE_VERIFICATION_SYSTEM_PROMPT,
     READING_STRUCTURE_MODE_FIT_CLARIFICATION,
@@ -38,6 +38,12 @@ from scripts.run_reading_quality_parity_benchmark import (
     QUALITY_ONLY_SYSTEM_PROMPT,
 )
 from tests import test_language_learning_reading_vocabulary as practice_fixtures
+
+
+@pytest.fixture(autouse=True)
+def historical_shadow_fake_uses_luna(monkeypatch):
+    """Keep pre-selection provider call-count characterization on its original route."""
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "LUNA")
 
 
 class ControlledShadowProvider(practice_fixtures.PipelineProvider):

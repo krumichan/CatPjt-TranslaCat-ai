@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from app.core.config import settings
 from app.features.language_learning.difficulty import contracts as difficulty_contracts
 from app.features.language_learning.listening.errors import ListeningStageException
 from app.features.language_learning.listening.generation_service import ListeningGenerationService
@@ -27,6 +28,12 @@ from tests import test_language_learning_current as level_fixtures
 from tests import test_language_learning_listening as listening_fixtures
 from tests import test_language_learning_reading_vocabulary as practice_fixtures
 from tests import test_language_learning_speaking as speaking_fixtures
+
+
+@pytest.fixture(autouse=True)
+def historical_reading_fake_uses_luna(monkeypatch):
+    """Phase A fake retains its original Luna routing independently of the selected live arm."""
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "LUNA")
 
 
 def _near_history(content: str) -> str:
@@ -169,20 +176,23 @@ class _BlockingStructuredProvider:
 
 
 @pytest.mark.asyncio
-async def test_listening_timeout_retries_three_times_and_cleans_provider_coroutines():
+@pytest.mark.parametrize("retry_limit", [0, 1, 2])
+async def test_listening_timeout_honors_configured_limit_and_cleans_provider_coroutines(retry_limit):
     provider = _BlockingStructuredProvider()
     service = ListeningGenerationService(
         provider,
         timeout_seconds=0.01,
-        automatic_retries=0,
+        automatic_retries=retry_limit,
     )
 
     with pytest.raises(ListeningStageException) as raised:
         await service.generate(listening_fixtures.generation_request())
 
     assert raised.value.code.value == "PROVIDER_TIMEOUT"
-    assert provider.calls == 3
-    assert provider.cleaned == 3
+    # The old hardcoded three-call behavior ignored an explicit zero/one limit.
+    # Default two retries and the separate diversity round budget are unchanged.
+    assert provider.calls == retry_limit + 1
+    assert provider.cleaned == retry_limit + 1
 
 
 @pytest.mark.asyncio

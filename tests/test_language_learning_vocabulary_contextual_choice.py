@@ -425,8 +425,16 @@ class ContextualChoiceV3Provider:
                 reason_code = "LEXICAL_REPEAT"
             if self.plan_reason_code_override is not None:
                 reason_code = self.plan_reason_code_override
+            # The verifier wire contract binds verdicts to server-owned IDs.
+            values["distractors"] = {
+                f"D{distractor['index']}": {
+                    "id": f"D{distractor['index']}",
+                    **{key: value for key, value in distractor.items() if key != "index"},
+                }
+                for distractor in values["distractors"]
+            }
             verdicts.append({
-                "globalOrder": order, **values, "reasonCode": reason_code,
+                "globalOrder": order, "targetId": "TARGET", **values, "reasonCode": reason_code,
                 "reason": "fixture plan verdict",
             })
         return {"verdicts": verdicts}
@@ -1588,9 +1596,9 @@ async def test_b4_two_close_and_one_base_plausible_nonclose_distractor_passes():
     assert len(response.questions) == 1
     assert provider.operations["LEXICAL_REPAIR"] == 0
     verdict = provider.plan_verdicts[0]["verdicts"][0]
-    assert sum(item["closeCompetitor"] for item in verdict["distractors"]) == 2
+    assert sum(item["closeCompetitor"] for item in verdict["distractors"].values()) == 2
     assert all(
-        item["bundleRelevant"] for item in verdict["distractors"]
+        item["bundleRelevant"] for item in verdict["distractors"].values()
     )
     schema = provider.schemas[
         ReadingVocabularyGenerationService.CONTEXTUAL_CHOICE_PLAN_VERIFICATION_TYPE_NAME
@@ -1904,7 +1912,7 @@ async def test_lexical_verifier_contract_separates_expression_bundle_and_context
     assert "targetExpressionWellFormed" in schema
     assert "skillContrastSupported" in schema
     assert "coveredDecisiveDimensions" in schema
-    distractor_schema = schema["distractors"]["items"]["properties"]
+    distractor_schema = schema["distractors"]["properties"]["D0"]["properties"]
     assert set((
         "expressionWellFormed", "bundleRelevant", "malformedByGrammar",
         "skillContrastRelevant", "coveredDecisiveDimensions",
@@ -1945,12 +1953,15 @@ async def test_revalidation_rechecks_full_bundle_and_ignores_conflicting_pass_co
     first, second = (
         verdict["verdicts"][0] for verdict in provider.plan_verdicts
     )
-    assert first["distractors"][1]["expressionWellFormed"] is True
-    assert second["distractors"][1]["expressionWellFormed"] is False
-    assert second["distractors"][1]["malformedByGrammar"] is True
-    assert second["distractors"][2]["expressionWellFormed"] is True
+    assert first["distractors"]["D1"]["expressionWellFormed"] is True
+    assert second["distractors"]["D1"]["expressionWellFormed"] is False
+    assert second["distractors"]["D1"]["malformedByGrammar"] is True
+    assert second["distractors"]["D2"]["expressionWellFormed"] is True
     assert second["reasonCode"] == "PASS"
-    assert provider.plan_validation_payloads[1]["planItem"]["distractors"] == [
+    assert [
+        value["expression"]
+        for value in provider.plan_validation_payloads[1]["lexicalTargets"]["distractors"].values()
+    ] == [
         "ご不便をおかけしました",
         "ご不便をおかけいたします",
         "ご不便をおかけして申し訳ございません",
@@ -2022,7 +2033,7 @@ async def test_skill_dimension_evidence_is_required_even_when_boolean_is_true():
 
     await ReadingVocabularyGenerationService(provider).generate(_request())
 
-    first_verdict = provider.plan_verdicts[0]["verdicts"][0]["distractors"][1]
+    first_verdict = provider.plan_verdicts[0]["verdicts"][0]["distractors"]["D1"]
     assert first_verdict["skillContrastRelevant"] is True
     assert first_verdict["coveredDecisiveDimensions"] == []
     repair = provider.plan_generation_payloads[1]

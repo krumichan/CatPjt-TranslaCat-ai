@@ -190,6 +190,8 @@ class PracticeGenerationRequest(CamelCaseModel):
     )
     vocabulary_plan: PersonalizedVocabularyPlan | None = None
     vocabulary_plan_only: bool = False
+    reading_bundles: dict[str, "ReadingPassageBundle"] | None = None
+    reading_slot_targets: list["ReadingSlotTarget"] | None = None
 
     @property
     def question_offset(self) -> int:
@@ -201,8 +203,8 @@ class PracticeGenerationRequest(CamelCaseModel):
             raise ValueError("difficulty mix must equal questionCount")
         if self.domain == PracticeDomain.READING:
             ReadingMode(self.mode)
-            if self.question_count not in (1, 5):
-                raise ValueError("Reading questionCount must be 1 or 5")
+            if self.question_count not in (1, 2, 3, 5):
+                raise ValueError("Reading questionCount must be 1, 2, 3 or 5")
             target_count = 5
         else:
             VocabularyMode(self.mode)
@@ -217,7 +219,9 @@ class PracticeGenerationRequest(CamelCaseModel):
             ):
                 raise ValueError("CONTEXTUAL_CHOICE reviewQuestionCount must not exceed 2")
         if self.previous_questions and self.question_count != 1:
-            raise ValueError("previousQuestions requires single-question generation")
+            if not (self.domain == PracticeDomain.READING
+                    and self.question_offset == 3 and self.question_count == 2):
+                raise ValueError("previousQuestions requires single-question generation")
         if self.question_offset + self.question_count > target_count:
             raise ValueError("previousQuestions exceeds the daily question target")
         if [question.order for question in self.previous_questions] != list(
@@ -225,6 +229,8 @@ class PracticeGenerationRequest(CamelCaseModel):
         ):
             raise ValueError("previousQuestions must be a contiguous global-order prefix")
         if self.domain == PracticeDomain.READING:
+            if self.question_count in (2, 3) and (self.question_offset, self.question_count) not in {(0, 3), (3, 2)}:
+                raise ValueError("Reading passage bundle must cover p1 orders 1..3 or p2 orders 4..5")
             passages: dict[str, str] = {}
             for question in self.previous_questions:
                 expected_passage = "p1" if question.order <= 3 else "p2"
@@ -242,6 +248,11 @@ class PracticeGenerationRequest(CamelCaseModel):
             or self.mode != VocabularyMode.CONTEXTUAL_CHOICE.value
         ):
             raise ValueError("vocabularyPlan is only supported for CONTEXTUAL_CHOICE")
+        if self.reading_bundles is not None and self.domain != PracticeDomain.READING:
+            raise ValueError("readingBundles is only supported for READING")
+        if self.reading_slot_targets is not None:
+            if self.domain != PracticeDomain.READING or [target.global_order for target in self.reading_slot_targets] != [1, 2, 3, 4, 5]:
+                raise ValueError("readingSlotTargets must cover Reading global orders 1..5")
         if self.vocabulary_plan_only and (
             self.domain != PracticeDomain.VOCABULARY
             or self.mode != VocabularyMode.CONTEXTUAL_CHOICE.value
@@ -274,6 +285,31 @@ class PracticeGeneratedQuestion(CamelCaseModel):
     vocabulary_candidates: list[str] = Field(default_factory=list, max_length=3)
 
 
+class ReadingQuestionPlan(CamelCaseModel):
+    global_order: int = Field(..., ge=1, le=5)
+    skill_tag: str = Field(..., min_length=1)
+    difficulty: PracticeDifficulty
+    complexity_band: int = Field(..., ge=1, le=5)
+    clue_quote: str = Field(..., min_length=1)
+    question_focus: str = Field(..., min_length=1)
+    unstated_inference: str | None = None
+
+
+class ReadingSlotTarget(CamelCaseModel):
+    global_order: int = Field(..., ge=1, le=5)
+    difficulty: PracticeDifficulty
+    complexity_band: int = Field(..., ge=1, le=5)
+    skill_tag: str = Field(..., min_length=1)
+
+
+class ReadingPassageBundle(CamelCaseModel):
+    passage_id: str
+    prompt_version: str
+    passage_sha256: str
+    question_plans: list[ReadingQuestionPlan]
+    questions: list[PracticeGeneratedQuestion]
+
+
 class PracticeGenerationResponse(CamelCaseModel):
     request_id: str
     prompt_version: str
@@ -282,3 +318,4 @@ class PracticeGenerationResponse(CamelCaseModel):
     complexity_band: int = Field(..., ge=1, le=5)
     questions: list[PracticeGeneratedQuestion]
     vocabulary_plan: PersonalizedVocabularyPlan | None = None
+    reading_bundle: ReadingPassageBundle | None = None

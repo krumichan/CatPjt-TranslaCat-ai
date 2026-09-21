@@ -42,6 +42,14 @@ def map_provider_exception(
             retryable=True,
         )
 
+    if status_code in {400, 401, 403} or isinstance(exc, ValueError):
+        return SpeakingStageException(
+            code=fallback_code,
+            stage=stage,
+            message=fallback_message,
+            retryable=False,
+        )
+
     if any(
         marker in message
         for marker in (

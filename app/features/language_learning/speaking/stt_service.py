@@ -5,11 +5,17 @@ import io
 import logging
 import math
 import time
+import wave
 from dataclasses import dataclass
 from typing import Protocol
 
 from app.core.config import settings
 from app.features.speech_to_text import FasterWhisperRuntime, InferencePriority
+from app.features.speech_to_text.runtime import SpeechRuntimeNotReady
+from app.features.voice_translation.speech_detector import (
+    SileroSpeechEvidenceGuard,
+    VoiceSpeechEvidenceGuard,
+)
 from app.features.language_learning.speaking.audio_processor import NormalizedAudio
 from app.features.language_learning.speaking.errors import SpeakingStageException
 from app.features.language_learning.speaking.idempotency import InMemoryIdempotencyStore
@@ -234,7 +240,13 @@ class SpeakingSttService:
 
 
 class FasterWhisperSpeakingSttProvider:
-    def __init__(self, runtime: FasterWhisperRuntime | None = None) -> None:
+    def __init__(self, runtime: FasterWhisperRuntime | None = None, *,
+                 speech_guard: VoiceSpeechEvidenceGuard | None = None,
+                 beam_size: int = 1) -> None:
+        if isinstance(beam_size, bool) or not isinstance(beam_size, int) or not 1 <= beam_size <= 5:
+            raise ValueError("Speaking STT beam_size must be an integer from 1 to 5")
+        self.beam_size = beam_size
+        self.speech_guard = speech_guard or SileroSpeechEvidenceGuard(enabled=True)
         self.runtime = runtime or FasterWhisperRuntime(
             model_name=settings.AI_SPEAKING_STT_MODEL_NAME,
             model_revision="",
@@ -252,7 +264,7 @@ class FasterWhisperSpeakingSttProvider:
         if not self.runtime.ready:
             await self.runtime.warm_up()
         base_options = {
-            "beam_size": 1,
+            "beam_size": self.beam_size,
             "language": language,
             "initial_prompt": (
                 ", ".join(phrase_hints[:20]) if phrase_hints else None
@@ -268,10 +280,10 @@ class FasterWhisperSpeakingSttProvider:
             },
             priority=InferencePriority.STANDARD,
         )
-        if not result.text.strip():
-            # SpeakingAudioProcessor has already rejected true low-RMS silence.  If
-            # VAD still removes the whole short utterance, retry once without VAD so
-            # quiet but valid learner speech is not classified as INVALID_AUDIO.
+        if not result.text.strip() and await self._has_fallback_speech(wav_bytes):
+            # RMS is energy, not speech: noise must not gain a transcript merely
+            # because removing VAD lets Whisper hallucinate. Preserve the existing
+            # one fallback only when independent local speech evidence is present.
             logger.warning(
                 "Speaking STT VAD removed all transcript; retrying without VAD. language=%s",
                 language,
@@ -302,3 +314,21 @@ class FasterWhisperSpeakingSttProvider:
             model=result.model,
             model_version=result.model_version,
         )
+
+    async def _has_fallback_speech(self, wav_bytes: bytes) -> bool:
+        guard = self.speech_guard
+        # An explicitly disabled/pass-through guard is not positive speech evidence.
+        if getattr(guard, "enabled", False) is not True:
+            return False
+        if not guard.ready:
+            if isinstance(guard, SileroSpeechEvidenceGuard):
+                await guard.warm_up()
+            else:
+                raise SpeechRuntimeNotReady("Speaking speech-evidence guard is not ready")
+        if not guard.ready:
+            raise SpeechRuntimeNotReady("Speaking speech-evidence guard is not ready")
+        with wave.open(io.BytesIO(wav_bytes), "rb") as audio:
+            if (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) != (16000, 1, 2):
+                raise ValueError("Speaking speech evidence requires normalized PCM16 mono 16kHz audio")
+            pcm_bytes = audio.readframes(audio.getnframes())
+        return await guard.has_speech(pcm_bytes)

@@ -5,6 +5,7 @@ import hashlib
 import time
 
 from app.ai.ports import SpeechSynthesisProvider
+from app.ai.providers.openai.speech import OPENAI_SPEECH_POLICY_VERSION, validate_speech_wav
 from app.core.config import settings
 from app.features.language_learning.speaking.audio_store import TemporaryTtsAudioStore
 from app.features.language_learning.speaking.errors import SpeakingStageException
@@ -61,6 +62,7 @@ class SpeakingTtsService:
                     content_type=existing.content_type,
                     voice=request.voice,
                     cache_key=cache_key,
+                    duration_seconds=existing.duration_seconds,
                     status="READY",
                 ),
                 usage=SpeakingUsage(
@@ -110,7 +112,21 @@ class SpeakingTtsService:
             operation,
             max_retries=max_retries,
         )
-        stored = self.audio_store.put(result.audio_bytes, cache_key=cache_key)
+        # A provider response is not ready until the complete WAV is decoded.
+        try:
+            duration = validate_speech_wav(result.audio_bytes)
+        except ValueError as exc:
+            raise SpeakingStageException(
+                code=SpeakingErrorCode.TTS_FAILED,
+                stage=SpeakingStage.TTS,
+                message="TTS Provider 음성이 유효한 WAV가 아닙니다.",
+                retryable=False,
+            ) from exc
+        stored = self.audio_store.put(
+            result.audio_bytes,
+            cache_key=cache_key,
+            duration_seconds=duration,
+        )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return TtsResponse(
             request_id=request.request_id,
@@ -120,14 +136,14 @@ class SpeakingTtsService:
                 content_type=stored.content_type,
                 voice=request.voice,
                 cache_key=cache_key,
-                duration_seconds=result.duration_seconds,
+                duration_seconds=stored.duration_seconds,
                 status="READY",
             ),
             usage=SpeakingUsage(
                 tts=StageUsage(
                     latency_ms=elapsed_ms,
                     tts_characters=len(request.text),
-                    tts_audio_seconds=result.duration_seconds or 0,
+                    tts_audio_seconds=duration,
                     provider=result.provider,
                     model=result.model,
                     prompt_version=SPEAKING_TTS_VERSION,
@@ -143,6 +159,9 @@ class SpeakingTtsService:
                 request.voice,
                 request.playback_speed,
                 request.text,
+                "openai",
+                settings.OPENAI_SPEECH_MODEL,
+                OPENAI_SPEECH_POLICY_VERSION,
                 SPEAKING_TTS_VERSION,
             ]
         )

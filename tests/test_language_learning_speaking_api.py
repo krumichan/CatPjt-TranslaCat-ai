@@ -239,6 +239,9 @@ class LanguageLearningSpeakingApiTest(unittest.TestCase):
         fake_dependencies.get_language_learning_speaking_evaluation_service = (
             lambda: cls.evaluation_service
         )
+        fake_dependencies.get_language_learning_speaking_coaching_service = (
+            lambda: None
+        )
         fake_dependencies.get_language_learning_speaking_audio_store = (
             lambda: cls.audio_store
         )

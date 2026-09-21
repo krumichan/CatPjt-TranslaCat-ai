@@ -1,6 +1,6 @@
 from app.ai.provider_pool import AiProviderPool
-from app.ai.providers.gemini.client import GeminiService
 from app.ai.providers.openai.client import OpenAIService
+from app.ai.providers.openai.speech import OpenAISpeechService
 from app.core.config import settings
 
 
@@ -16,7 +16,9 @@ def create_text_generation_provider() -> AiProviderPool:
         if provider_name == "openai":
             provider = OpenAIService()
         elif provider_name == "gemini":
-            provider = GeminiService()
+            # Historical Gemini artifacts are read from storage, never created
+            # by routing a new production request to a paid Gemini endpoint.
+            raise ValueError("Gemini generation is disabled for new requests")
         else:
             raise ValueError(f"Unsupported AI_TEXT_PROVIDER: {provider_name}")
 
@@ -32,6 +34,5 @@ def create_text_generation_provider() -> AiProviderPool:
     return pool
 
 
-def create_speech_synthesis_provider() -> GeminiService:
-    """Keep current Gemini TTS isolated from the text-provider migration."""
-    return GeminiService()
+def create_speech_synthesis_provider() -> OpenAISpeechService:
+    return OpenAISpeechService()
