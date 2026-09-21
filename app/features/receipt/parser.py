@@ -69,8 +69,16 @@ def normalize_amount(value: object, currency_code: str | None = None) -> Decimal
             text = text.replace(",", "")
         else:
             return None
-    elif text.count(".") > 1:
-        return None
+    elif "." in text:
+        parts = text.split(".")
+        # Indonesian receipts conventionally print rupiah grouping with a dot and
+        # omit sen. Vision models sometimes preserve that separator despite the
+        # normalized-decimal contract, so interpret only the unambiguous 3-digit
+        # IDR grouping shape here.
+        if currency_code == "IDR" and all(len(part) == 3 for part in parts[1:]):
+            text = text.replace(".", "")
+        elif len(parts) > 2:
+            return None
     try:
         amount = Decimal(text)
     except InvalidOperation:
@@ -153,6 +161,12 @@ def extract_receipt_candidates(raw_text: str) -> dict[str, Any]:
         None,
     )
     return {
+        "purchase_total": str(amounts[0]) if len(amounts) == 1 else None,
+        "payment_breakdown": [],
+        "cash_tendered": None,
+        "change": None,
+        # Compatibility for existing local OCR callers. Validation treats
+        # purchase_total as authoritative and recalculates the book amount.
         "original_amount": str(amounts[0]) if len(amounts) == 1 else None,
         "detected_currency_code": currency,
         "transaction_date": next(iter(dates)) if len(dates) == 1 else None,

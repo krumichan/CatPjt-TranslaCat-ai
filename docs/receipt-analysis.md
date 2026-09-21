@@ -13,12 +13,25 @@ contracts together; the old single-object response is no longer emitted.
     "receipt_id": "receipt-1",
     "title": "Cafe",
     "store_name": "Cafe",
+    "purchase_total": "12.34",
+    "payment_breakdown": [{
+      "payment_type": "CREDIT_CARD",
+      "amount": "12.34",
+      "evidence": "VISA 12.34",
+      "duplicate_group": "card-1"
+    }],
+    "cash_tendered": null,
+    "change": null,
+    "book_amount": "12.34",
+    "amount_policy_version": "receipt-book-amount-v1",
+    "amount_reason": "SETTLED_PAYMENT_EXCLUDING_LOYALTY_POINTS",
+    "review_status": "READY",
     "original_amount": "12.34",
     "detected_currency_code": "USD",
     "transaction_date": "2026-09-15",
     "category_name": null,
     "memo": "Coffee",
-    "confidence": 0.94,
+    "confidence": 0.97,
     "currency_confidence": 0.98,
     "detected_language": "en",
     "status": "READY",
@@ -44,6 +57,9 @@ Unknown currency/date/amount remains null. Malformed objects produce individual
 `UNREADABLE` candidates instead of invalidating other receipts. Confidence outside
 0..1 is rejected rather than clamped/promoted. Amounts must be finite, positive,
 within supported precision and compatible with known source minor units.
+Validated candidates require confidence >= 0.95 for `READY`; lower-confidence text
+and merchant readings remain editable `NEEDS_REVIEW` candidates. Amount-policy
+warnings and missing or ambiguous fields can force review independently.
 
 ## Source detection and categories
 
@@ -98,48 +114,32 @@ only schema metadata is stripped. Both existing provider adapters are tested.
 Logs contain mode, count/status counts, currency codes, fallback path and latency.
 Provider/OCR errors log exception type only. Images, raw OCR, payment identifiers,
 merchant/memo text and provider response bodies are not logged by this flow.
-No real AI/provider call is needed for tests. Visual accuracy on actual global
-receipt photos still needs evaluation with deployment credentials and a consented
-image corpus; the mocked suite verifies contracts, parsing and control flow.
 
-On the provided Windows machine the original venv interpreter references a missing
-base executable. Verification used bundled Python 3.12 with the existing venv's
-site-packages appended to `sys.path` (preserving bundled working Pillow). Installed
-library ACLs required read access outside the sandbox. A fresh workspace
-`--basetemp` avoids an unrelated machine temp-directory ACL failure.
-
-Equivalent normal-environment verification commands:
+`scripts/evaluate_receipt_images.py` is the bounded live evaluator. It requires a
+manifest whose real images are consent-approved, de-identified and independently
+reviewed, verifies every file hash, preserves bounding boxes for one-to-one physical
+matching, limits concurrency to 1 or 2 and limits a run to 60 images. It uses the
+configured `RECEIPT_ANALYSIS` provider/model and production prompt/schema in
+`VISION_ONLY` mode. Example:
 
 ```text
-python -m pytest -q -p no:cacheprovider --basetemp=test-results/temp-final --junitxml=test-results/pytest-complete.xml
-ruff check .
-pyright
+python scripts/evaluate_receipt_images.py path/to/manifest.json \
+  --output test-results/receipt-live.json --split core --max-images 30 --concurrency 1
 ```
+
+For the 2026-09-21 release-candidate run, the user explicitly authorized external
+analysis of safe derivatives of their receipts. The configured OpenAI
+`gpt-5.6-luna` runtime analyzed the Papasu receipt and three un-cropped photos with
+4/4/3 physical receipts. Ten independently sourced public scans covered IDR, TRY,
+and MYR under recorded licenses and hashes. The cumulative ledger used 36 of a
+40-call ceiling and was never reset. Live output, frozen manifests, manual pixel
+adjudication, and the browser-to-MySQL proof are under
+`../quality-evidence/2026-09-21-rc-sol`. Mocked tests are reported separately.
 
 The focused receipt suites cover multi/single/mixed receipts, Decimal formats,
 ambiguous symbols/dates, unreadable/malformed/duplicate items, confidence bounds,
 category allowlists, no FX fields, vision success/fallback, spatial OCR, privacy,
-upload/API serialization, provider schema adaptation and BE text/batch limits.
-Final results on 2026-09-19:
-
-| Check | Result |
-| --- | --- |
-| Full `pytest -q` | 1746 passed, 0 failed/errors, 6 subtests passed, 21.49 seconds |
-| Receipt tests within full suite | 85 analysis + 7 API/provider-adapter tests passed |
-| Runtime warnings | 1 existing RequestsDependencyWarning for installed package versions |
-| Ruff, all modified Python files | All checks passed |
-| Ruff, whole repository | 9 preexisting violations (2 F401, 7 E402) |
-| Pyright, all modified files + receipt endpoint/tests | 0 errors, 0 warnings |
-| Pyright, whole repository | 649 errors, 0 warnings; untouched HEAD baseline 650 errors |
-| `git diff --check` | Passed |
-
-JUnit: `test-results/pytest-release.xml`. Full type diagnostics:
-`test-results/pyright-full.json`; untouched HEAD comparison:
-`test-results/pyright-baseline.json`. The temporary baseline source copy was
-removed after comparison, so later test runs cannot collect it accidentally.
-
-Full-repository lint/type debt was checked against unchanged source rather than
-hidden: Ruff has 9 preexisting F401/E402 violations outside receipt code. Pyright
-has 649 existing errors; the untouched HEAD snapshot had 650, including the old
-Pillow `Image.LANCZOS` access fixed here. All touched files pass focused Ruff and
-Pyright checks. Detailed JUnit/type reports are retained in ignored `test-results/`.
+upload/API serialization, provider schema adaptation and model-policy selection.
+The exact final test commands, counts, baseline static-analysis debt, and exit codes
+are retained in the release-candidate evidence report rather than copied into this
+contract document.

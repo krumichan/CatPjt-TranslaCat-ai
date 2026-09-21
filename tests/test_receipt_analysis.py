@@ -38,7 +38,7 @@ def receipt(**changes):
         "transaction_date": "2026-09-15",
         "category_name": "Food",
         "memo": "Coffee and cake",
-        "confidence": 0.92,
+        "confidence": 0.95,
         "detected_language": "en",
         "currency_confidence": 0.98,
         **changes,
@@ -66,6 +66,7 @@ def validate(*items, categories=None):
         ("CLF 10.1234", "CLF", "10.1234"),
         (1280, "JPY", "1280"),
         ("1,234.56", "USD", "1234.56"),
+        ("60.000", "IDR", "60000"),
         (Decimal("12.34"), "USD", "12.34"),
     ],
 )
@@ -134,6 +135,156 @@ def test_single_receipt_decimal_json_contract():
         json.loads(response.model_dump_json())["receipts"][0]["original_amount"]
         == "12.34"
     )
+
+
+def test_printed_transaction_time_is_validated_and_preserved():
+    item = validate(receipt(transaction_time="20:13:39", source_time="8:13:39 PM")).receipts[0]
+    assert item.transaction_time is not None
+    assert item.transaction_time.isoformat() == "20:13:39"
+
+    invalid = validate(receipt(transaction_time="25:99", source_time="25:99")).receipts[0]
+    assert invalid.transaction_time is None
+    assert "INVALID_TIME" in invalid.warnings
+    assert invalid.status == ReceiptStatus.NEEDS_REVIEW
+
+    corrected = validate(
+        receipt(transaction_time="08:13:39", source_time="8:13:39 PM")
+    ).receipts[0]
+    assert corrected.transaction_time is not None
+    assert corrected.transaction_time.isoformat() == "20:13:39"
+    assert "TIME_NORMALIZED_FROM_SOURCE" in corrected.warnings
+    assert corrected.status == ReceiptStatus.READY
+
+
+def test_prompt_forbids_shortening_source_language_brand_tokens():
+    prompt = build_receipt_vision_prompt(ReceiptAnalysisOptions())
+    assert "never translate" in prompt
+    assert "abbreviate, or shorten" in prompt
+    assert "どらっぐ" in prompt
+    assert "IDR 60.000 means 60000" in prompt
+    assert "8:13:39 PM -> 20:13:39" in prompt
+
+
+def test_papasu_points_and_duplicate_card_detail_produce_5020_book_amount():
+    item = validate(
+        receipt(
+            title="どらっぐ ぱぱす 船堀店",
+            store_name="どらっぐ ぱぱす",
+            branch_name="船堀店",
+            purchase_total="7089",
+            original_amount=None,
+            payment_breakdown=[
+                {
+                    "payment_type": "LOYALTY_POINTS",
+                    "amount": "2069",
+                    "evidence": "ポイント支払",
+                    "duplicate_group": None,
+                },
+                {
+                    "payment_type": "CREDIT_CARD",
+                    "amount": "5020",
+                    "evidence": "クレジット（他クレ）",
+                    "duplicate_group": "card-1",
+                },
+                {
+                    "payment_type": "CREDIT_CARD",
+                    "amount": "5020",
+                    "evidence": "カード明細",
+                    "duplicate_group": "card-1",
+                },
+            ],
+            change="0",
+        )
+    ).receipts[0]
+    assert item.purchase_total == Decimal("7089")
+    assert item.book_amount == Decimal("5020")
+    assert item.original_amount == Decimal("5020")
+    assert item.review_status.value == "READY"
+    assert item.status == ReceiptStatus.READY
+    assert "DUPLICATE_PAYMENT_DETAIL_COLLAPSED" in item.warnings
+
+
+def test_cash_tendered_is_not_double_counted_as_the_cash_allocation():
+    item = validate(
+        receipt(
+            purchase_total="9.00",
+            original_amount=None,
+            payment_breakdown=[{"payment_type": "CASH", "amount": "10.00"}],
+            cash_tendered="10.00",
+            change="1.00",
+        )
+    ).receipts[0]
+    assert item.book_amount == Decimal("9.00")
+    assert item.status == ReceiptStatus.READY
+    assert "CASH_TENDERED_NOT_DOUBLE_COUNTED" in item.warnings
+
+
+def test_unlabelled_exact_card_duplicate_is_collapsed_only_to_reconcile_total():
+    item = validate(
+        receipt(
+            purchase_total="7089",
+            original_amount=None,
+            payment_breakdown=[
+                {"payment_type": "LOYALTY_POINTS", "amount": "2069"},
+                {"payment_type": "CREDIT_CARD", "amount": "5020"},
+                {"payment_type": "CREDIT_CARD", "amount": "5020"},
+            ],
+        )
+    ).receipts[0]
+    assert item.book_amount == Decimal("5020")
+    assert item.status == ReceiptStatus.READY
+
+
+def test_gross_card_heading_plus_points_derives_net_settlement():
+    item = validate(
+        receipt(
+            title="どらっぐ ぱぱす 船堀店",
+            store_name="どらっぐ ぱぱす",
+            branch_name="船堀店",
+            purchase_total="7089",
+            original_amount=None,
+            payment_breakdown=[
+                {"payment_type": "CREDIT_CARD", "amount": "7089"},
+                {"payment_type": "LOYALTY_POINTS", "amount": "2069"},
+            ],
+        )
+    ).receipts[0]
+    assert item.book_amount == Decimal("5020")
+    assert item.original_amount == Decimal("5020")
+    assert item.status == ReceiptStatus.READY
+    assert "GROSS_PAYMENT_LINE_REPLACED_BY_NET_SETTLEMENT" in item.warnings
+
+
+def test_payment_mismatch_is_not_an_authoritative_book_amount():
+    item = validate(
+        receipt(
+            purchase_total="7089",
+            original_amount="7089",
+            payment_breakdown=[
+                {"payment_type": "LOYALTY_POINTS", "amount": "1000"},
+                {"payment_type": "CREDIT_CARD", "amount": "5020"},
+            ],
+        )
+    ).receipts[0]
+    assert item.book_amount is None
+    assert item.original_amount is None
+    assert item.review_status.value == "NEEDS_REVIEW"
+    assert item.status == ReceiptStatus.NEEDS_REVIEW
+
+
+def test_full_loyalty_redemption_is_excluded_from_registration():
+    item = validate(
+        receipt(
+            purchase_total="1000",
+            original_amount=None,
+            payment_breakdown=[
+                {"payment_type": "LOYALTY_POINTS", "amount": "1000"}
+            ],
+        )
+    ).receipts[0]
+    assert item.book_amount == Decimal("0")
+    assert item.review_status.value == "EXCLUDED"
+    assert item.status == ReceiptStatus.NEEDS_REVIEW
 
 
 def test_multiple_receipts_mixed_languages_and_currencies():
@@ -219,6 +370,11 @@ def test_confidence_bounds_are_rejected_not_promoted(confidence):
     assert item.confidence is None
     assert item.status == ReceiptStatus.NEEDS_REVIEW
     assert "INVALID_CONFIDENCE" in item.warnings
+
+
+def test_ready_confidence_boundary_keeps_uncertain_merchant_text_reviewable():
+    assert validate(receipt(confidence=0.94)).receipts[0].status == ReceiptStatus.NEEDS_REVIEW
+    assert validate(receipt(confidence=0.95)).receipts[0].status == ReceiptStatus.READY
 
 
 def test_identical_physical_position_is_deduplicated():

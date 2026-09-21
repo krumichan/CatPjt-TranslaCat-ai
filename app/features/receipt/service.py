@@ -16,6 +16,7 @@ from app.schemas.receipt import (
     ReceiptAnalysisMode,
     ReceiptAnalysisOptions,
     ReceiptAnalysisResponse,
+    ReceiptAmountReviewStatus,
     ReceiptStatus,
 )
 from app.services.ocr_service import OCRService
@@ -28,11 +29,17 @@ _ITEM_PROPERTIES: dict[str, Any] = {
     for name in (
         "title",
         "store_name",
+        "branch_name",
+        "purchase_total",
         "original_amount",
+        "cash_tendered",
+        "change",
         "detected_currency_code",
         "currency_evidence",
         "transaction_date",
+        "transaction_time",
         "source_date",
+        "source_time",
         "date_order",
         "date_order_evidence",
         "category_name",
@@ -42,6 +49,37 @@ _ITEM_PROPERTIES: dict[str, Any] = {
 }
 _ITEM_PROPERTIES.update(
     {
+        "payment_breakdown": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "payment_type": {
+                        "type": "STRING",
+                        "enum": [
+                            "LOYALTY_POINTS",
+                            "CASH",
+                            "CREDIT_CARD",
+                            "DEBIT_CARD",
+                            "ELECTRONIC_MONEY",
+                            "GIFT_CARD",
+                            "VOUCHER",
+                            "OTHER_PAID",
+                            "UNKNOWN",
+                        ],
+                    },
+                    "amount": dict(_NULLABLE_TEXT),
+                    "evidence": dict(_NULLABLE_TEXT),
+                    "duplicate_group": dict(_NULLABLE_TEXT),
+                },
+                "required": [
+                    "payment_type",
+                    "amount",
+                    "evidence",
+                    "duplicate_group",
+                ],
+            },
+        },
         "confidence": {"type": "NUMBER", "nullable": True},
         "currency_confidence": {"type": "NUMBER", "nullable": True},
         "bounding_box": {
@@ -205,7 +243,9 @@ class ReceiptAnalysisService:
                 if response.receipts:
                     if not all(line.bounding_box for line in document.lines):
                         for item in response.receipts:
+                            item.book_amount = None
                             item.original_amount = None
+                            item.review_status = ReceiptAmountReviewStatus.NEEDS_REVIEW
                             item.status = ReceiptStatus.NEEDS_REVIEW
                             item.warnings.append("OCR_RECEIPT_BOUNDARIES_UNVERIFIED")
                     response.warnings.extend(warnings)
@@ -224,7 +264,9 @@ class ReceiptAnalysisService:
         item.status = ReceiptStatus.NEEDS_REVIEW
         item.warnings.append("OCR_RECEIPT_BOUNDARIES_UNVERIFIED")
         if candidates["total_line_count"] != 1:
+            item.book_amount = None
             item.original_amount = None
+            item.review_status = ReceiptAmountReviewStatus.NEEDS_REVIEW
             item.warnings.append("OCR_MULTIPLE_OR_UNKNOWN_TOTALS")
         response.warnings.extend(warnings)
         return response

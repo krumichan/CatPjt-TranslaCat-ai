@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from enum import Enum
 
@@ -18,13 +18,50 @@ class ReceiptStatus(str, Enum):
     UNREADABLE = "UNREADABLE"
 
 
+class ReceiptAmountReviewStatus(str, Enum):
+    READY = "READY"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    EXCLUDED = "EXCLUDED"
+
+
+class ReceiptPaymentType(str, Enum):
+    LOYALTY_POINTS = "LOYALTY_POINTS"
+    CASH = "CASH"
+    CREDIT_CARD = "CREDIT_CARD"
+    DEBIT_CARD = "DEBIT_CARD"
+    ELECTRONIC_MONEY = "ELECTRONIC_MONEY"
+    GIFT_CARD = "GIFT_CARD"
+    VOUCHER = "VOUCHER"
+    OTHER_PAID = "OTHER_PAID"
+    UNKNOWN = "UNKNOWN"
+
+
+class ReceiptPaymentItem(BaseModel):
+    payment_type: ReceiptPaymentType
+    amount: Decimal = Field(gt=0)
+    evidence: str | None = None
+    duplicate_group: str | None = None
+
+
 class ReceiptAnalysisItem(BaseModel):
     receipt_id: str
     title: str | None = None
     store_name: str | None = None
-    original_amount: Decimal | None = Field(default=None, gt=0)
+    branch_name: str | None = None
+    purchase_total: Decimal | None = Field(default=None, gt=0)
+    payment_breakdown: list[ReceiptPaymentItem] = Field(default_factory=list)
+    cash_tendered: Decimal | None = Field(default=None, gt=0)
+    change: Decimal | None = Field(default=None, ge=0)
+    book_amount: Decimal | None = Field(default=None, ge=0)
+    amount_policy_version: str = "receipt-book-amount-v1"
+    amount_reason: str | None = None
+    review_status: ReceiptAmountReviewStatus = ReceiptAmountReviewStatus.NEEDS_REVIEW
+    # Backward-compatible wire name. It is the deterministic bookkeeping amount,
+    # never the provider's purchase total.
+    original_amount: Decimal | None = Field(default=None, ge=0)
     detected_currency_code: str | None = None
     transaction_date: date | None = None
+    transaction_time: time | None = None
     category_name: str | None = None
     memo: str | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
