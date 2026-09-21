@@ -31,7 +31,7 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "CHAT_MESSAGE_TRANSLATION": AiTaskModelPolicy(AiModelTier.LUNA, "none", 1024),
     "VOICE_TRANSLATION": AiTaskModelPolicy(AiModelTier.LUNA, "none", 2048),
     "AI_CHAT_REPLY": AiTaskModelPolicy(AiModelTier.LUNA, "none", 2048, "medium"),
-    "RECEIPT_ANALYSIS": AiTaskModelPolicy(AiModelTier.LUNA, "none", 4096),
+    "RECEIPT_ANALYSIS": AiTaskModelPolicy(AiModelTier.LUNA, "none", 16384),
     # Language-learning generation -> Luna.
     "LANGUAGE_LEARNING_DAILY_WRITING_GENERATION": AiTaskModelPolicy(
         AiModelTier.LUNA, "none", 8192

@@ -184,21 +184,20 @@ class Settings(BaseSettings):
     UVICORN_LOG_LEVEL: str = "INFO"
 
     # OCR
-    OCR_LANGUAGE: str = "japan"
+    OCR_LANGUAGE: str = "en"
     OCR_VERSION: str = "PP-OCRv3"
     OCR_WARM_UP: bool = True
-    OCR_MAX_IMAGE_WIDTH: int = 900
-    OCR_MAX_IMAGE_HEIGHT: int = 1400
-    OCR_MAX_IMAGE_PIXELS: int = 2_000_000
+    OCR_MAX_IMAGE_WIDTH: int = 2400
+    OCR_MAX_IMAGE_HEIGHT: int = 2400
+    OCR_MAX_IMAGE_PIXELS: int = 5_760_000
     OCR_IMAGE_QUALITY: int = 85
     OCR_MAX_FILE_SIZE: int = 5 * 1024 * 1024
     OCR_ENABLE_MKLDNN: bool = True
     OCR_CPU_THREADS: int = 2
     OCR_TEXT_RECOGNITION_BATCH_SIZE: int = 6
-    OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 960
+    OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 2400
     OCR_TEXT_DET_LIMIT_TYPE: str = "max"
-    RECEIPT_ANALYSIS_MODE: str = "OCR_WITH_AI"
-    GEMINI_VISION_CONFIDENCE_THRESHOLD: float = 0.75
+    RECEIPT_ANALYSIS_MODE: str = "VISION_FIRST"
 
     OCR_ALLOWED_CONTENT_TYPES: set[str] = {
         "image/jpeg",

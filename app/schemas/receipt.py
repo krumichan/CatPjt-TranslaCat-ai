@@ -1,3 +1,5 @@
+from datetime import date
+from decimal import Decimal
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -10,27 +12,45 @@ class ReceiptAnalysisMode(str, Enum):
     OCR_ONLY = "OCR_ONLY"
 
 
+class ReceiptStatus(str, Enum):
+    READY = "READY"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    UNREADABLE = "UNREADABLE"
+
+
+class ReceiptAnalysisItem(BaseModel):
+    receipt_id: str
+    title: str | None = None
+    store_name: str | None = None
+    original_amount: Decimal | None = Field(default=None, gt=0)
+    detected_currency_code: str | None = None
+    transaction_date: date | None = None
+    category_name: str | None = None
+    memo: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    currency_confidence: float | None = Field(default=None, ge=0, le=1)
+    detected_language: str | None = None
+    status: ReceiptStatus = ReceiptStatus.NEEDS_REVIEW
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ReceiptAnalysisResponse(BaseModel):
-    title: str | None = Field(None, description="거래명 후보")
-    store_name: str | None = Field(None, description="점포명 후보")
-    amount: int | None = Field(None, description="합계 금액 후보")
-    transaction_date: str | None = Field(None, description="거래일 후보(yyyy-MM-dd)")
-    category_name: str | None = Field(None, description="카테고리 후보")
-    memo: str | None = Field(None, description="메모 후보")
-    confidence: float | None = Field(None, ge=0, le=1, description="분석 신뢰도")
-    raw_text: str | None = Field(None, description="OCR 원문 텍스트")
-    ocr_engine: str = Field("paddleocr", description="사용한 OCR 엔진")
-    used_ai: bool = Field(False, description="AI 구조화 사용 여부")
+    receipts: list[ReceiptAnalysisItem] = Field(default_factory=list)
+    receipt_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+    ocr_engine: str = "none"
+    used_ai: bool = False
 
 
 class ReceiptAnalysisOptions(BaseModel):
+    category_candidates: list[str] = Field(default_factory=list, max_length=500)
     currency_code: str | None = Field(
         default=None,
-        description="가계부 기준 통화 코드. 예: JPY, KRW, USD",
+        description="Deprecated target currency; accepted but ignored for source detection",
     )
     ocr_language: str | None = Field(
         default=None,
-        description="OCR 언어 코드. 예: japan, korean, en",
+        description="Explicit OCR fallback language hint only; never derived from target currency",
     )
     analysis_mode: ReceiptAnalysisMode | None = Field(
         default=None,
@@ -38,7 +58,7 @@ class ReceiptAnalysisOptions(BaseModel):
     )
     stop_keywords: list[str] | None = Field(
         default=None,
-        description="AI 분석용 OCR 텍스트 압축 시 이후 내용을 잘라낼 키워드 목록",
+        description="Advisory keywords only; never truncate subsequent receipts",
     )
     important_keywords: list[str] | None = Field(
         default=None,

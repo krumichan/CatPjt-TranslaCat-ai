@@ -1,151 +1,163 @@
+"""Conservative parsing: uncertain separators/dates are never silently corrected."""
+
 import re
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-_AMOUNT_KEYWORDS = (
-    "合計",
-    "税込合計",
-    "総合計",
-    "お買上計",
-    "小計",
-    "計",
-    "TOTAL",
-    "Total",
-    "total",
-    "합계",
-    "총액",
-    "결제금액",
+from app.features.receipt.currencies import CURRENCY_MINOR_UNITS, normalize_currency
+
+_TOTAL = re.compile(
+    r"\b(?:grand total|total(?:\s+ttc)?|amount due|amount paid|gesamt|summe|totale|totaal|summa|razem)\b|合計|総合計|お買上計|합계|총액|결제금액|итого|المجموع",
+    re.IGNORECASE,
 )
-_EXCLUDE_AMOUNT_KEYWORDS = (
-    "お預り",
-    "お釣",
-    "おつり",
-    "釣銭",
-    "預り",
-    "現金",
-    "クレジット",
-    "支払",
-    "받은금액",
-    "거스름돈",
+_NOT_TOTAL = re.compile(
+    r"sub\s*total|sous.total|tax|change|tendered|cash received|小計|釣|거스름|부가세",
+    re.IGNORECASE,
 )
 
 
-def normalize_amount(value: str) -> int | None:
-    digits = re.sub(r"[^0-9]", "", value)
-
-    if not digits:
+def normalize_amount(value: object, currency_code: str | None = None) -> Decimal | None:
+    if isinstance(value, bool) or isinstance(value, float):
+        # Providers are asked for strings; an already-rounded float is not money.
         return None
-
+    if isinstance(value, int) and (value <= 0 or value >= 10**20):
+        return None
+    if isinstance(value, (int, Decimal)):
+        text = str(value)
+    elif isinstance(value, str):
+        text = value.strip()
+    else:
+        return None
+    if len(text) > 80:
+        return None
+    if currency_code:
+        text = re.sub(
+            rf"^(?:{currency_code})\s*|\s*(?:{currency_code})$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+    text = text.strip()
+    if not re.fullmatch(r"[0-9]+(?:[., '\u00a0\u202f][0-9]+)*", text):
+        return None
+    if re.search(r"[ '\u00a0\u202f]", text):
+        if not re.fullmatch(
+            r"[0-9]{1,3}(?:[ '\u00a0\u202f][0-9]{3})+(?:[.,][0-9]+)?", text
+        ):
+            return None
+        text = re.sub(r"[ '\u00a0\u202f]", "", text)
+    if "." in text and "," in text:
+        separator = "." if text.rfind(".") > text.rfind(",") else ","
+        grouping = "," if separator == "." else "."
+        if not re.fullmatch(
+            rf"[0-9]{{1,3}}(?:{re.escape(grouping)}[0-9]{{3}})+{re.escape(separator)}[0-9]+",
+            text,
+        ):
+            return None
+        text = text.replace(grouping, "").replace(separator, ".")
+    elif "," in text:
+        parts = text.split(",")
+        minor_units = CURRENCY_MINOR_UNITS.get(currency_code or "")
+        if len(parts) == 2 and len(parts[1]) != 3:
+            text = text.replace(",", ".")
+        elif minor_units == 0 and all(len(p) == 3 for p in parts[1:]):
+            text = text.replace(",", "")
+        elif (
+            len(parts) > 2 and minor_units != 3 and all(len(p) == 3 for p in parts[1:])
+        ):
+            text = text.replace(",", "")
+        else:
+            return None
+    elif text.count(".") > 1:
+        return None
     try:
-        return int(digits)
+        amount = Decimal(text)
+    except InvalidOperation:
+        return None
+    if not amount.is_finite() or amount <= 0 or amount.adjusted() >= 20:
+        return None
+    exponent = amount.as_tuple().exponent
+    if not isinstance(exponent, int) or exponent < -8:
+        return None
+    minor_units = CURRENCY_MINOR_UNITS.get(currency_code or "")
+    normalized_exponent = amount.normalize().as_tuple().exponent
+    if (
+        minor_units is not None
+        and isinstance(normalized_exponent, int)
+        and normalized_exponent < -minor_units
+    ):
+        return None
+    return amount
+
+
+def normalize_date(value: object, date_order: str | None = None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    ymd = re.fullmatch(r"(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})日?", text)
+    if ymd:
+        year, month, day = map(int, ymd.groups())
+    else:
+        match = re.fullmatch(r"(\d{1,2})[./\-](\d{1,2})[./\-](\d{4})", text)
+        if not match:
+            return None
+        first, second, year = map(int, match.groups())
+        if date_order == "DMY" or first > 12:
+            day, month = first, second
+        elif date_order == "MDY" or second > 12:
+            month, day = first, second
+        elif first == second:
+            day, month = first, second
+        else:
+            return None
+    try:
+        return date(year, month, day).isoformat()
     except ValueError:
         return None
 
 
-def normalize_date(value: str) -> str | None:
-    value = value.strip()
-    patterns = [
-        r"(?P<year>20\d{2})[./\-年](?P<month>\d{1,2})[./\-月](?P<day>\d{1,2})日?",
-        r"(?P<year>\d{2})[./\-](?P<month>\d{1,2})[./\-](?P<day>\d{1,2})",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, value)
-        if not match:
-            continue
-
-        year = int(match.group("year"))
-        if year < 100:
-            year += 2000
-
-        month = int(match.group("month"))
-        day = int(match.group("day"))
-
-        try:
-            return date(year, month, day).isoformat()
-        except ValueError:
-            return None
-
-    return None
-
-
-def _extract_amount_candidates(lines: list[str]) -> list[int]:
-    weighted_candidates: list[tuple[int, int]] = []
-
-    for line_index, line in enumerate(lines):
-        amounts = [
-            amount
-            for amount in (
-                normalize_amount(value)
-                for value in re.findall(r"(?:¥|￥)?\s*[0-9][0-9,]*", line)
-            )
-            if amount is not None and amount > 0
-        ]
-
-        if not amounts:
-            continue
-
-        has_total_keyword = any(keyword in line for keyword in _AMOUNT_KEYWORDS)
-        has_exclude_keyword = any(keyword in line for keyword in _EXCLUDE_AMOUNT_KEYWORDS)
-
-        for amount in amounts:
-            score = 10
-            if has_total_keyword:
-                score += 100
-            if has_exclude_keyword:
-                score -= 80
-
-            score += min(line_index, 20)
-            weighted_candidates.append((score, amount))
-
-    weighted_candidates.sort(key=lambda item: item[0], reverse=True)
-
-    result: list[int] = []
-    for _, amount in weighted_candidates:
-        if amount not in result:
-            result.append(amount)
-
-    return result[:5]
-
-
-def _extract_date_candidates(lines: list[str]) -> list[str]:
-    result: list[str] = []
-
-    for line in lines:
-        normalized = normalize_date(line)
-        if normalized and normalized not in result:
-            result.append(normalized)
-
-    return result[:5]
-
-
-def _extract_store_candidates(lines: list[str]) -> list[str]:
-    candidates: list[str] = []
-
-    for line in lines[:8]:
-        value = line.strip()
-        if not value:
-            continue
-        if len(value) <= 1:
-            continue
-        if any(keyword in value for keyword in _AMOUNT_KEYWORDS):
-            continue
-        if normalize_date(value):
-            continue
-        if re.search(r"[0-9]{3,}", value):
-            continue
-
-        candidates.append(value)
-
-    return candidates[:5]
-
-
 def extract_receipt_candidates(raw_text: str) -> dict[str, Any]:
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-
+    codes = {
+        code
+        for code in re.findall(r"\b[A-Z]{3}\b", raw_text.upper())
+        if normalize_currency(code)
+    }
+    currency = next(iter(codes)) if len(codes) == 1 else None
+    total_lines = [
+        line for line in lines if _TOTAL.search(line) and not _NOT_TOTAL.search(line)
+    ]
+    amounts: list[Decimal] = []
+    if len(total_lines) == 1:
+        tokens = re.findall(r"[0-9]+(?:[.,][0-9]+)*", total_lines[0])
+        if len(tokens) == 1:
+            amount = normalize_amount(tokens[0], currency)
+            if amount is not None:
+                amounts.append(amount)
+    dates = {
+        normalized
+        for line in lines
+        for token in re.findall(
+            r"\d{4}[./\-年]\d{1,2}[./\-月]\d{1,2}日?|\d{1,2}[./\-]\d{1,2}[./\-]\d{4}",
+            line,
+        )
+        if (normalized := normalize_date(token)) is not None
+    }
+    store = next(
+        (
+            line
+            for line in lines[:3]
+            if not re.search(r"\d|[@:]", line) and not _TOTAL.search(line)
+        ),
+        None,
+    )
     return {
-        "amountCandidates": _extract_amount_candidates(lines),
-        "dateCandidates": _extract_date_candidates(lines),
-        "storeNameCandidates": _extract_store_candidates(lines),
-        "topLines": lines[:10],
+        "original_amount": str(amounts[0]) if len(amounts) == 1 else None,
+        "detected_currency_code": currency,
+        "transaction_date": next(iter(dates)) if len(dates) == 1 else None,
+        "store_name": store,
+        "title": store,
+        "confidence": 0.45,
+        "total_line_count": len(total_lines),
     }

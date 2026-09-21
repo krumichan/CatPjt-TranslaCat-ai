@@ -51,7 +51,11 @@ def sanitize_gemini_response_schema(schema: dict | None) -> dict | None:
 def _sanitize_schema_node(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            key: _sanitize_schema_node(child)
+            key: (
+                {name: _sanitize_schema_node(property_schema) for name, property_schema in child.items()}
+                if key in {"properties", "$defs"} and isinstance(child, dict)
+                else _sanitize_schema_node(child)
+            )
             for key, child in value.items()
             if key not in _GEMINI_SCHEMA_KEYS_TO_DROP
         }

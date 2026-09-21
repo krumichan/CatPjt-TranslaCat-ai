@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,30 @@ from PIL import Image, ImageOps
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OCRLine:
+    text: str
+    bounding_box: list[list[float]] | None = None
+    confidence: float | None = None
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "bounding_box": self.bounding_box,
+            "confidence": self.confidence,
+        }
+
+
+@dataclass(frozen=True)
+class OCRDocument:
+    lines: list[OCRLine] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        # Equal text at different positions belongs to different receipts.
+        return "\n".join(line.text for line in self.lines)
 
 
 class OCRService:
@@ -28,6 +53,13 @@ class OCRService:
         file: UploadFile,
         ocr_language: str | None = None,
     ) -> str:
+        return (await self.extract_document_from_upload(file, ocr_language)).text
+
+    async def extract_document_from_upload(
+        self,
+        file: UploadFile,
+        ocr_language: str | None = None,
+    ) -> OCRDocument:
         self._validate_file(file)
         contents = await file.read()
 
@@ -46,7 +78,7 @@ class OCRService:
 
             async with self._predict_lock:
                 return await asyncio.to_thread(
-                    self._extract_text_from_path,
+                    self._extract_document_from_path,
                     ocr,
                     temp_file_path,
                 )
@@ -75,7 +107,9 @@ class OCRService:
     def _write_temp_file(self, contents: bytes, suffix: str) -> str:
         processed_contents, processed_suffix = self._preprocess_image(contents, suffix)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=processed_suffix) as temp_file:
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=processed_suffix
+        ) as temp_file:
             temp_file.write(processed_contents)
             return temp_file.name
 
@@ -101,8 +135,10 @@ class OCRService:
             )
 
             return output.getvalue(), ".jpg"
-        except Exception:
-            logger.warning("이미지 전처리에 실패하여 원본 파일로 OCR을 진행합니다.", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "Receipt image preprocessing failed. error_type=%s", type(exc).__name__
+            )
             return contents, suffix
 
     def _resize_image_safely(self, image: Image.Image) -> Image.Image:
@@ -130,7 +166,7 @@ class OCRService:
                 new_width,
                 new_height,
             )
-            return image.resize((new_width, new_height), Image.LANCZOS)
+            return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
         return image
 
@@ -159,7 +195,9 @@ class OCRService:
         try:
             from paddleocr import PaddleOCR
         except ImportError as exc:
-            raise RuntimeError("PaddleOCR가 설치되어 있지 않습니다. requirements.txt를 확인해주세요.") from exc
+            raise RuntimeError(
+                "PaddleOCR가 설치되어 있지 않습니다. requirements.txt를 확인해주세요."
+            ) from exc
 
         try:
             return PaddleOCR(
@@ -175,7 +213,9 @@ class OCRService:
                 cpu_threads=settings.OCR_CPU_THREADS,
             )
         except (TypeError, ValueError):
-            logger.info("PaddleOCR 3.x 파라미터 초기화에 실패하여 2.x 호환 파라미터로 재시도합니다.")
+            logger.info(
+                "PaddleOCR 3.x 파라미터 초기화에 실패하여 2.x 호환 파라미터로 재시도합니다."
+            )
             return PaddleOCR(
                 use_angle_cls=True,
                 lang=language,
@@ -184,75 +224,77 @@ class OCRService:
                 cpu_threads=settings.OCR_CPU_THREADS,
             )
 
-    def _extract_text_from_path(self, ocr: Any, image_path: str) -> str:
+    def _extract_document_from_path(self, ocr: Any, image_path: str) -> OCRDocument:
         try:
             if hasattr(ocr, "predict"):
                 result = ocr.predict(input=image_path)
             else:
                 result = ocr.ocr(image_path, cls=True)
 
-            texts = self._collect_texts(result)
+            lines = self._collect_lines(result)
         except Exception as exc:
-            logger.exception("PaddleOCR 처리에 실패했습니다.")
+            logger.warning("OCR failed. error_type=%s", type(exc).__name__)
             raise HTTPException(
                 status_code=500,
                 detail="OCR 처리 중 오류가 발생했습니다.",
             ) from exc
 
-        normalized_texts = [text.strip() for text in texts if text.strip()]
-        return "\n".join(dict.fromkeys(normalized_texts))
+        return OCRDocument(lines=lines)
 
-    def _collect_texts(self, value: Any) -> list[str]:
-        texts: list[str] = []
-
+    def _collect_lines(self, value: Any) -> list[OCRLine]:
         if value is None:
-            return texts
-
-        if isinstance(value, str):
-            return [value]
-
+            return []
+        if not isinstance(value, (dict, list, tuple, str)) and hasattr(value, "json"):
+            json_value = value.json() if callable(value.json) else value.json
+            return self._collect_lines(json_value)
         if isinstance(value, dict):
-            for key in ("rec_texts", "texts"):
-                nested_value = value.get(key)
-                if isinstance(nested_value, list):
-                    texts.extend(str(item) for item in nested_value if item is not None)
-
-            for key in ("text", "label"):
-                nested_value = value.get(key)
-                if isinstance(nested_value, str):
-                    texts.append(nested_value)
-
-            for nested_value in value.values():
-                if isinstance(nested_value, (dict, list, tuple)):
-                    texts.extend(self._collect_texts(nested_value))
-
-            return texts
-
+            texts = value.get("rec_texts")
+            if texts is not None:
+                boxes = value.get("rec_polys")
+                if boxes is None:
+                    boxes = value.get("dt_polys")
+                scores = value.get("rec_scores")
+                return [
+                    OCRLine(
+                        text=str(text).strip(),
+                        bounding_box=self._coerce_box(boxes[index])
+                        if boxes is not None and index < len(boxes)
+                        else None,
+                        confidence=float(scores[index])
+                        if scores is not None and index < len(scores)
+                        else None,
+                    )
+                    for index, text in enumerate(texts)
+                    if str(text).strip()
+                ]
+            lines: list[OCRLine] = []
+            for nested in value.values():
+                if isinstance(nested, (dict, list, tuple)):
+                    lines.extend(self._collect_lines(nested))
+            return lines
         if isinstance(value, (list, tuple)):
             if (
-                len(value) >= 2
+                len(value) == 2
                 and isinstance(value[1], (list, tuple))
                 and value[1]
                 and isinstance(value[1][0], str)
             ):
-                texts.append(value[1][0])
+                return [
+                    OCRLine(
+                        text=value[1][0].strip(),
+                        bounding_box=self._coerce_box(value[0]),
+                        confidence=float(value[1][1]) if len(value[1]) > 1 else None,
+                    )
+                ]
+            return [line for item in value for line in self._collect_lines(item)]
+        # Paddle predict can return a generator of per-image results.
+        if not isinstance(value, str) and hasattr(value, "__iter__"):
+            return [line for item in value for line in self._collect_lines(item)]
+        return []
 
-            for item in value:
-                texts.extend(self._collect_texts(item))
-
-            return texts
-
-        if hasattr(value, "json"):
-            json_attr = getattr(value, "json")
-            try:
-                json_value = json_attr() if callable(json_attr) else json_attr
-            except TypeError:
-                json_value = None
-
-            if isinstance(json_value, dict):
-                texts.extend(self._collect_texts(json_value))
-
-        if hasattr(value, "__dict__"):
-            texts.extend(self._collect_texts(vars(value)))
-
-        return texts
+    @staticmethod
+    def _coerce_box(value: Any) -> list[list[float]] | None:
+        try:
+            return [[float(point[0]), float(point[1])] for point in value]
+        except (TypeError, ValueError, IndexError):
+            return None

@@ -335,7 +335,7 @@ class GeminiService:
 
             return response.parsed if schema else response.text
         except Exception as exc:
-            logger.error("Gemini Vision API Call Error: %s", exc)
+            logger.error("Gemini Vision call failed. type=%s errorType=%s", type_name, type(exc).__name__)
             raise
 
     async def translate_chat_message(
