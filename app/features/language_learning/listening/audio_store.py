@@ -45,10 +45,23 @@ class TemporaryListeningAudioStore:
         checksum = hashlib.sha256(audio_bytes).hexdigest()
         with self._lock:
             self._purge_locked()
-            if not path.exists():
-                temporary_path = path.with_suffix(".tmp")
-                temporary_path.write_bytes(audio_bytes)
+            existing = self._items.get(reference)
+            if existing is not None and existing.path.exists():
+                # Duplicate syntheses may finish with different bytes. Keep the
+                # first complete artifact and its matching metadata together.
+                return existing
+            # A file left by an earlier process has no trustworthy metadata in
+            # this store. Replace it instead of describing old bytes as new.
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f"{reference}-", suffix=".tmp", dir=self.base_dir
+            )
+            temporary_path = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as temporary_file:
+                    temporary_file.write(audio_bytes)
                 os.replace(temporary_path, path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
             stored = StoredListeningAudio(
                 reference=reference,
                 path=path,

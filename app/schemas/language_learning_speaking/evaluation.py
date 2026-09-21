@@ -12,7 +12,11 @@ from app.schemas.language_learning_speaking.common import (
     SpeakingPracticeMode,
     SpeakingUsage,
 )
-from app.schemas.language_learning_speaking.turn import AudioQualitySignals, SttSegment
+from app.schemas.language_learning_speaking.turn import (
+    AudioQualitySignals,
+    SttAnalysisMetadata,
+    SttSegment,
+)
 
 
 class SpeakingEvaluationTurn(CamelCaseModel):
@@ -27,6 +31,8 @@ class SpeakingEvaluationTurn(CamelCaseModel):
     audio_quality_signals: AudioQualitySignals | None = None
     excluded_from_evaluation: bool = False
     assistance_usage: list[AssistanceUsage] = Field(default_factory=list, max_length=20)
+    stt_metadata: SttAnalysisMetadata | None = None
+    recording_revision: int | None = Field(default=None, ge=0)
 
 
 class AssistantEvaluationTurn(CamelCaseModel):
@@ -182,6 +188,10 @@ class SpeakingEvaluationResponse(CamelCaseModel):
     scoring_policy_version: str
     prompt_version: str
     usage: SpeakingUsage
+    evaluated_axes: list[SpeakingMetricType] = Field(default_factory=list)
+    evaluation_coverage: float | None = Field(default=None, ge=0, le=1)
+    evidence_policy_version: str | None = Field(default=None, max_length=100)
+    evidence_source: str | None = Field(default=None, max_length=100)
 
 
 class HumanMetricScore(CamelCaseModel):

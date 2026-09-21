@@ -6,4 +6,7 @@ __pycache__/
 *.pyc
 .deploy-env.*
 .deploy.lock
+
 test-results/
+.qa_tmp
+.docs

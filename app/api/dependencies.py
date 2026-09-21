@@ -40,6 +40,9 @@ from app.features.language_learning.speaking.audio_store import TemporaryTtsAudi
 from app.features.language_learning.speaking.conversation_service import (
     SpeakingConversationService,
 )
+from app.features.language_learning.speaking.coaching_service import (
+    SpeakingSessionCoachingService,
+)
 from app.features.language_learning.speaking.evaluation_service import (
     SpeakingEvaluationService,
 )
@@ -57,6 +60,7 @@ from app.features.language_learning.reading_vocabulary.service import (
 )
 from app.features.receipt.service import ReceiptAnalysisService
 from app.features.speech_to_text import FasterWhisperRuntime
+from app.features.speech_to_text.runtime_policy import speaking_runtime
 from app.features.translation.service import TranslationService
 from app.features.voice_translation.stt import FasterWhisperVoiceSttProvider
 from app.features.voice_translation.speech_detector import SileroSpeechEvidenceGuard
@@ -69,6 +73,8 @@ _ai_provider = create_text_generation_provider()
 _speech_provider = create_speech_synthesis_provider()
 
 _speech_runtime = FasterWhisperRuntime()
+_speaking_speech_runtime = speaking_runtime(_speech_runtime, settings)
+_speaking_speech_evidence_guard = SileroSpeechEvidenceGuard(enabled=True)
 _stt_service = STTService(runtime=_speech_runtime)
 _ocr_service = OCRService()
 
@@ -106,7 +112,6 @@ _language_learning_reading_vocabulary_service = ReadingVocabularyGenerationServi
         settings.AI_VOCABULARY_DIFFICULTY_SHADOW_TIMEOUT_SECONDS
     ),
 )
-
 _listening_audio_store = TemporaryListeningAudioStore(
     ttl_seconds=settings.AI_LISTENING_TTS_AUDIO_TTL_SECONDS
 )
@@ -131,7 +136,11 @@ _speaking_audio_processor = SpeakingAudioProcessor()
 _speaking_audio_store = TemporaryTtsAudioStore(
     ttl_seconds=settings.AI_SPEAKING_TTS_AUDIO_TTL_SECONDS
 )
-_speaking_stt_provider = FasterWhisperSpeakingSttProvider(runtime=_speech_runtime)
+_speaking_stt_provider = FasterWhisperSpeakingSttProvider(
+    runtime=_speaking_speech_runtime,
+    beam_size=settings.AI_SPEAKING_STT_BEAM_SIZE,
+    speech_guard=_speaking_speech_evidence_guard,
+)
 _speaking_stt_service = SpeakingSttService(_speaking_stt_provider)
 _speaking_conversation_service = SpeakingConversationService(_ai_provider)
 _speaking_assistance_service = SpeakingAssistanceService(_ai_provider)
@@ -140,13 +149,17 @@ _speaking_tts_service = SpeakingTtsService(
     audio_store=_speaking_audio_store,
 )
 _speaking_evaluation_service = SpeakingEvaluationService(_ai_provider)
+_speaking_coaching_service = SpeakingSessionCoachingService(_ai_provider)
+_level_test_stt_service = SpeakingSttService(FasterWhisperSpeakingSttProvider(
+    runtime=_speech_runtime, beam_size=1, speech_guard=_speaking_speech_evidence_guard,
+))
 _level_test_service = LevelTestService(
     provider=_ai_provider,
     writing_service=_language_learning_writing_service,
     dictation_service=_listening_dictation_service,
     interpretation_service=_listening_interpretation_service,
     audio_processor=_speaking_audio_processor,
-    stt_service=_speaking_stt_service,
+    stt_service=_level_test_stt_service,
     speech_provider=_speech_provider,
 )
 _speaking_turn_service = SpeakingTurnService(
@@ -181,6 +194,14 @@ def get_speech_synthesis_provider():
 
 def get_speech_runtime() -> FasterWhisperRuntime:
     return _speech_runtime
+
+
+def get_speaking_speech_runtime() -> FasterWhisperRuntime:
+    return _speaking_speech_runtime
+
+
+def get_speaking_speech_evidence_guard() -> SileroSpeechEvidenceGuard:
+    return _speaking_speech_evidence_guard
 
 
 def get_translation_service() -> TranslationService:
@@ -263,6 +284,10 @@ def get_language_learning_speaking_tts_service() -> SpeakingTtsService:
 
 def get_language_learning_speaking_evaluation_service() -> SpeakingEvaluationService:
     return _speaking_evaluation_service
+
+
+def get_language_learning_speaking_coaching_service() -> SpeakingSessionCoachingService:
+    return _speaking_coaching_service
 
 
 def get_language_learning_speaking_audio_store() -> TemporaryTtsAudioStore:

@@ -60,6 +60,35 @@ ORDERING:
 Reading:
 - Use the exact supplied passageId and passageText for the slot. Never rewrite the passage.
 - Reading evaluates understanding of the text, not dictionary recall.
+- Every factual premise in the learner-visible question must be supported by the assigned passage.
+  A locally correct answer does not rescue an unsupported comparison, cause, actor, time, or scope
+  asserted by the stem. Do not turn one leg of a journey into a replacement of another leg.
+- Each question on the same passage must test a materially different reading judgment from
+  previousQuestions; paraphrasing the same discourse relation and answer is not a new task.
+- For STRUCTURE, samePassageTaskPosition/Count describe the fixed number of questions sharing
+  this passage, including later ungenerated questions. Do not use the first question to ask
+  for the entire passage's organization or all paragraph roles: that consumes the distinct
+  discourse relationships needed by later positions. Focus on one bounded structural
+  relationship; later positions must assess a different relationship, not reword the first.
+  For B5, structureJudgmentContract.evidenceScope=WHOLE_TEXT still requires integrating
+  cues from multiple paragraphs. Its judgmentScope limits what ONE question asks the learner
+  to decide: early slots judge one argument function using global evidence, whereas the
+  final slot may synthesize the whole argument progression. This is not local fact retrieval.
+  Respect reservedFutureQuestionFocuses as distinct future judgments; reusing a clue is not
+  itself duplication, while changing the quote does not make the same judgment new.
+- For CONTEXT_INFERENCE, samePassageTaskPosition/Count reserve a different unstated
+  judgment and passage clue for each question sharing the passage. PreviousQuestions
+  already consumed their judgments. A clause that explicitly says why an action was
+  taken cannot become INFERENCE by rewording its stated reason. Infer a conclusion
+  from visible cues that the passage does not itself state; preserve earlier questions.
+- An INFERENCE or CONTEXT_INFERENCE skill must require an inference rather than copying an
+  explicitly stated fact or paraphrasing an explicitly stated conclusion. STRUCTURE must test the function or relationship of text units,
+  not merely retrieve why an event happened. Keep the assigned skill and demand.
+- For B1 COMPREHENSION candidates, include inferenceClueQuote and unstatedInference as
+  null for factual skills. For an INFERENCE slot, quote an exact passage clue and state
+  the conclusion the learner must infer but cannot copy from passageText. Ask for that
+  unstated conclusion, not for a named person/object/action or a cause already explicit
+  in the passage. The quoted clue is evidence, never a substitute for the inference.
 - CONTEXT_INFERENCE must infer reference, omitted meaning, intent, logical relation, next development, attitude,
   or contextual meaning; never ask a bare dictionary-definition question.
 - targetExpression and canonicalKey must be null.
@@ -190,9 +219,25 @@ and content, without rewriting or returning the previous passages.
 
 Mode guidance:
 - COMPREHENSION: clear informational/narrative text suitable for content, detail, cause/effect, intent and inference.
+  Every COMPREHENSION passage is also used for an INFERENCE question. Include a simple,
+  local pair of clues from which a learner can infer one unstated everyday intent or
+  consequence. Do not state that inference as an explicit fact. Keep the language at
+  the supplied band and do not require outside knowledge.
 - STRUCTURE: a somewhat richer multi-paragraph text with visible logical structure and paragraph roles.
+  If questionPlans are requested, reserve a different bounded discourse judgment for each
+  supplied slot. A GIST slot may ask the central idea of the passage, but must not ask for
+  every paragraph's role or the entire first-to-last structural progression. Later
+  STRUCTURE slots need distinct relationships. Do not relabel event-reason retrieval as structure.
+  For a B5 structureJudgmentContract, plan whole-text evidence for EVERY slot, but reserve
+  the whole progression/map for the final slot. Earlier questionFocus values must name one
+  specific argument function that integrates multiple paragraphs and leaves other functions
+  to later slots. Do not satisfy B5 through a single-paragraph factual lookup.
 - CONTEXT_INFERENCE: a coherent text with enough contextual cues for reference resolution, implied meaning,
-  writer intent/attitude, logical relations and next-development inference.
+  writer intent/attitude, logical relations and next-development inference. Supply an
+  inferencePlans entry for each upcoming question order, with a different exact
+  clueQuote from passageText and an unstatedInference that is not written there.
+  Do not explicitly explain each answer in the passage with a "because" clause.
+  The plans are internal passage-generation evidence, not learner-visible content.
 
 Do not include questions, answers, translations, vocabulary lists, or commentary. Return only the schema fields.
 """.strip()
@@ -270,7 +315,11 @@ family, canonical normalization, and Review targets. Evaluate only the expressio
 
 For the one current order return targetExpressionWellFormed, learningValue, sameSurfaceCategory,
 skillContrastSupported, coveredDecisiveDimensions, definitionOnly, lexicalConceptRepeated, rareOrTrivia,
-targetViableWithDifferentDistractors, one verdict per distractor, reasonCode, and reason.
+targetViableWithDifferentDistractors, reasonCode, and reason. targetId is always TARGET; target judgments
+refer only to lexicalTargets.target. Return distractor judgments in the fixed D0/D1/D2 object, matching each
+field and id to lexicalTargets.distractors. These are server IDs, NOT learner option keys or positions.
+Do not include the target in distractors, create D3, renumber, or reorder expressions to infer identity.
+globalOrder must equal currentOrder; return exactly one verdict for this request.
 - targetExpressionWellFormed/expressionWellFormed ask whether the expression itself is grammatical, established,
   and usable in at least one ordinary learning-language situation. An expression is not malformed merely because
   it would be less appropriate than another option in an imagined situation.
@@ -323,6 +372,7 @@ def build_practice_generation_prompt(
     *,
     excluded_canonical_keys: list[str] | None = None,
     excluded_target_expressions: list[str] | None = None,
+    previous_questions: list[PracticeGeneratedQuestion] | None = None,
 ) -> str:
     payload = {
         "requestId": request.request_id,
@@ -346,7 +396,7 @@ def build_practice_generation_prompt(
                 "skillTag": question.skill_tag,
                 "targetExpression": question.target_expression,
             }
-            for question in request.previous_questions
+            for question in (previous_questions if previous_questions is not None else request.previous_questions)
         ],
     }
     instruction = "Generate candidates for exactly the supplied candidateSlots."
@@ -392,6 +442,7 @@ def build_reading_passage_prompt(
     *,
     passage_id: str,
     passage_number: int,
+    planned_slots: list[dict[str, object]] | None = None,
 ) -> str:
     payload = {
         "requestId": request.request_id,
@@ -414,6 +465,41 @@ def build_reading_passage_prompt(
             if question.passage_id and question.passage_text
         },
     }
+    if planned_slots is not None:
+        payload["plannedQuestionSlots"] = planned_slots
+        payload["questionPlanContract"] = (
+            "Return exactly one questionPlans entry per supplied globalOrder, preserving its "
+            "skillTag, difficulty, complexityBand. Each entry needs an exact passage clueQuote, "
+            "a distinct questionFocus/reading judgment, and an unstatedInference only for "
+            "inference skills. For B5 STRUCTURE, obey each slot's structureJudgmentContract: "
+            "whole-text evidence for every slot, one bounded argument function in early slots, "
+            "and the whole progression only in the final slot. These are private generation "
+            "plans, not questions or answer keys."
+        )
+    if request.mode == "COMPREHENSION" and request.complexity_band == 1:
+        payload["upcomingInferenceRequirement"] = {
+            "samePassageQuestionOrders": [1, 2, 3] if passage_number == 1 else [4, 5],
+            "requiredClue": "An exact excerpt supporting a simple conclusion the passage does not state",
+            "responseFields": ["inferenceClueQuote", "unstatedInference"],
+            "rule": (
+                "Do not state unstatedInference in passageText. It must follow from "
+                "the quoted clue and visible context. Reserve this judgment for "
+                "the later INFERENCE question, not the first factual question."
+            ),
+        }
+    elif request.mode == "CONTEXT_INFERENCE":
+        orders = [1, 2, 3] if passage_number == 1 else [4, 5]
+        payload["upcomingInferenceRequirement"] = {
+            "samePassageQuestionOrders": orders,
+            "distinctUnstatedJudgmentCount": len(orders),
+            "responseFields": ["inferencePlans.questionOrder", "inferencePlans.clueQuote",
+                               "inferencePlans.unstatedInference"],
+            "rule": (
+                "Each order needs its own exact passage clue and a different conclusion "
+                "not explicitly stated in passageText. Do not spend all inference "
+                "opportunities on the first question or state the later answers outright."
+            ),
+        }
     return (
         "Generate exactly one Reading passage.\n"
         f"<practice-data>\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n</practice-data>"
@@ -423,6 +509,9 @@ def build_reading_passage_prompt(
 def build_practice_verification_prompt(
     request: PracticeGenerationRequest,
     questions: list[dict[str, Any]],
+    *,
+    previous_reading_questions: list[PracticeGeneratedQuestion] | None = None,
+    reading_evidence_spans: list[dict[str, str]] | None = None,
 ) -> str:
     payload = {
         "domain": request.domain.value,
@@ -431,9 +520,49 @@ def build_practice_verification_prompt(
         "learningLanguage": request.learning_language,
         "questions": questions,
     }
+    if request.domain.value == "READING":
+        payload["readingEvidenceSpans"] = reading_evidence_spans or []
+        payload["previousReadingQuestions"] = [
+            {
+                "order": question.order,
+                "passageId": question.passage_id,
+                "prompt": question.prompt,
+                "options": [option.model_dump(by_alias=True) for option in question.options],
+                "skillTag": question.skill_tag,
+            }
+            for question in (previous_reading_questions or [])
+        ]
     instruction = (
         "Independently verify semantic uniqueness/support. Expected answer keys are not included."
     )
+    if request.domain.value == "READING":
+        instruction += (
+            "\nFor every Reading item, judge factual presuppositions in the entire stem separately "
+            "from whether one answer option has local support. Unsupported comparison, cause, actor, "
+            "time, or scope makes stemPresuppositionsSupported=false even if the apparent answer is "
+            "obvious. Select the exact IDs from readingEvidenceSpans in stemEvidenceSpanIds; "
+            "the application restores those passage substrings. Span selection is evidence to "
+            "inspect, not automatic proof of entailment. Never invent IDs or quote fragments. "
+            "readingOperation is the operation actually "
+            "needed, not the generator's label: DIRECT_RETRIEVAL, INFERENCE, or DISCOURSE_STRUCTURE. "
+            "An answer copied from or merely paraphrasing an explicitly stated fact or "
+            "conclusion is DIRECT_RETRIEVAL even if labeled INFERENCE. A genuine INFERENCE "
+            "must combine cues to reach a proposition the passage does not already assert; "
+            "STRUCTURE requires a discourse/text-organization relation, not event-reason retrieval. "
+            "Judge questionDemand and skillTag against the actual task. distinctReadingTask=false "
+            "when a previousReadingQuestion on the same passage tests substantially the same reading "
+            "judgment/answer; compare current-batch questions too and mark the later order false if "
+            "they repeat. For STRUCTURE, samePassageTaskPosition/Count are application-owned. "
+            "Judge boundedStructureScope independently of distinctReadingTask. For B5, "
+            "structureJudgmentContract separates WHOLE_TEXT evidence from the scope of ONE "
+            "judgment: an early question integrating multiple paragraphs around one argument "
+            "function can be bounded=true, while an early full organization/all-role/first-to-last "
+            "map is false. Do not treat a single-paragraph fact lookup as B5 synthesis. The final "
+            "slot may judge the whole progression. Reused evidence spans do not alone prove "
+            "duplicate task; distinct quotes do not alone prove distinct judgment. "
+            "Compare previousReadingQuestions before deciding task distinctness. "
+            "Passage reuse alone is not duplication. Never infer a hidden expected answer."
+        )
     if request.domain.value == "VOCABULARY" and request.mode == "MEANING_RELATION":
         instruction += (
             "\nFor MEANING_RELATION, contextDependent=true only when removing the "
@@ -503,10 +632,22 @@ def build_contextual_choice_plan_verification_prompt(
     structural_demand: dict[str, object],
     previous_lexical_identities: list[dict[str, Any]],
 ) -> str:
+    target_expression = plan_item["targetExpression"]
+    distractors = plan_item["distractors"]
     payload = {
         "learningLanguage": request.learning_language,
         "currentOrder": plan_item["globalOrder"],
-        "planItem": plan_item,
+        "planItem": {
+            key: value for key, value in plan_item.items()
+            if key not in {"targetExpression", "canonicalKey", "distractors"}
+        },
+        "lexicalTargets": {
+            "target": {"id": "TARGET", "expression": target_expression},
+            "distractors": {
+                f"D{index}": {"id": f"D{index}", "expression": expression}
+                for index, expression in enumerate(distractors)
+            },
+        },
         "structuralDifficultyDemand": structural_demand,
         "previousLexicalIdentities": previous_lexical_identities,
     }
@@ -515,7 +656,8 @@ def build_contextual_choice_plan_verification_prompt(
         "Future slots are not quality gates, and no actual context has been generated. Judge expression-level "
         "well-formedness separately from bundle relevance and skill contrast. Never mark a grammatical "
         "expression malformed because it is less suitable for an imagined current apology, event time, or "
-        "intent. Judge each distractor by zero-based index. For COLLOCATION require a lexical-frame contrast; "
+        "intent. Judge the target separately and bind each distractor verdict to its supplied D0/D1/D2 ID, "
+        "never to an inferred option position. For COLLOCATION require a lexical-frame contrast; "
         "for NUANCE a scope/implication/strength contrast; for REGISTER a real formality, social-role, or channel "
         "contrast; for PRAGMATIC_FIT an intent/situation/appropriateness contrast; for MEANING a sense-fit "
         "contrast. Tense/aspect, polarity, or synonymy alone does not satisfy REGISTER. Populate each "

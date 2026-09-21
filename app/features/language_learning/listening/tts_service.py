@@ -6,12 +6,17 @@ import logging
 import time
 
 from app.ai.ports import SpeechSynthesisProvider
+from app.ai.providers.openai.speech import OPENAI_SPEECH_POLICY_VERSION
 from app.core.config import settings
 from app.features.language_learning.listening.audio_store import (
     StoredListeningAudio,
     TemporaryListeningAudioStore,
 )
 from app.features.language_learning.listening.errors import ListeningStageException
+from app.features.language_learning.listening.duration import (
+    decode_reference_audio,
+    validate_actual_duration,
+)
 from app.features.language_learning.listening.normalization import normalize_text
 from app.features.language_learning.listening.policy import LISTENING_TTS_VERSION
 from app.features.language_learning.listening.provider_error import (
@@ -212,7 +217,13 @@ class ListeningTtsService:
                 ),
             )
 
-        duration = result.duration_seconds or 0.0
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            decoded = decode_reference_audio(result.audio_bytes, result.content_type)
+            validate_actual_duration(decoded, request.duration_demand)
+        except ListeningStageException as exc:
+            return self._audio_failure_response(request, exc, elapsed_ms)
+        duration = decoded.duration_seconds
         stored = self.audio_store.put(
             result.audio_bytes,
             cache_key=cache_key,
@@ -252,6 +263,23 @@ class ListeningTtsService:
         provider: str | None = None,
         model: str | None = None,
     ) -> ListeningTtsResponse:
+        try:
+            audio_bytes = stored.path.read_bytes()
+            decoded = decode_reference_audio(audio_bytes, stored.content_type)
+            if (hashlib.sha256(audio_bytes).hexdigest() != stored.checksum
+                    or abs(decoded.duration_seconds - stored.duration_seconds) > 0.000001):
+                raise ListeningStageException(
+                    ListeningErrorCode.AUDIO_DECODE_FAILED, ListeningStage.TTS,
+                    "보관된 Reference 음성과 metadata가 일치하지 않습니다.", False,
+                )
+            validate_actual_duration(decoded, request.duration_demand)
+        except OSError:
+            return self._audio_failure_response(request, ListeningStageException(
+                ListeningErrorCode.AUDIO_DECODE_FAILED, ListeningStage.TTS,
+                "보관된 Reference 음성을 읽을 수 없습니다.", False,
+            ), latency_ms)
+        except ListeningStageException as exc:
+            return self._audio_failure_response(request, exc, latency_ms)
         return ListeningTtsResponse(
             request_id=request.request_id,
             item_id=request.item_id,
@@ -263,13 +291,16 @@ class ListeningTtsService:
                 audio_reference=stored.reference,
                 duration_ms=int(stored.duration_seconds * 1000 + 0.5),
                 format=stored.content_type,
-                sample_rate=24000,
-                channels=1,
+                sample_rate=decoded.sample_rate,
+                channels=decoded.channels,
                 voice=request.voice,
                 text_hash=text_hash,
                 checksum=stored.checksum,
                 cache_key=cache_key,
                 tts_version=LISTENING_TTS_VERSION,
+                duration_validated=request.duration_demand is not None,
+                duration_policy_version=(request.duration_demand.policy_version
+                                         if request.duration_demand else None),
             ),
             usage=ListeningUsage(
                 tts=StageUsage(
@@ -284,13 +315,40 @@ class ListeningTtsService:
         )
 
     @staticmethod
+    def _audio_failure_response(
+        request: ListeningTtsRequest, error: ListeningStageException, latency_ms: int,
+    ) -> ListeningTtsResponse:
+        logger.warning(
+            "Listening reference audio rejected. request_id=%s item_id=%s code=%s "
+            "measured_seconds=%s duration_policy=%s",
+            request.request_id, request.item_id, error.code.value,
+            error.details.get("measuredSeconds"),
+            request.duration_demand.policy_version if request.duration_demand else None,
+        )
+        return ListeningTtsResponse(
+            request_id=request.request_id, item_id=request.item_id, status="FAILED",
+            source_text=request.source_text, content_hash=request.content_hash,
+            generation_version=request.generation_version, error=error.to_schema(),
+            usage=ListeningUsage(tts=StageUsage(
+                latency_ms=latency_ms, tts_characters=len(request.source_text),
+                tts_audio_seconds=error.details.get("measuredSeconds", 0.0),
+                prompt_version=LISTENING_TTS_VERSION,
+            )),
+        )
+
+    @staticmethod
     def _cache_key(request: ListeningTtsRequest, text_hash: str) -> str:
         return "|".join(
             [
                 request.voice.locale,
                 request.voice.voice_key,
                 request.voice.version,
+                "openai",
+                settings.OPENAI_SPEECH_MODEL,
+                OPENAI_SPEECH_POLICY_VERSION,
+                request.playback_speed,
                 text_hash,
+                request.generation_version,
                 LISTENING_TTS_VERSION,
             ]
         )

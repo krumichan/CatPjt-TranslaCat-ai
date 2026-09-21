@@ -10,6 +10,7 @@ class AiModelTier(str, Enum):
     NANO = "NANO"
     LUNA = "LUNA"
     MINI = "MINI"
+    SOL = "SOL"
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,9 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "LANGUAGE_LEARNING_SPEAKING_EVALUATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 8192
     ),
+    "LANGUAGE_LEARNING_SPEAKING_SESSION_COACHING": AiTaskModelPolicy(
+        AiModelTier.MINI, "low", 4096
+    ),
     "LANGUAGE_LEARNING_LISTENING_INTERPRETATION": AiTaskModelPolicy(
         AiModelTier.MINI, "low", 8192
     ),
@@ -143,8 +147,17 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
 # Unknown/new tasks fail quality-safe: use Mini until explicitly classified.
 _DEFAULT_POLICY = AiTaskModelPolicy(AiModelTier.MINI, "low", 8192)
 
+_READING_GENERATION_TASKS = frozenset({
+    "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION",
+    "LANGUAGE_LEARNING_READING_QUESTION_GENERATION_SOL",
+    "LANGUAGE_LEARNING_READING_DISTRACTOR_REPAIR",
+})
+
 
 def get_task_model_policy(type_name: str) -> AiTaskModelPolicy:
+    if type_name in _READING_GENERATION_TASKS and settings.AI_READING_GENERATION_MODEL == "SOL":
+        base = _TASK_POLICIES.get(type_name, _TASK_POLICIES["LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION"])
+        return AiTaskModelPolicy(AiModelTier.SOL, "high", max(8192, base.max_output_tokens), base.verbosity)
     return _TASK_POLICIES.get(type_name, _DEFAULT_POLICY)
 
 
@@ -155,6 +168,8 @@ def get_model_name_for_tier(tier: AiModelTier) -> str:
         return settings.OPENAI_MODEL_LUNA
     if tier == AiModelTier.MINI:
         return settings.OPENAI_MODEL_MINI
+    if tier == AiModelTier.SOL:
+        return "gpt-5.6-sol"
     raise ValueError(f"Unsupported AI model tier: {tier}")
 
 

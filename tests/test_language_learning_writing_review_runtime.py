@@ -228,12 +228,20 @@ def test_expired_request_never_starts_a_call():
     assert not provider.calls
 
 
-def test_retry_after_short_delay_is_not_shortened():
+def test_retry_after_short_delay_is_not_shortened(monkeypatch):
+    # Windows monotonic ticks may be 15.6 ms: test the requested wait, not
+    # elapsed wall time rounded to a scheduler tick.
+    requested_waits: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def record_sleep(delay: float):
+        requested_waits.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr("app.features.language_learning.difficulty.runtime.asyncio.sleep", record_sleep)
     runtime, provider, kwargs = setup_runtime([StatusError(429, {"retry-after-ms": "20"}), {}])
-    start = time.monotonic()
     assert asyncio.run(runtime.review(**kwargs)).verdict == "PASS"
-    assert time.monotonic() - start >= 0.019
-    assert runtime.metrics.backoff_ms >= 19
+    assert requested_waits == [0.02]
     assert len(provider.calls) == 2
 
 

@@ -15,6 +15,7 @@ class StoredAudio:
     path: Path
     content_type: str
     created_at: float
+    duration_seconds: float | None = None
 
 
 class TemporaryTtsAudioStore:
@@ -25,21 +26,40 @@ class TemporaryTtsAudioStore:
         self._items: dict[str, StoredAudio] = {}
         self._lock = Lock()
 
-    def put(self, audio_bytes: bytes, *, cache_key: str) -> StoredAudio:
+    def put(
+        self,
+        audio_bytes: bytes,
+        *,
+        cache_key: str,
+        duration_seconds: float | None = None,
+    ) -> StoredAudio:
         digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:32]
         reference = f"tts-{digest}"
         path = self.base_dir / f"{reference}.wav"
         with self._lock:
             self._purge_locked()
-            if not path.exists():
-                temp_path = path.with_suffix(".tmp")
-                temp_path.write_bytes(audio_bytes)
-                os.replace(temp_path, path)
+            existing = self._items.get(reference)
+            if existing is not None and existing.path.exists():
+                # Keep the first completed bytes and matching duration together.
+                return existing
+            # Orphaned files have no metadata in this store; do not return old
+            # bytes with the duration from a newly completed synthesis.
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f"{reference}-", suffix=".tmp", dir=self.base_dir
+            )
+            temporary_path = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as temporary_file:
+                    temporary_file.write(audio_bytes)
+                os.replace(temporary_path, path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
             stored = StoredAudio(
                 reference=reference,
                 path=path,
                 content_type="audio/wav",
                 created_at=time.time(),
+                duration_seconds=duration_seconds,
             )
             self._items[reference] = stored
             return stored

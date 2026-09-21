@@ -111,4 +111,5 @@ class GeminiTtsQuotaCooldownTest(IsolatedAsyncioTestCase):
                 text="次の文", voice="Kore", language="ja", speed="NORMAL"
             )
         self.assertGreater(raised.exception.retry_after_seconds, 41_000)
+        self.assertEqual(429, raised.exception.status_code)
         self.assertEqual(1, models.calls)

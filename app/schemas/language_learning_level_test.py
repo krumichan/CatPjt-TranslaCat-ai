@@ -90,7 +90,7 @@ class LevelTestReferenceAudioUpload(CamelCaseModel):
     upload_url: str = Field(..., min_length=1, max_length=12000)
     object_key: str = Field(..., min_length=1, max_length=1000)
     content_type: str = Field(default="audio/wav", min_length=1, max_length=100)
-    voice: str = Field(default="Kore", min_length=1, max_length=100)
+    voice: str = Field(default="marin", min_length=1, max_length=100)
     playback_speed: str = Field(default="NORMAL", min_length=1, max_length=30)
 
 

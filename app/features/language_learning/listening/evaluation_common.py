@@ -101,11 +101,21 @@ def finalize_task(
         purpose=request.evaluation_purpose,
         answer_revealed=effective_answer_revealed(request),
     )
+    debug_metadata = dict(task.debug_metadata)
+    if signals and len(signals[0].evidence_ids) < len(task.evidence):
+        debug_metadata["profileSignalEvidenceReferences"] = {
+            "totalTaskEvidenceCount": len(task.evidence),
+            "referencedEvidenceCount": len(signals[0].evidence_ids),
+            "unreferencedEvidenceCount": len(task.evidence) - len(signals[0].evidence_ids),
+            "selection": "FIRST_IN_EXISTING_EVIDENCE_ORDER",
+            "fullTaskEvidencePreserved": True,
+        }
     return task.model_copy(
         deep=True,
         update={
             "profile_signals": signals,
             "profile_eligible": bool(signals),
+            "debug_metadata": debug_metadata,
         },
     )
 

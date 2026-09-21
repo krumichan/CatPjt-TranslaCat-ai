@@ -353,6 +353,9 @@ class ReadingSemanticAssessment(SemanticAssessment[ReadingQuestionDifficultyTarg
     mode_fit: bool = True
     answer_leakage: bool = False
     distractors_plausible: bool = True
+    stem_presuppositions_supported: bool = True
+    distinct_reading_task: bool = True
+    reading_operation: str = ""
 
 
 def normalize_reading_semantic_assessment(
@@ -363,6 +366,9 @@ def normalize_reading_semantic_assessment(
     mode_fit: bool,
     answer_leakage: bool,
     distractors_plausible: bool,
+    stem_presuppositions_supported: bool = True,
+    distinct_reading_task: bool = True,
+    reading_operation: str = "",
 ) -> ReadingSemanticAssessment:
     rejected = (
         ambiguous
@@ -370,6 +376,8 @@ def normalize_reading_semantic_assessment(
         or not mode_fit
         or answer_leakage
         or not distractors_plausible
+        or not stem_presuppositions_supported
+        or not distinct_reading_task
     )
     return ReadingSemanticAssessment(
         status="REJECT" if rejected else "PASS",
@@ -380,12 +388,18 @@ def normalize_reading_semantic_assessment(
         mode_fit=mode_fit,
         answer_leakage=answer_leakage,
         distractors_plausible=distractors_plausible,
+        stem_presuppositions_supported=stem_presuppositions_supported,
+        distinct_reading_task=distinct_reading_task,
+        reading_operation=reading_operation,
     )
 
 
 @dataclass(frozen=True)
 class ReadingAcceptanceContext:
     expected_answer_key: str
+    skill_tag: str = ""
+    mode: str = ""
+    same_passage_task_position: int | None = None
 
 
 @dataclass(frozen=True)
@@ -401,6 +415,21 @@ class ReadingSemanticQualityPolicy:
             reason = "ambiguous single-choice item"
         elif not assessment.supported:
             reason = "answer is not sufficiently supported"
+        elif not assessment.stem_presuppositions_supported:
+            reason = "question stem presupposition is not supported by passage"
+        elif not assessment.distinct_reading_task:
+            reason = (
+                "question consumes later passage structure tasks"
+                if context.mode == "STRUCTURE" and context.same_passage_task_position == 1
+                else "question repeats a previous reading judgment"
+            )
+        elif (
+            context.skill_tag in {"INFERENCE", "CONTEXT_INFERENCE"}
+            or context.mode == "CONTEXT_INFERENCE"
+        ) and assessment.reading_operation == "DIRECT_RETRIEVAL":
+            reason = "inference question only requires direct retrieval"
+        elif context.skill_tag == "STRUCTURE" and assessment.reading_operation != "DISCOURSE_STRUCTURE":
+            reason = "structure question does not require discourse reasoning"
         elif not assessment.mode_fit:
             reason = "question does not fit requested mode/skill"
         elif assessment.answer_leakage:

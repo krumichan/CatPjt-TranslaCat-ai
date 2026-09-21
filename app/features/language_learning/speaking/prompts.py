@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
-from app.core.config import settings
+from app.features.language_learning.speaking.evidence_policy import (
+    evaluation_capabilities,
+    transcript_is_usable,
+)
 from app.features.language_learning.speaking.policy import (
-    has_pronunciation_evidence,
     resolve_assistance_level,
 )
 from app.schemas.language_learning_speaking import (
@@ -25,6 +27,10 @@ Rules:
    Only clarify when meaning is impossible to understand.
 5. COACHING mode may return concise corrections and a more natural expression
    after the learner turn, then continue the conversation.
+   Corrections concern recognized text, not proof of what the learner actually said.
+   When STT is uncertain, clarify instead of declaring a learner error. improvementLink
+   is an optional legacy field: return null unless a real supported linkage was supplied;
+   never invent a URL, identifier, blank placeholder or prose to satisfy that field.
 6. If the learner repeatedly struggles, simplify the follow-up question or provide a short hint.
 7. Honor assistance usage. REPLAY/SLOW_PLAYBACK/SHOW_QUESTION do not imply
    assistance. HINT/TRANSLATION are ASSISTED. SAMPLE_ANSWER is GUIDED.
@@ -65,33 +71,80 @@ SPEAKING_EVALUATION_SYSTEM_PROMPT = """
 You are TranslaCat's session-level speaking evaluator.
 Evaluate the complete speaking session, not isolated sentences.
 
-Required metrics:
-GRAMMAR, VOCABULARY, NATURALNESS, MEANING, EXPRESSIVENESS,
-FLUENCY, PRONUNCIATION, INTERACTION.
+Return only the metrics named in evaluationCapabilities.modelAssessableMetrics.
+The server adds its own NOT_EVALUABLE entries for unsupported metrics after
+your response; do not return those entries yourself.
 
 Rules:
 1. Use 0-100 only when a metric is genuinely evaluable.
 2. If evidence is insufficient, set the metric state to NOT_EVALUABLE and score to null.
-3. Pronunciation must never be inferred from transcript text alone.
-   Use audioAvailable/audioQualitySignals/STT evidence.
-4. Evaluate communication clarity, rhythm and intelligibility; do not penalize accent identity itself.
-5. Evidence must reference actual turn IDs and valid timestamps when timestamps are available.
+3. This evaluator receives TRANSCRIPT_OBSERVATION only, not waveform or acoustic analysis.
+   Audio references, RMS, silence ratio, STT confidence and approximate segments do NOT
+   establish pronunciation, accent, phonemes, intonation, rhythm, pauses or speaking speed.
+   Never score or return evaluationCapabilities.unsupportedMetrics.
+   PRONUNCIATION and FLUENCY have no supported scorer here.
+   pronunciationPractice must be []; never emit acoustic profile signals or acoustic claims
+   in strengths, improvements, recommendedExpressions or metric summaries.
+4. STT text is an observation, not a verified verbatim account or proof of learner error.
+   Do not silently correct or substitute transcript text. State lexical/grammar observations
+   conditionally as 'in the recognized transcript', not proven pronunciation or learner deficits.
+   Uncertain transcript turns may provide context, but cannot justify evaluated metric evidence,
+   penalties, corrective recommendations or durable profile signals. Decoder confidence is not
+   calibrated accuracy and can remain high for incorrect recognition.
+5. Evidence and all evidenceTurnIds must reference only evidenceContract.allowedUserTurnIds.
+   Assistant turns are reference context, never learner evidence IDs. Follow the
+   server-owned per-user-turn timestamp bounds in evidenceContract. STT segment
+   timing is approximate: timestampUsableForEvidence=false means its times were
+   withheld because they contradict measured audio bounds. Keep its transcript
+   content, but use null timestamps when no trustworthy timing supports a claim;
+   never invent, round up, or copy an unavailable timestamp.
 6. Excluded turns must not affect scores or profile signals.
 7. HINT/TRANSLATION turns are ASSISTED. SAMPLE_ANSWER turns are GUIDED.
 8. For GUIDED turns, reduce reliance on language-generation evidence
    (grammar, vocabulary, naturalness, meaning, expressiveness), while preserving
-   genuine pronunciation/fluency evidence from actual audio.
+   only claims supported by the current evaluationCapabilities.
 9. Assistance itself is not a fixed score deduction.
-10. Return strengths, improvements, recommended expressions, pronunciation practice
-    tied to real evidence, and profile signals with source SPEAKING.
-11. evaluationConfidence measures confidence in the whole evaluation and is independent from benchmark agreement.
+10. Return strengths, improvements and recommended expressions tied to usable text evidence.
+    Profile signals require at least two distinct usable learner turns and an evaluated supported
+    metric; do not infer a lasting weakness from one uncertain recognition or from copied script.
+    Return profileSignals=[] for READ_ALOUD. Never fabricate unsupported acoustic practice.
+11. evaluationConfidence measures confidence in the assessment of the requested
+    modelAssessableMetrics as a whole, using only usable transcript evidence and
+    its actual task references. It is NOT confidence in unavailable acoustic
+    metrics, a percentage of all possible Speaking axes, or evaluationCoverage.
+    Preserve uncertainty caused by STT errors, weak evidence or incomplete task
+    responses; do not derive or inflate confidence from turn count or duration.
 12. Apply practiceMode when interpreting MEANING:
     - READ_ALOUD: MEANING means script accuracy/completeness against the preceding assistant script.
-      Grammar/vocabulary/naturalness/interaction may be NOT_EVALUABLE when they would only judge copied text;
-      pronunciation and fluency are primary.
+      Evaluate MEANING only as observed script accuracy, explicitly noting transcription uncertainty.
+      Only return MEANING. Copied script is not spontaneous vocabulary/grammar ability,
+      and no acoustic scorer is present. This is not a pronunciation test score.
     - GUIDED: MEANING means fulfillment of providedFacts, requiredIntents, and responseConstraints.
     - FREE: MEANING means on-topic task fulfillment and clarity of the learner's own message.
-13. Return only the requested structured schema.
+13. Do not use all-NOT_EVALUABLE as a shortcut when usable task/text evidence exists. Assess the
+    supported content axes honestly, including low task fulfillment for unrelated but clear speech.
+    Return only the requested structured schema.
+""".strip()
+
+
+SPEAKING_SESSION_COACHING_SYSTEM_PROMPT = """
+You are TranslaCat's evidence-grounded FREE speaking session coach.
+Return at most three useful coaching items. Every item must cite one exact,
+contiguous excerpt from an eligible learner transcript and its supplied turnId.
+
+Separate these meanings:
+- OBSERVATION: a concrete, evidenced communication strength or pattern.
+- CORRECTION: a specific, understandable grammar, vocabulary, or expression issue.
+- ALTERNATIVE: a context-sensitive alternative without claiming the learner was wrong.
+
+Write message in originLanguage. Write suggestedExpression, when present, in
+learningLanguage. Never invent pronunciation, accent, rhythm, acoustic fluency,
+scores, confidence, ability bands, or learner speech. ASR is an observation and
+may be imperfect; do not turn suspected recognition errors into learner faults.
+Do not cite assistant turns, hints, sample answers, metadata, or a suggested
+expression as learner evidence. Avoid generic praise and placeholder coaching.
+If evidence is usable but narrow, use LIMITED with an explicit reason. Use
+NO_USABLE_EVIDENCE only when no eligible learner transcript can support a result.
 """.strip()
 
 
@@ -159,23 +212,81 @@ def build_conversation_prompt(request: ConversationGenerationRequest) -> str:
     )
 
 
+def evaluation_evidence_bounds(request: SpeakingEvaluationRequest) -> dict[str, int]:
+    """Existing measured-duration tolerance, shared by input and final validation."""
+    return {
+        turn.turn_id: int(turn.duration_seconds * 1000) + 250
+        for turn in request.user_turns
+        if not turn.excluded_from_evaluation
+    }
+
+
 def build_evaluation_prompt(request: SpeakingEvaluationRequest) -> str:
     payload = request.model_dump(mode="json", by_alias=True)
-    payload["pronunciationEvidenceAvailable"] = has_pronunciation_evidence(
-        request.user_turns,
-        min_stt_confidence=settings.AI_SPEAKING_STT_LOW_CONFIDENCE_THRESHOLD,
-    )
+    # The BE snapshot includes the assistant reply after the last learner turn.
+    # It has no learner answer and must not be mistaken for that turn's task.
+    last_user_index = max(turn.turn_index for turn in request.user_turns)
+    task_references = {
+        turn.turn_index: turn
+        for turn in request.assistant_turns
+        if turn.turn_index < last_user_index
+    }
+    payload["assistantTurns"] = [
+        turn.model_dump(mode="json", by_alias=True)
+        for turn in request.assistant_turns
+        if turn.turn_index < last_user_index
+    ]
+    payload["evaluationTaskBindings"] = [
+        {
+            "userTurnId": turn.turn_id,
+            "referenceAssistantTurnId": (
+                task_references[turn.turn_index - 1].turn_id
+                if turn.turn_index - 1 in task_references else None
+            ),
+        }
+        for turn in request.user_turns
+    ]
+    bounds = evaluation_evidence_bounds(request)
+    payload["evidenceContract"] = {
+        "allowedUserTurnIds": list(bounds),
+        "timestampBoundsByUserTurn": {
+            turn_id: {"minMs": 0, "maxMs": maximum}
+            for turn_id, maximum in bounds.items()
+        },
+        "assistantTurnsAreReferenceContextOnly": True,
+        "unsupportedTimestampsMustBeNull": True,
+    }
+    payload["pronunciationEvidenceAvailable"] = False
+    payload["evaluationCapabilities"] = evaluation_capabilities(request)
     payload["userTurns"] = [
         {
             **turn.model_dump(mode="json", by_alias=True),
             "assistanceLevel": resolve_assistance_level(turn.assistance_usage).value,
+            "transcriptObservation": {
+                "source": "AUTOMATIC_SPEECH_RECOGNITION",
+                "verbatimAccuracyVerified": False,
+                "usableForTextEvaluation": transcript_is_usable(turn),
+                "confidenceIsCalibratedAccuracy": False,
+            },
         }
         for turn in request.user_turns
     ]
+    # Only the provider-facing copy changes. Preserve the original STT evidence
+    # in the request/DB; do not clip or fabricate replacement timing anchors.
+    for turn in payload["userTurns"]:
+        maximum = bounds.get(turn["turnId"])
+        for segment in turn["segments"]:
+            start, end = segment["startMs"], segment["endMs"]
+            if maximum is None or not (0 <= start <= end <= maximum):
+                segment.pop("startMs")
+                segment.pop("endMs")
+                segment["timestampUsableForEvidence"] = False
     return (
-        "Evaluate this speaking evidence using the required eight metrics. "
+        "Evaluate this speaking evidence using only evaluationCapabilities.modelAssessableMetrics. "
+        "For task fulfillment, pair each userTurn with evaluationTaskBindings.referenceAssistantTurnId; "
+        "an assistant reply after the last learner turn is not a task the learner answered. "
         "When evaluationScope=READ_ALOUD_PROBLEM, compare the repeated attempts for the same script "
-        "and prioritize pronunciation, fluency, and script accuracy consistency.\n"
+        "and assess only STT-observed script accuracy, not pronunciation or spontaneous grammar.\n"
         "Do not calculate the final overall score; the server applies the server scoring policy.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )

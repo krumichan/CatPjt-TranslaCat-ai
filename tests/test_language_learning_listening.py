@@ -52,6 +52,7 @@ from app.features.language_learning.speaking.stt_service import (
 )
 from app.schemas.language_learning_listening import (
     AssistanceUsage,
+    GeneratedListeningItemPayload,
     DictationEvaluationRequest,
     ComprehensionEvaluationRequest,
     InterpretationEvaluationRequest,
@@ -120,7 +121,7 @@ class FakeSpeechProvider:
             if error is not None:
                 raise error
         return SpeechSynthesisResult(
-            audio_bytes=b"reference-audio",
+            audio_bytes=clipped_noise_wav(seconds=9.6),
             content_type="audio/wav",
             provider="fake-tts",
             model="fake-tts-model",
@@ -576,18 +577,18 @@ class ListeningGenerationTest(unittest.TestCase):
             asyncio.run(service.generate(request))
         self.assertEqual(ListeningErrorCode.GENERATION_FAILED, context.exception.code)
 
-    def test_difficulty_duration_is_enforced(self):
+    def test_estimated_duration_is_diagnostic_not_waveform_authority(self):
         payload = generation_payload()
         payload["items"][0]["estimatedAudioSeconds"] = 30
         service = ListeningGenerationService(
             FakeStructuredProvider([payload]),
             automatic_retries=0,
         )
-        with self.assertRaises(ListeningStageException) as context:
-            asyncio.run(service.generate(generation_request()))
-        self.assertEqual(
-            ListeningErrorCode.GENERATION_FAILED, context.exception.code
-        )
+        response = asyncio.run(service.generate(generation_request()))
+        self.assertEqual(30, response.items[0].estimated_audio_seconds)
+        assert response.items[0].duration_demand is not None
+        self.assertEqual(8, response.items[0].duration_demand.min_seconds)
+        self.assertEqual(20, response.items[0].duration_demand.max_seconds)
 
     def test_provider_429_is_retried_within_two_retry_limit(self):
         provider = FakeStructuredProvider(
@@ -598,6 +599,101 @@ class ListeningGenerationTest(unittest.TestCase):
         response = asyncio.run(service.generate(generation_request()))
         self.assertEqual(2, len(response.items))
         self.assertEqual(2, len(provider.calls))
+
+    def test_generation_transient_failures_honor_configured_retry_limit(self):
+        for retry_limit in (0, 1, 2):
+            for error_type in (Provider429Error, Provider503Error, TimeoutError):
+                with self.subTest(retry_limit=retry_limit, error_type=error_type):
+                    provider = FakeStructuredProvider(
+                        errors=[error_type("unavailable") for _ in range(3)]
+                    )
+                    service = ListeningGenerationService(
+                        provider, automatic_retries=retry_limit
+                    )
+                    with self.assertRaises(ListeningStageException):
+                        asyncio.run(service.generate(generation_request()))
+                    self.assertEqual(retry_limit + 1, len(provider.calls))
+
+    def test_duration_correction_rebuilds_one_item_with_server_metadata(self):
+        data = generation_request().model_dump(mode="json", by_alias=True)
+        data["setContext"]["itemCount"] = 1
+        data["durationCorrection"] = {
+            "previousSourceText": "短い文です。", "previousMeasuredSeconds": 3.5,
+            "qualityCorrectionCount": 1,
+        }
+        provider = FakeStructuredProvider([generation_payload()])
+        response = asyncio.run(ListeningGenerationService(provider).generate(
+            ListeningSetGenerationRequest.model_validate(data)))
+        self.assertEqual(1, len(response.items))
+        generated = response.items[0]
+        self.assertEqual(1, generated.quality_correction_count)
+        assert generated.duration_demand is not None
+        self.assertEqual((8, 20), (generated.duration_demand.min_seconds, generated.duration_demand.max_seconds))
+        self.assertEqual(generation_payload()["items"][0]["referenceMeanings"], generated.reference_meanings)
+        self.assertEqual(generation_payload()["items"][0]["keyMeaningUnits"], generated.key_meaning_units)
+        self.assertIn('"previousMeasuredSeconds":3.5', provider.calls[0][1])
+        self.assertIn('"generationDurationGuidance"', provider.calls[0][1])
+        self.assertEqual(1, len(provider.calls))
+
+    def test_duration_correction_rejects_same_length_paraphrase_before_tts(self):
+        data = generation_request().model_dump(mode="json", by_alias=True)
+        data["setContext"]["itemCount"] = 1
+        data["setContext"]["difficulty"] = "EASY"
+        data["constraints"]["audioSecondsMin"] = 5
+        data["constraints"]["audioSecondsMax"] = 12
+        data["durationCorrection"] = {
+            "previousSourceText": "環境を守るために、使わない電気は消しています。",
+            "previousMeasuredSeconds": 4.45,
+        }
+        request = ListeningSetGenerationRequest.model_validate(data)
+        original = {**generation_payload()["items"][0], "languageComplexityBand": 2}
+        short = GeneratedListeningItemPayload.model_validate({
+            **original, "sourceText": "環境のために、部屋の電気をこまめに消しています。",
+        })
+        expanded = GeneratedListeningItemPayload.model_validate({
+            **original, "sourceText": "環境を守るために、使わない部屋の電気は消し、昼間は窓から入る自然光を使っています。",
+        })
+        service = ListeningGenerationService(FakeStructuredProvider())
+        self.assertIsNone(service._finalize_candidate(request, short))
+        self.assertIsNotNone(service._finalize_candidate(request, expanded))
+
+    def test_duration_correction_rejects_multiple_items_before_provider(self):
+        data = generation_request().model_dump(mode="json", by_alias=True)
+        data["durationCorrection"] = {"previousSourceText": "短い文です。", "previousMeasuredSeconds": 3.5}
+        provider = FakeStructuredProvider()
+        with self.assertRaises(ListeningStageException):
+            asyncio.run(ListeningGenerationService(provider).generate(ListeningSetGenerationRequest.model_validate(data)))
+        self.assertEqual([], provider.calls)
+
+    def test_generation_cancellation_does_not_retry_or_cache_failed_result(self):
+        provider = FakeStructuredProvider(
+            results=[generation_payload()], errors=[asyncio.CancelledError()]
+        )
+        service = ListeningGenerationService(provider, automatic_retries=2)
+        request = generation_request()
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(service.generate(request))
+        self.assertEqual(1, len(provider.calls))
+        response = asyncio.run(service.generate(request))
+        self.assertEqual(2, len(response.items))
+        self.assertEqual(2, len(provider.calls))
+
+    def test_generation_keeps_accepted_prefix_during_bounded_provider_retry(self):
+        payload = generation_payload()
+        provider = FakeStructuredProvider(
+            results=[{"items": payload["items"][:1]}, {"items": payload["items"][1:]}],
+            errors=[None, Provider503Error("unavailable")],
+        )
+        service = ListeningGenerationService(provider, automatic_retries=1)
+        response = asyncio.run(service.generate(generation_request()))
+
+        self.assertEqual(3, len(provider.calls))
+        self.assertEqual([1, 2], [item.item_index for item in response.items])
+        self.assertEqual(
+            [item["sourceText"] for item in payload["items"]],
+            [item.source_text for item in response.items],
+        )
+        self.assertIn(payload["items"][0]["sourceText"], provider.calls[2][1])
 
 
 class ListeningTtsTest(unittest.TestCase):

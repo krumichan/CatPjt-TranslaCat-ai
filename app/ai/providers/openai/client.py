@@ -210,7 +210,11 @@ class OpenAIService:
         )
 
         try:
-            response = await self.client.responses.create(
+            # Reading Sol/high may legitimately take longer than the generic
+            # Luna deadline. The service's 80s boundary remains authoritative.
+            client = (self.client.with_options(timeout=max(85.0, settings.OPENAI_REQUEST_TIMEOUT_SECONDS))
+                      if model == "gpt-5.6-sol" else self.client)
+            response = await client.responses.create(
                 model=model,
                 instructions=rule,
                 input=user_input,

@@ -12,6 +12,9 @@ from app.features.language_learning.speaking.benchmark import SpeakingEvaluation
 from app.features.language_learning.speaking.conversation_service import SpeakingConversationService
 from app.features.language_learning.speaking.errors import SpeakingStageException
 from app.features.language_learning.speaking.evaluation_service import SpeakingEvaluationService
+from app.features.language_learning.speaking.idempotency import InMemoryIdempotencyStore
+from app.features.language_learning.speaking.turn_service import SpeakingTurnService
+from app.features.language_learning.speaking.audio_processor import NormalizedAudio
 from app.features.language_learning.speaking.policy import (
     SPEAKING_CONVERSATION_PROMPT_VERSION,
     calculate_evaluation_eligibility,
@@ -44,6 +47,20 @@ from app.schemas.language_learning_speaking import (
     SpeakingMetricPayload,
     SpeakingMetricType,
     TtsRequest,
+    AssistantAudio,
+    ConversationGenerationResponse,
+    ConversationResult,
+    SessionStartRequest,
+    SpeakingErrorCode,
+    SpeakingStage,
+    SpeakingUsage,
+    StageUsage,
+    SttAnalysisMetadata,
+    SttResponse,
+    SttSegment,
+    TranscriptResult,
+    TtsResponse,
+    AudioQualitySignals,
 )
 
 
@@ -84,7 +101,7 @@ class FakeSpeechProvider:
             if error is not None:
                 raise error
         return SpeechSynthesisResult(
-            audio_bytes=b"RIFFfake-wav",
+            audio_bytes=make_wav(1.5),
             content_type="audio/wav",
             provider="fake-tts",
             model="fake-tts-model",
@@ -277,7 +294,7 @@ class SpeakingKeywordPromptPolicyTest(unittest.TestCase):
         )
         self.assertEqual(
             SPEAKING_CONVERSATION_PROMPT_VERSION,
-            "speaking-conversation",
+            "speaking-conversation-v2",
         )
 
     def test_conversation_payload_keeps_both_keyword_types_flat(self):
@@ -337,7 +354,7 @@ class SpeakingKeywordPromptPolicyTest(unittest.TestCase):
         self.assertIn('"selectedKeywords":[]', prompt)
 
 
-def evaluation_payload(confidence=0.9, pronunciation_state="EVALUATED"):
+def evaluation_payload(confidence=0.9, pronunciation_state="NOT_EVALUABLE"):
     metric_names = [
         "GRAMMAR",
         "VOCABULARY",
@@ -350,8 +367,13 @@ def evaluation_payload(confidence=0.9, pronunciation_state="EVALUATED"):
     ]
     metrics = []
     for name in metric_names:
-        state = pronunciation_state if name == "PRONUNCIATION" else "EVALUATED"
-        metrics.append(metric_payload(name, state=state))
+        state = pronunciation_state if name == "PRONUNCIATION" else (
+            "NOT_EVALUABLE" if name == "FLUENCY" else "EVALUATED"
+        )
+        metric = metric_payload(name, state=state)
+        if state == "NOT_EVALUABLE":
+            metric["evidence"] = []
+        metrics.append(metric)
     return {
         "evaluationConfidence": confidence,
         "metrics": metrics,
@@ -361,12 +383,12 @@ def evaluation_payload(confidence=0.9, pronunciation_state="EVALUATED"):
         "pronunciationPractice": [],
         "profileSignals": [
             {
-                "metricType": "FLUENCY",
+                "metricType": "MEANING",
                 "source": "SPEAKING",
                 "direction": "IMPROVING",
                 "confidence": 0.9,
-                "evidenceTurnIds": ["turn-1"],
-                "patternKey": "fluency.pause",
+                "evidenceTurnIds": ["turn-1", "turn-2"],
+                "patternKey": "meaning.task-fulfillment",
                 "recommendedFocus": "짧은 연결 표현 연습",
             }
         ],
@@ -552,7 +574,7 @@ class SpeakingSttServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(provider.calls, 3)
 
-    async def test_faster_whisper_provider_retries_without_vad_when_vad_removes_all_text(self):
+    async def test_faster_whisper_provider_retries_without_vad_only_with_speech_evidence(self):
         class FakeRuntime:
             ready = True
 
@@ -593,7 +615,15 @@ class SpeakingSttServiceTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         runtime = FakeRuntime()
-        provider = FasterWhisperSpeakingSttProvider(runtime=runtime)
+        class ConfirmedSpeechGuard:
+            ready = True
+            enabled = True
+            model_version = "explicit-test-double"
+
+            async def has_speech(self, pcm_bytes):
+                return True
+
+        provider = FasterWhisperSpeakingSttProvider(runtime=runtime, speech_guard=ConfirmedSpeechGuard())
         result = await provider.transcribe(make_wav(2.7), language="ja")
 
         self.assertEqual("私は毎日水を飲みます。", result.text)
@@ -766,7 +796,7 @@ class SpeakingEvaluationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status.value, "EVALUATED")
         self.assertEqual(response.overall_score, 80)
         self.assertEqual(len(response.metrics), 8)
-        self.assertEqual(response.scoring_policy_version, "speaking-scoring-policy")
+        self.assertEqual(response.scoring_policy_version, "speaking-scoring-policy-v2")
         self.assertEqual(len(response.profile_signals), 1)
 
     async def test_precheck_insufficient_evidence_skips_provider(self):
@@ -788,14 +818,14 @@ class SpeakingEvaluationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.profile_signals, [])
 
     async def test_pronunciation_requires_audio_evidence(self):
-        provider = FakeStructuredProvider(results=[evaluation_payload()])
+        provider = FakeStructuredProvider(results=[evaluation_payload(pronunciation_state="EVALUATED")])
         service = SpeakingEvaluationService(provider, timeout_seconds=1, automatic_retries=0)
         turns = [evaluation_turn(i, audio=False) for i in range(1, 6)]
         with self.assertRaises(SpeakingStageException):
             await service.evaluate(evaluation_request(turns))
 
     async def test_pronunciation_requires_usable_audio_quality(self):
-        provider = FakeStructuredProvider(results=[evaluation_payload()])
+        provider = FakeStructuredProvider(results=[evaluation_payload(pronunciation_state="EVALUATED")])
         service = SpeakingEvaluationService(
             provider,
             timeout_seconds=1,
@@ -875,25 +905,6 @@ class SpeakingBenchmarkTest(unittest.TestCase):
         self.assertLess(result.agreement_rate, 0.70)
 
 
-from app.features.language_learning.speaking.idempotency import InMemoryIdempotencyStore
-from app.features.language_learning.speaking.turn_service import SpeakingTurnService
-from app.schemas.language_learning_speaking import (
-    AssistantAudio,
-    ConversationGenerationResponse,
-    ConversationResult,
-    SessionStartRequest,
-    SpeakingErrorCode,
-    SpeakingStage,
-    SpeakingUsage,
-    StageUsage,
-    SttAnalysisMetadata,
-    SttResponse,
-    SttSegment,
-    TranscriptResult,
-    TtsResponse,
-)
-from app.features.language_learning.speaking.audio_processor import NormalizedAudio
-from app.schemas.language_learning_speaking import AudioQualitySignals
 
 
 class FakeAudioProcessor:
@@ -1421,7 +1432,7 @@ class SpeakingCoverageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.assistant_text, second.assistant_text)
         self.assertEqual(len(provider.calls), 1)
 
-    async def test_coaching_correction_requires_improvement_link(self):
+    async def test_coaching_correction_does_not_require_unsupported_improvement_link(self):
         invalid = conversation_payload()
         invalid["coachingCorrections"] = [
             {
@@ -1437,9 +1448,9 @@ class SpeakingCoverageTest(unittest.IsolatedAsyncioTestCase):
             timeout_seconds=1,
             automatic_retries=0,
         )
-        with self.assertRaises(SpeakingStageException) as context:
-            await service.generate(conversation_request(correctionMode="COACHING"))
-        self.assertEqual(context.exception.code.value, "INVALID_RESPONSE_SCHEMA")
+        result = await service.generate(conversation_request(correctionMode="COACHING"))
+        self.assertIsNone(result.conversation.coaching_corrections[0].improvement_link)
+        self.assertEqual(len(provider.calls), 1)
 
     async def test_conversation_respects_snapshot_retry_limit(self):
         provider = FakeStructuredProvider(
@@ -1590,7 +1601,7 @@ class SpeakingCoverageTest(unittest.IsolatedAsyncioTestCase):
 
         prompt = provider.calls[0][1]
         self.assertIn('"assistanceLevel":"GUIDED"', prompt)
-        self.assertIn('"pronunciationEvidenceAvailable":true', prompt)
+        self.assertIn('"pronunciationEvidenceAvailable":false', prompt)
 
     async def test_evaluation_rejects_evidence_timestamp_outside_turn(self):
         payload = evaluation_payload()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from app.features.language_learning.listening.duration import generation_duration_guidance
+
 from app.schemas.language_learning_listening import (
     InterpretationEvaluationRequest,
     SummaryEvaluationRequest,
@@ -14,9 +16,21 @@ You generate TranslaCat current listening items in the requested learning langua
 
 Rules:
 1. All items share the requested topic, but every sentence and situation must differ.
-2. Follow the requested difficulty and duration range: EASY 5-12 seconds and mainly one
-   sentence; MY_LEVEL 8-20 seconds and one or two sentences; CHALLENGE 15-30 seconds
-   and two or three sentences. Adjust text length before returning an item.
+2. Follow generationDurationGuidance.durationDemand and its interiorTargetSeconds at
+   natural NORMAL speech speed. EASY 5-12 seconds, MY_LEVEL 8-20 seconds, CHALLENGE
+   15-30 seconds are intersected with request constraints by the server. Use enough
+   meaningful spoken content; do not fill time with silence, repeated sentences,
+   lists of difficult words/names/numbers, or slower speech. Add natural relevant
+   context and independently meaningful details without changing the assigned band.
+   A lane-specific empirical character target is a planning reference, not a universal
+   speaking-rate formula. estimatedAudioSeconds is diagnostic, never proof of duration.
+   When durationCorrection is present, revise the previous source using measured NORMAL
+   audio duration and regenerate ALL linked references, meaning units, question/options,
+   correct key, summary anchors, and diversity metadata consistently. Do not simply edit
+   estimatedAudioSeconds or repeat the previous source. If the measured audio was too short,
+   add natural, independently meaningful detail instead of a same-length paraphrase. Follow
+   generationDurationGuidance.durationCorrectionPlanning.minimumSourceCharacters when present;
+   it is a pre-TTS planning floor, not a substitute for measured audio acceptance.
 3. Use natural spoken language with level-appropriate grammar and vocabulary. Avoid
    excessive slang, proper nouns, and number lists. CHALLENGE increases LANGUAGE complexity
    (grammar, clause structure, register, nuance, discourse connection), not specialist knowledge,
@@ -124,6 +138,7 @@ Rules:
 
 def build_generation_prompt(request: ListeningSetGenerationRequest) -> str:
     payload = request.model_dump(mode="json", by_alias=True)
+    payload["generationDurationGuidance"] = generation_duration_guidance(request)
     item_count = request.set_context.item_count
     origin_language = request.user_context.origin_language
     learning_language = request.user_context.learning_language
@@ -136,7 +151,8 @@ def build_generation_prompt(request: ListeningSetGenerationRequest) -> str:
         f"referenceMeanings and keyMeaningUnits MUST be written only in originLanguage "
         f"({origin_language}); never default them to English unless originLanguage is English. "
         f"The requested learningMode is {learning_mode}; apply that mode contract exactly. "
-        "estimatedAudioSeconds must stay inside the effective duration range.\n\n"
+        "Plan for the interior duration target; the final waveform, not your estimate, "
+        "must satisfy the effective duration range.\n\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
 

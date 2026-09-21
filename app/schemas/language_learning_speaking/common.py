@@ -68,6 +68,23 @@ class SpeakingEvaluationStatus(str, Enum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
 
+class SpeakingResultKind(str, Enum):
+    SCORED_EVALUATION = "SCORED_EVALUATION"
+    SESSION_COACHING = "SESSION_COACHING"
+
+
+class SpeakingCoachingContentStatus(str, Enum):
+    GROUNDED = "GROUNDED"
+    LIMITED = "LIMITED"
+    NO_USABLE_EVIDENCE = "NO_USABLE_EVIDENCE"
+
+
+class SpeakingCoachingObservationKind(str, Enum):
+    OBSERVATION = "OBSERVATION"
+    CORRECTION = "CORRECTION"
+    ALTERNATIVE = "ALTERNATIVE"
+
+
 class SpeakingStage(str, Enum):
     AUDIO_VALIDATION = "AUDIO_VALIDATION"
     STT = "STT"
@@ -123,6 +140,9 @@ class SpeakingUsage(CamelCaseModel):
     conversation: StageUsage | None = None
     tts: StageUsage | None = None
     evaluation: StageUsage | None = None
+    # Preserve the legacy scored response wire shape; coaching usage is additive
+    # only on SESSION_COACHING responses.
+    coaching: StageUsage | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class SpeakingError(CamelCaseModel):

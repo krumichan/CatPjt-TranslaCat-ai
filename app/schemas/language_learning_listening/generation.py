@@ -22,6 +22,13 @@ from app.schemas.language_learning_listening.common import (
 )
 
 
+class ListeningVoiceSnapshot(CamelCaseModel):
+    locale: str = Field(..., min_length=2, max_length=30)
+    voice_key: str = Field(..., min_length=1, max_length=100)
+    version: str = Field(default="current", min_length=1, max_length=100)
+    accent: str = Field(default="STANDARD", pattern="^STANDARD$")
+
+
 class ListeningTopic(CamelCaseModel):
     id: int | str
     title: str = Field(..., min_length=1, max_length=200)
@@ -62,6 +69,27 @@ class ListeningGenerationConstraints(CamelCaseModel):
         return self
 
 
+class ListeningDurationDemand(CamelCaseModel):
+    """Server-owned NORMAL audio range; absence means legacy/unvalidated."""
+
+    min_seconds: float = Field(..., ge=1, le=30)
+    max_seconds: float = Field(..., ge=1, le=30)
+    policy_version: str = Field(default="listening-audio-duration-v1", min_length=1, max_length=100)
+    playback_speed: Literal["NORMAL"] = "NORMAL"
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ListeningDurationDemand":
+        if self.min_seconds > self.max_seconds:
+            raise ValueError("minSeconds must not exceed maxSeconds")
+        return self
+
+
+class ListeningDurationCorrection(CamelCaseModel):
+    previous_source_text: str = Field(..., min_length=1, max_length=4000)
+    previous_measured_seconds: float = Field(..., ge=0)
+    quality_correction_count: Literal[1] = 1
+
+
 class ListeningSetGenerationRequest(CamelCaseModel):
     request_id: str = Field(..., min_length=1, max_length=100)
     idempotency_key: str = Field(..., min_length=1, max_length=200)
@@ -78,6 +106,8 @@ class ListeningSetGenerationRequest(CamelCaseModel):
     language_complexity: LanguageComplexityContext | None = None
     diversity_context: DiversityContext = Field(default_factory=DiversityContext)
     content_diversity_policy_version: str | None = Field(default=None, max_length=100)
+    duration_correction: ListeningDurationCorrection | None = None
+    reference_voice: ListeningVoiceSnapshot | None = None
 
 
 ComprehensionFocus = Literal[
@@ -133,6 +163,8 @@ class ListeningItem(CamelCaseModel):
     correct_option_key: str | None = None
     comprehension_focus: ComprehensionFocus | None = None
     summary_key_points: list[str] = Field(default_factory=list)
+    duration_demand: ListeningDurationDemand | None = None
+    quality_correction_count: int = Field(default=0, ge=0, le=1)
 
 
 class ListeningSetGenerationResponse(CamelCaseModel):
@@ -145,13 +177,6 @@ class ListeningSetGenerationResponse(CamelCaseModel):
     content_diversity_policy_version: str | None = None
     language_complexity_policy_version: str | None = None
     diversity_summary: DiversitySummary | None = None
-
-
-class ListeningVoiceSnapshot(CamelCaseModel):
-    locale: str = Field(..., min_length=2, max_length=30)
-    voice_key: str = Field(..., min_length=1, max_length=100)
-    version: str = Field(default="current", min_length=1, max_length=100)
-    accent: str = Field(default="STANDARD", pattern="^STANDARD$")
 
 
 class ListeningTtsRequest(CamelCaseModel):
@@ -170,6 +195,7 @@ class ListeningTtsRequest(CamelCaseModel):
     )
     automatic_retry_limit: int = Field(default=2, ge=0, le=2)
     manual_retry_attempt: int = Field(default=0, ge=0, le=1)
+    duration_demand: ListeningDurationDemand | None = None
 
 
 class ListeningAudio(CamelCaseModel):
@@ -183,6 +209,8 @@ class ListeningAudio(CamelCaseModel):
     checksum: str
     cache_key: str
     tts_version: str
+    duration_validated: bool = False
+    duration_policy_version: str | None = Field(default=None, max_length=100)
 
 
 class ListeningTtsResponse(CamelCaseModel):

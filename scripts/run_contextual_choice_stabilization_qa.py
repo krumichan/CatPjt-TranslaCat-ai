@@ -15,12 +15,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
-from typing import Any, Callable, Sequence, cast
+from typing import Any, Awaitable, Callable, Sequence, cast
+
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -79,6 +83,10 @@ class QaCallTimeout(TimeoutError):
     pass
 
 
+class QaOverallTimeout(TimeoutError):
+    pass
+
+
 @dataclass(frozen=True)
 class QaCaps:
     provider_calls: int
@@ -93,15 +101,30 @@ class RecordingProvider:
     upstream: Any
     caps: QaCaps
     diagnostic_capture: bool = False
+    # A long-lived QA HTTP server must propagate request cancellation without
+    # mistaking production wait_for cancellation for an entire campaign abort.
+    # Standalone diagnostics retain their stronger whole-run stop by default.
+    stop_on_caller_cancel: bool = field(default=True, kw_only=True)
     started_at: float = field(default_factory=time.perf_counter)
     calls: list[dict[str, Any]] = field(default_factory=list)
     budget_exhausted_reason: str | None = None
+    checkpoint: Callable[[], None] | None = None
+
+    def _checkpoint(self) -> None:
+        if self.checkpoint is not None:
+            self.checkpoint()
 
     def _check_before_call(self) -> None:
         if self.budget_exhausted_reason is not None:
             raise QaBudgetExceeded(self.budget_exhausted_reason)
         if len(self.calls) >= self.caps.provider_calls:
             self.budget_exhausted_reason = "provider call cap reached"
+            raise QaBudgetExceeded(self.budget_exhausted_reason)
+        if (
+            sum(item["inputTokens"] for item in self.calls) >= self.caps.input_tokens
+            or sum(item["outputTokens"] for item in self.calls) >= self.caps.output_tokens
+        ):
+            self.budget_exhausted_reason = "token cap reached; no further starts"
             raise QaBudgetExceeded(self.budget_exhausted_reason)
         if time.perf_counter() - self.started_at >= self.caps.seconds:
             self.budget_exhausted_reason = "wall-clock cap reached"
@@ -126,6 +149,7 @@ class RecordingProvider:
         # Append before entering the provider so exceptions and cancellation remain
         # visible and count against the application-level call budget.
         self.calls.append(record)
+        self._checkpoint()
         return record
 
     def _finish_timing(self, record: dict[str, Any], started: float) -> None:
@@ -151,35 +175,23 @@ class RecordingProvider:
         data: str,
         schema: dict | None = None,
     ) -> Any:
+        return (await self.call_with_metadata(type_name, data, schema)).data
+
+    async def call_with_metadata(
+        self,
+        type_name: str,
+        data: str,
+        schema: dict | None = None,
+    ) -> Any:
         record = self._start_call(type_name, data)
-        started = time.perf_counter()
-        try:
-            result = await asyncio.wait_for(
-                self.upstream.call_with_metadata(
+        result = await self._invoke(
+            record,
+            lambda: self.upstream.call_with_metadata(
                     type_name=type_name,
                     data=data,
                     schema=schema,
-                ),
-                timeout=self.caps.call_seconds,
-            )
-        except TimeoutError as exc:
-            record["status"] = "FAILED"
-            record["failure"] = {
-                "type": "QA_CALL_TIMEOUT",
-                "timeoutSeconds": self.caps.call_seconds,
-            }
-            self._finish_timing(record, started)
-            self.budget_exhausted_reason = (
-                f"provider call timed out after {self.caps.call_seconds:g} seconds"
-            )
-            raise QaCallTimeout(self.budget_exhausted_reason) from exc
-        except BaseException as exc:
-            record["status"] = (
-                "CANCELLED" if isinstance(exc, asyncio.CancelledError) else "FAILED"
-            )
-            record["failure"] = {"type": type(exc).__name__}
-            self._finish_timing(record, started)
-            raise
+            ),
+        )
         record.update(
             {
                 "status": "SUCCEEDED",
@@ -189,45 +201,96 @@ class RecordingProvider:
                 "outputTokens": int(getattr(result, "output_tokens", 0) or 0),
             }
         )
-        self._finish_timing(record, started)
         if self.diagnostic_capture:
             record["diagnosticCapture"]["response"] = _json_copy(result.data)
-        self._check_after_call(record)
-        return result.data
+        try:
+            self._check_after_call(record)
+        finally:
+            self._checkpoint()
+        return result
+
+    async def _invoke(
+        self, record: dict[str, Any], operation: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        started = time.perf_counter()
+        remaining = max(0.0, self.caps.seconds - (started - self.started_at))
+        if remaining <= 0:
+            # Checkpoint I/O itself may use the remaining wall budget. Do not
+            # enter the SDK even for the synchronous prefix of its coroutine.
+            record["status"] = "FAILED"
+            record["failure"] = {
+                "type": "QA_OVERALL_TIMEOUT", "source": "BEFORE_PROVIDER_ENTRY"
+            }
+            self.budget_exhausted_reason = "wall-clock cap reached"
+            self._finish_timing(record, started)
+            self._checkpoint()
+            raise QaOverallTimeout(self.budget_exhausted_reason)
+        overall_limited = remaining <= self.caps.call_seconds
+        limit = min(remaining, self.caps.call_seconds)
+        deadline = asyncio.timeout(limit)
+        task = asyncio.current_task()
+        initial_cancellations = task.cancelling() if task is not None else 0
+        record["effectiveTimeoutSeconds"] = limit
+        record["startedAfterMs"] = round((started - self.started_at) * 1000, 3)
+        try:
+            async with deadline:
+                result = await operation()
+            # A provider may catch cancellation and return a late result. It must
+            # not reopen the budget or turn a cancelled diagnostic into success.
+            if deadline.expired():
+                raise TimeoutError("QA deadline expired inside provider")
+            if task is not None and task.cancelling() > initial_cancellations:
+                raise asyncio.CancelledError
+            return result
+        except TimeoutError as exc:
+            record["status"] = "FAILED"
+            if not deadline.expired():
+                # A provider's own timeout is not this wrapper's deadline.
+                record["failure"] = {
+                    "type": type(exc).__name__, "source": "PROVIDER"
+                }
+                raise
+            code = "QA_OVERALL_TIMEOUT" if overall_limited else "QA_CALL_TIMEOUT"
+            record["failure"] = {"type": code, "timeoutSeconds": limit}
+            self.budget_exhausted_reason = (
+                "wall-clock cap reached" if overall_limited else
+                f"provider call timed out after {self.caps.call_seconds:g} seconds"
+            )
+            error_type = QaOverallTimeout if overall_limited else QaCallTimeout
+            raise error_type(self.budget_exhausted_reason) from exc
+        except BaseException as exc:
+            cancelled = isinstance(exc, asyncio.CancelledError)
+            record["status"] = "CANCELLED" if cancelled else "FAILED"
+            failure: dict[str, Any] = {"type": type(exc).__name__}
+            if cancelled:
+                task = asyncio.current_task()
+                failure["source"] = "EXTERNAL_OR_UPSTREAM_UNDETERMINED"
+                failure["taskCancellationCount"] = (
+                    task.cancelling() if task is not None else None
+                )
+                if self.stop_on_caller_cancel:
+                    self.budget_exhausted_reason = "execution cancelled; no further starts"
+            record["failure"] = failure
+            raise
+        finally:
+            self._finish_timing(record, started)
+            if record["status"] != "STARTED":
+                self._checkpoint()
 
     async def call_with_image(self, *args: Any, **kwargs: Any) -> Any:
         type_name = str(kwargs.get("type_name", args[0] if args else "IMAGE_CALL"))
         prompt = str(kwargs.get("prompt", args[1] if len(args) > 1 else ""))
         record = self._start_call(type_name, prompt)
-        started = time.perf_counter()
-        try:
-            result = await asyncio.wait_for(
-                self.upstream.call_with_image(*args, **kwargs),
-                timeout=self.caps.call_seconds,
-            )
-        except TimeoutError as exc:
-            record["status"] = "FAILED"
-            record["failure"] = {
-                "type": "QA_CALL_TIMEOUT",
-                "timeoutSeconds": self.caps.call_seconds,
-            }
-            self._finish_timing(record, started)
-            self.budget_exhausted_reason = (
-                f"provider call timed out after {self.caps.call_seconds:g} seconds"
-            )
-            raise QaCallTimeout(self.budget_exhausted_reason) from exc
-        except BaseException as exc:
-            record["status"] = (
-                "CANCELLED" if isinstance(exc, asyncio.CancelledError) else "FAILED"
-            )
-            record["failure"] = {"type": type(exc).__name__}
-            self._finish_timing(record, started)
-            raise
+        result = await self._invoke(
+            record, lambda: self.upstream.call_with_image(*args, **kwargs)
+        )
         record["status"] = "SUCCEEDED"
-        self._finish_timing(record, started)
         if self.diagnostic_capture:
             record["diagnosticCapture"]["response"] = _json_copy(result)
-        self._check_after_call(record)
+        try:
+            self._check_after_call(record)
+        finally:
+            self._checkpoint()
         return result
 
 
@@ -683,6 +746,7 @@ def _diagnostic_request_capture(type_name: str, data: str) -> dict[str, Any]:
     elif operation == "PLAN_VERIFY":
         capture["request"] = {
             "planItem": _json_copy(payload.get("planItem")),
+            "lexicalTargets": _json_copy(payload.get("lexicalTargets")),
             "structuralDifficultyDemand": _json_copy(
                 payload.get("structuralDifficultyDemand")
             ),
@@ -1054,58 +1118,9 @@ async def run_order_diagnostic_live(
     started = time.perf_counter()
     response_payload: dict[str, Any] | None = None
     caught: BaseException | None = None
+    cleanup_error: str | None = None
     request = build_order_diagnostic_request(case)
-    try:
-        async with asyncio.timeout(caps.seconds):
-            response = await service.generate(request)
-        response_payload = response.model_dump(mode="json", by_alias=True)
-    except BaseException as exc:  # Preserve diagnostics even for cancellation/SIGINT.
-        caught = exc
-        if partial_output is not None:
-            _write_payload(
-                {
-                    "mode": "ORDER_DIAGNOSTIC_LIVE",
-                    "variant": variant,
-                    "createdAt": datetime.now(UTC).isoformat(),
-                    "practiceSetId": case["practiceSetId"],
-                    "targetOrder": case["targetOrder"],
-                    "status": (
-                        "INTERRUPTED"
-                        if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError))
-                        else "FAILED"
-                    ),
-                    "partial": True,
-                    "error": {
-                        "type": type(exc).__name__,
-                        "message": str(exc)[:500],
-                    },
-                    "diagnosticCapture": True,
-                    "calls": _call_summary(recorder.calls),
-                },
-                partial_output,
-            )
-    finally:
-        shutdown = getattr(upstream, "shutdown", None)
-        if shutdown is not None:
-            try:
-                await shutdown()
-            except BaseException as exc:
-                if caught is None:
-                    caught = exc
-    interrupted = isinstance(caught, (KeyboardInterrupt, asyncio.CancelledError))
-    status = (
-        "COMPLETED"
-        if caught is None and response_payload is not None
-        else "INTERRUPTED"
-        if interrupted
-        else "FAILED"
-    )
-    error = (
-        None
-        if caught is None
-        else {"type": type(caught).__name__, "message": str(caught)[:500]}
-    )
-    result = {
+    metadata = {
         "mode": "ORDER_DIAGNOSTIC_LIVE",
         "variant": variant,
         "createdAt": datetime.now(UTC).isoformat(),
@@ -1118,10 +1133,6 @@ async def run_order_diagnostic_live(
         "variantSemantics": "label-only; runs the current checkout without source switching",
         "providerRuntimeType": type(upstream).__name__,
         "taskModelPolicies": _live_task_model_policies(upstream),
-        "status": status,
-        "partial": status != "COMPLETED",
-        "error": error,
-        "totalMs": round((time.perf_counter() - started) * 1000, 3),
         "caps": {
             "providerCalls": caps.provider_calls,
             "inputTokens": caps.input_tokens,
@@ -1135,16 +1146,94 @@ async def run_order_diagnostic_live(
             "acceptedPrefix": copy.deepcopy(case["acceptedPrefix"]),
             "effectiveOrderRequest": request.model_dump(mode="json", by_alias=True),
         },
-        "response": response_payload,
-        "calls": _call_summary(recorder.calls),
         "interpretationBoundary": (
-            "This artifact links generated candidates and verifier judgments. It does "
-            "not by itself decide whether Japanese structure or the verifier was wrong."
+            "This artifact links generated candidates and verifier judgments; it is "
+            "not independent quality evidence or proof of database persistence. "
+            "A RUNNING checkpoint is unfinished; process termination may prevent finally."
         ),
     }
-    if status != "COMPLETED" and partial_output is not None:
+
+    def snapshot(status: str) -> dict[str, Any]:
+        return {
+            **metadata,
+            "status": status,
+            "outcomeCategory": _diagnostic_outcome(caught, status),
+            "partial": status != "COMPLETED",
+            "error": None if caught is None else {
+                "type": type(caught).__name__, "message": str(caught)[:500]
+            },
+            "cleanupErrorType": cleanup_error,
+            "totalMs": round((time.perf_counter() - started) * 1000, 3),
+            "response": response_payload,
+            "calls": _call_summary(recorder.calls),
+        }
+
+    def checkpoint() -> None:
+        if partial_output is not None:
+            _write_payload(snapshot("RUNNING"), partial_output)
+
+    recorder.checkpoint = checkpoint
+    checkpoint()
+    overall_deadline = asyncio.timeout(caps.seconds)
+    try:
+        async with overall_deadline:
+            response = await service.generate(request)
+        response_payload = response.model_dump(mode="json", by_alias=True)
+    except BaseException as exc:  # Preserve diagnostics even for cancellation/SIGINT.
+        caught = exc
+        if overall_deadline.expired():
+            caught = QaOverallTimeout("wall-clock cap reached")
+            for record in recorder.calls:
+                if record["status"] == "CANCELLED":
+                    record["status"] = "FAILED"
+                    record["failure"] = {
+                        "type": "QA_OVERALL_TIMEOUT", "timeoutSeconds": caps.seconds,
+                    }
+    interrupted = isinstance(caught, (KeyboardInterrupt, asyncio.CancelledError))
+    status = (
+        "COMPLETED"
+        if caught is None and response_payload is not None
+        else "INTERRUPTED"
+        if interrupted
+        else "FAILED"
+    )
+    # Persist before shutdown: cleanup may itself fail, block, or be cancelled.
+    if partial_output is not None:
+        _write_payload(snapshot(status), partial_output)
+    shutdown = getattr(upstream, "shutdown", None)
+    if shutdown is not None:
+        remaining = max(0.0, caps.seconds - (time.perf_counter() - started))
+        try:
+            async with asyncio.timeout(min(caps.call_seconds, remaining)):
+                await shutdown()
+        except BaseException as exc:
+            cleanup_error = type(exc).__name__
+            if caught is None and isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                caught = exc
+                status = "INTERRUPTED"
+    result = snapshot(status)
+    if partial_output is not None:
         _write_payload(result, partial_output)
     return result
+
+
+def _diagnostic_outcome(error: BaseException | None, status: str) -> str:
+    from app.features.language_learning.reading_vocabulary.service import (
+        _ContextualChoiceLexicalVerifierContractError,
+    )
+
+    if status in {"COMPLETED", "RUNNING", "INTERRUPTED"}:
+        return status
+    current = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _ContextualChoiceLexicalVerifierContractError):
+            return "VERIFIER_CONTRACT_FAILURE"
+        if isinstance(current, HTTPException) and current.status_code == 422:
+            return "CONTENT_REJECTED"
+        current = current.__cause__
+    return "INFRA_FAILURE"
 
 
 def compare_results(
@@ -1266,16 +1355,44 @@ def build_parser() -> argparse.ArgumentParser:
 def _write_payload(payload: dict[str, Any], output: Path) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(encoded, encoding="utf-8")
+    # Same-directory replace leaves the preceding complete checkpoint readable
+    # if the process is killed during a write. Hard kills cannot run finally.
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output.parent,
+            prefix=output.name + ".", suffix=".tmp", delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(4):
+            try:
+                os.replace(temp_path, output)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return encoded
 
 
 def _emit(payload: dict[str, Any], output: Path | None) -> None:
-    encoded = (
+    if output is not None:
         _write_payload(payload, output)
-        if output is not None
-        else json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    )
+        # Explicit diagnostic capture authorizes the private artifact, not a
+        # duplicate of learner/provider text in terminal or collected CI logs.
+        encoded = json.dumps({
+            "mode": payload.get("mode"), "status": payload.get("status"),
+            "partial": payload.get("partial"), "output": str(output.resolve()),
+            "diagnosticContent": "PRIVATE_ARTIFACT_ONLY",
+        }) + "\n"
+    else:
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     print(encoded, end="")
 
 
@@ -1285,6 +1402,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.live and args.compare:
         parser.error("--live and --compare are mutually exclusive")
     try:
+        if args.live and args.output is None:
+            raise ValueError("Live QA requires explicit --output for private diagnostic results")
         if args.compare:
             baseline = json.loads(args.compare[0].read_text(encoding="utf-8"))
             candidate = json.loads(args.compare[1].read_text(encoding="utf-8"))

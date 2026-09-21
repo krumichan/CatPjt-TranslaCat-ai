@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.ai.model_policy import AiModelTier, get_task_model_policy
 from app.ai.prompt_registry import get_prompt_rule
+from app.core.config import settings
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     READING_DIFFICULTY_RECIPE_VERSION,
     READING_DIFFICULTY_SHADOW_RUBRIC_VERSION,
@@ -21,6 +22,12 @@ from app.features.language_learning.reading_vocabulary.service import (
 )
 from app.schemas.language_learning_practice import PracticeGeneratedQuestion
 from tests import test_language_learning_reading_vocabulary as practice_fixtures
+
+
+@pytest.fixture(autouse=True)
+def historical_repair_fake_uses_luna(monkeypatch):
+    """The legacy fake registers Luna tasks; production Reading selects Sol separately."""
+    monkeypatch.setattr(settings, "AI_READING_GENERATION_MODEL", "LUNA")
 
 
 def _pass_verdict(order: int, **updates: object) -> dict[str, object]:
@@ -71,9 +78,23 @@ class DistractorRecoveryProvider(practice_fixtures.PipelineProvider):
                 occurrence = self.quality_occurrences[order]
                 self.quality_occurrences[order] += 1
                 rounds = self.verdict_rounds_by_order.get(order, [])
-                verdicts.append(
-                    rounds[occurrence] if occurrence < len(rounds) else _pass_verdict(order)
-                )
+                verdict = dict(rounds[occurrence] if occurrence < len(rounds) else _pass_verdict(order))
+                if payload["domain"] == "READING":
+                    verdict.setdefault("stemPresuppositionsSupported", True)
+                    verdict.setdefault("stemEvidenceSpanIds", [next(
+                        span["id"] for span in payload["readingEvidenceSpans"]
+                        if span["passageId"] == question["passageId"]
+                    )])
+                    verdict.setdefault(
+                        "readingOperation",
+                        "DISCOURSE_STRUCTURE" if question["skillTag"] == "STRUCTURE"
+                        else "INFERENCE" if question["skillTag"] in {"INFERENCE", "CONTEXT_INFERENCE"}
+                        else "DIRECT_RETRIEVAL",
+                    )
+                    verdict.setdefault("distinctReadingTask", True)
+                    if payload["mode"] == "STRUCTURE":
+                        verdict.setdefault("boundedStructureScope", True)
+                verdicts.append(verdict)
             return {"verdicts": verdicts}
 
         if type_name == ReadingVocabularyGenerationService.DISTRACTOR_REPAIR_TYPE_NAME:

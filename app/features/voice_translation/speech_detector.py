@@ -27,8 +27,8 @@ class PassThroughSpeechEvidenceGuard:
 class SileroSpeechEvidenceGuard:
     """Warm Silero confirmation guard for music/noise hallucination reduction."""
 
-    def __init__(self) -> None:
-        self.enabled = settings.AI_VOICE_VAD_SILERO_GUARD_ENABLED
+    def __init__(self, *, enabled: bool | None = None) -> None:
+        self.enabled = settings.AI_VOICE_VAD_SILERO_GUARD_ENABLED if enabled is None else enabled
         self._ready = not self.enabled
         self._warm_up_lock = asyncio.Lock()
         self._inference_semaphore = asyncio.Semaphore(1)

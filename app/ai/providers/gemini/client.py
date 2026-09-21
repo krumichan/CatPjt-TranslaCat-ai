@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiTtsQuotaCooldownError(RuntimeError):
+    # Preserve the provider's rate-limit classification after a locally enforced
+    # cooldown, without requiring consumers to parse the human-readable message.
+    status_code = 429
+
     def __init__(self, retry_after_seconds: float) -> None:
         self.retry_after_seconds = max(0.0, retry_after_seconds)
         super().__init__(

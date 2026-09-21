@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import re
 import time
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, ValidationError
 
 from app.ai.ports import TextGenerationProvider
+from app.core.config import settings
 from app.features.language_learning.reading_vocabulary.contextual_choice_task import (
     CONTEXTUAL_CHOICE_ANSWER_KEYS,
     CONTEXTUAL_CHOICE_BLANK,
@@ -42,6 +45,7 @@ from app.features.language_learning.reading_vocabulary.reading_difficulty_adapte
 from app.features.language_learning.reading_vocabulary.reading_difficulty_recipe import (
     calibrated_reading_skill,
     question_demand_recipe,
+    structure_judgment_contract,
 )
 from app.features.language_learning.reading_vocabulary.reading_difficulty_shadow import (
     ReadingDifficultyShadowCollector,
@@ -92,6 +96,8 @@ from app.schemas.language_learning_practice import (
     PracticeQuestionType,
     PracticeReviewTarget,
     PersonalizedVocabularyPlan,
+    ReadingPassageBundle,
+    ReadingQuestionPlan,
     ReadingMode,
     ReadingSkill,
     VocabularyMode,
@@ -180,6 +186,13 @@ _PRACTICE_CANDIDATE_SCHEMA: dict[str, Any] = {
     },
     "required": ["questions"],
 }
+_B1_COMPREHENSION_CANDIDATE_SCHEMA = copy.deepcopy(_PRACTICE_CANDIDATE_SCHEMA)
+_b1_candidate_item = _B1_COMPREHENSION_CANDIDATE_SCHEMA["properties"]["questions"]["items"]
+_b1_candidate_item["properties"].update({
+    "inferenceClueQuote": {"type": ["STRING", "NULL"]},
+    "unstatedInference": {"type": ["STRING", "NULL"]},
+})
+_b1_candidate_item["required"].extend(["inferenceClueQuote", "unstatedInference"])
 _WRONG_OPTION_CANDIDATE_SCHEMA = {
     "type": "OBJECT",
     "properties": {"text": {"type": "STRING"}},
@@ -226,6 +239,8 @@ _CONTEXTUAL_CHOICE_PLAN_ITEM_SCHEMA: dict[str, Any] = {
         "targetExpression": {"type": ["STRING", "NULL"]},
         "distractors": {
             "type": "ARRAY",
+            "minItems": 3,
+            "maxItems": 3,
             "items": {"type": "STRING"},
         },
         "anchorType": {
@@ -288,6 +303,7 @@ def _contextual_choice_lexical_repair_schema(
     }
 _CONTEXTUAL_CHOICE_PLAN_VERDICT_PROPERTIES: dict[str, Any] = {
     "globalOrder": {"type": "INTEGER"},
+    "targetId": {"type": "STRING", "enum": ["TARGET"]},
     "targetExpressionWellFormed": {"type": "BOOLEAN"},
     "learningValue": {"type": "BOOLEAN"},
     "sameSurfaceCategory": {"type": "BOOLEAN"},
@@ -339,8 +355,11 @@ _CONTEXTUAL_CHOICE_PLAN_VERDICT_PROPERTIES: dict[str, Any] = {
 
 def _contextual_choice_plan_verification_schema(
     decisive_dimensions: tuple[str, ...],
+    *,
+    global_order: int,
 ) -> dict[str, Any]:
     properties = copy.deepcopy(_CONTEXTUAL_CHOICE_PLAN_VERDICT_PROPERTIES)
+    properties["globalOrder"]["enum"] = [global_order]
     dimension_schema = {
         "type": "STRING",
         "enum": list(decisive_dimensions),
@@ -349,12 +368,31 @@ def _contextual_choice_plan_verification_schema(
     properties["distractors"]["items"]["properties"][
         "coveredDecisiveDimensions"
     ]["items"] = copy.deepcopy(dimension_schema)
+    distractor_schema = properties["distractors"]["items"]
+    distractor_schema["properties"].pop("index")
+    distractor_schema["required"].remove("index")
+    distractor_schema["required"].append("id")
+    by_id: dict[str, Any] = {}
+    for target_id in ("D0", "D1", "D2"):
+        bound_schema = copy.deepcopy(distractor_schema)
+        bound_schema["properties"]["id"] = {
+            "type": "STRING", "enum": [target_id],
+        }
+        by_id[target_id] = bound_schema
+    properties["distractors"] = {
+        "type": "OBJECT",
+        "additionalProperties": False,
+        "properties": by_id,
+        "required": list(by_id),
+    }
     return {
         "type": "OBJECT",
         "additionalProperties": False,
         "properties": {
             "verdicts": {
                 "type": "ARRAY",
+                "minItems": 1,
+                "maxItems": 1,
                 "items": {
                     "type": "OBJECT",
                     "additionalProperties": False,
@@ -453,6 +491,57 @@ _READING_PASSAGE_SCHEMA: dict[str, Any] = {
     },
     "required": ["passageId", "passageText"],
 }
+
+_B1_COMPREHENSION_PASSAGE_SCHEMA = copy.deepcopy(_READING_PASSAGE_SCHEMA)
+_B1_COMPREHENSION_PASSAGE_SCHEMA["properties"].update({
+    "inferenceClueQuote": {"type": "STRING"},
+    "unstatedInference": {"type": "STRING"},
+})
+_B1_COMPREHENSION_PASSAGE_SCHEMA["required"].extend(
+    ["inferenceClueQuote", "unstatedInference"]
+)
+
+_CONTEXT_INFERENCE_PASSAGE_SCHEMA = copy.deepcopy(_READING_PASSAGE_SCHEMA)
+_CONTEXT_INFERENCE_PASSAGE_SCHEMA["properties"]["inferencePlans"] = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "questionOrder": {"type": "INTEGER"},
+            "clueQuote": {"type": "STRING"},
+            "unstatedInference": {"type": "STRING"},
+        },
+        "required": ["questionOrder", "clueQuote", "unstatedInference"],
+    },
+}
+_CONTEXT_INFERENCE_PASSAGE_SCHEMA["required"].append("inferencePlans")
+
+_QUESTION_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "globalOrder": {"type": "INTEGER"},
+        "skillTag": {"type": "STRING"},
+        "difficulty": {"type": "STRING", "enum": [item.value for item in PracticeDifficulty]},
+        "complexityBand": {"type": "INTEGER"},
+        "clueQuote": {"type": "STRING"},
+        "questionFocus": {"type": "STRING"},
+        "unstatedInference": {"type": ["STRING", "NULL"]},
+    },
+    "required": ["globalOrder", "skillTag", "difficulty", "complexityBand",
+                 "clueQuote", "questionFocus", "unstatedInference"],
+}
+_PLANNED_PASSAGE_SCHEMAS: dict[str, dict[str, Any]] = {}
+for _plan_schema_name, _base_passage_schema in (
+    ("default", _READING_PASSAGE_SCHEMA),
+    ("b1", _B1_COMPREHENSION_PASSAGE_SCHEMA),
+    ("context", _CONTEXT_INFERENCE_PASSAGE_SCHEMA),
+):
+    _planned_schema = copy.deepcopy(_base_passage_schema)
+    _planned_schema["properties"]["questionPlans"] = {
+        "type": "ARRAY", "items": _QUESTION_PLAN_SCHEMA,
+    }
+    _planned_schema["required"].append("questionPlans")
+    _PLANNED_PASSAGE_SCHEMAS[_plan_schema_name] = _planned_schema
 
 _QUALITY_VERDICT_PROPERTIES: dict[str, Any] = {
     "order": {"type": "INTEGER"},
@@ -570,6 +659,25 @@ _ORIGIN_EXPLANATION_SCHEMA: dict[str, Any] = {
     },
     "required": ["explanations"],
 }
+
+_READING_VERIFICATION_SCHEMA: dict[str, Any] = copy.deepcopy(_PRACTICE_VERIFICATION_SCHEMA)
+_READING_VERDICT_PROPERTIES = _READING_VERIFICATION_SCHEMA["properties"]["verdicts"]["items"]["properties"]
+_READING_VERDICT_PROPERTIES.update({
+    "stemPresuppositionsSupported": {"type": "BOOLEAN"},
+    "stemEvidenceSpanIds": {"type": "ARRAY", "items": {"type": "STRING"}},
+    "readingOperation": {
+        "type": "STRING",
+        "enum": ["DIRECT_RETRIEVAL", "INFERENCE", "DISCOURSE_STRUCTURE"],
+    },
+    "distinctReadingTask": {"type": "BOOLEAN"},
+})
+_READING_VERIFICATION_SCHEMA["properties"]["verdicts"]["items"]["required"] = list(
+    _READING_VERDICT_PROPERTIES
+)
+_STRUCTURE_VERIFICATION_SCHEMA = copy.deepcopy(_READING_VERIFICATION_SCHEMA)
+_STRUCTURE_VERDICT = _STRUCTURE_VERIFICATION_SCHEMA["properties"]["verdicts"]["items"]
+_STRUCTURE_VERDICT["properties"]["boundedStructureScope"] = {"type": "BOOLEAN"}
+_STRUCTURE_VERDICT["required"].append("boundedStructureScope")
 _CONTEXTUAL_CHOICE_ORIGIN_EXPLANATION_SCHEMA = copy.deepcopy(
     _ORIGIN_EXPLANATION_SCHEMA
 )
@@ -592,6 +700,25 @@ class _PracticeVerificationVerdict(BaseModel):
 
 class _PracticeVerificationPayload(BaseModel):
     verdicts: list[_PracticeVerificationVerdict]
+
+
+class _ReadingPracticeVerificationVerdict(_PracticeVerificationVerdict):
+    stemPresuppositionsSupported: StrictBool
+    stemEvidenceSpanIds: list[str]
+    readingOperation: Literal["DIRECT_RETRIEVAL", "INFERENCE", "DISCOURSE_STRUCTURE"]
+    distinctReadingTask: StrictBool
+
+
+class _StructurePracticeVerificationVerdict(_ReadingPracticeVerificationVerdict):
+    boundedStructureScope: StrictBool
+
+
+class _StructurePracticeVerificationPayload(BaseModel):
+    verdicts: list[_StructurePracticeVerificationVerdict]
+
+
+class _ReadingPracticeVerificationPayload(BaseModel):
+    verdicts: list[_ReadingPracticeVerificationVerdict]
 
 
 class _ContextualChoiceCandidatePayload(BaseModel):
@@ -619,34 +746,139 @@ class _ContextualChoicePlanGenerationPayload(BaseModel):
 
 
 class _ContextualChoiceDistractorVerdict(BaseModel):
-    index: int
-    expressionWellFormed: bool
-    sameSurfaceCategory: bool
-    bundleRelevant: bool
-    closeCompetitor: bool
-    malformedByGrammar: bool
-    skillContrastRelevant: bool
+    model_config = ConfigDict(extra="forbid")
+
+    id: Literal["D0", "D1", "D2"]
+    expressionWellFormed: StrictBool
+    sameSurfaceCategory: StrictBool
+    bundleRelevant: StrictBool
+    closeCompetitor: StrictBool
+    malformedByGrammar: StrictBool
+    skillContrastRelevant: StrictBool
     coveredDecisiveDimensions: tuple[str, ...]
+
+    @property
+    def index(self) -> int:
+        return {"D0": 0, "D1": 1, "D2": 2}[self.id]
+
+
+class _ContextualChoiceDistractorVerdicts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    D0: _ContextualChoiceDistractorVerdict
+    D1: _ContextualChoiceDistractorVerdict
+    D2: _ContextualChoiceDistractorVerdict
+
+    def ordered(self) -> tuple[_ContextualChoiceDistractorVerdict, ...]:
+        return (self.D0, self.D1, self.D2)
 
 
 class _ContextualChoicePlanVerdict(BaseModel):
-    globalOrder: int
-    targetExpressionWellFormed: bool
-    learningValue: bool
-    sameSurfaceCategory: bool
-    skillContrastSupported: bool
+    model_config = ConfigDict(extra="forbid")
+
+    globalOrder: StrictInt
+    targetId: Literal["TARGET"]
+    targetExpressionWellFormed: StrictBool
+    learningValue: StrictBool
+    sameSurfaceCategory: StrictBool
+    skillContrastSupported: StrictBool
     coveredDecisiveDimensions: tuple[str, ...]
-    definitionOnly: bool
-    lexicalConceptRepeated: bool
-    rareOrTrivia: bool
-    targetViableWithDifferentDistractors: bool
-    distractors: list[_ContextualChoiceDistractorVerdict]
+    definitionOnly: StrictBool
+    lexicalConceptRepeated: StrictBool
+    rareOrTrivia: StrictBool
+    targetViableWithDifferentDistractors: StrictBool
+    distractors: _ContextualChoiceDistractorVerdicts
     reasonCode: str
     reason: str
 
 
 class _ContextualChoicePlanVerificationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     verdicts: list[_ContextualChoicePlanVerdict]
+
+
+class _ContextualChoiceLexicalVerifierContractError(RuntimeError):
+    """Provider verdict contract failure, never content-quality/recovery evidence."""
+
+    def __init__(self, reason_code: str, *, expected_order: int) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.expected_order = expected_order
+
+
+def _contextual_choice_verifier_coverage_summary(raw: Any) -> dict[str, object]:
+    """Only bounded structural identities/counts, never arbitrary provider text."""
+    verdicts = raw.get("verdicts") if isinstance(raw, dict) else None
+    if not isinstance(verdicts, list):
+        return {"verdictCount": None}
+    summary: dict[str, object] = {"verdictCount": len(verdicts)}
+    orders: list[int | str] = []
+    for verdict in verdicts[:10]:
+        order = verdict.get("globalOrder") if isinstance(verdict, dict) else None
+        orders.append(order if type(order) is int and 1 <= order <= 10 else "INVALID")
+    summary["orders"] = orders
+    if len(verdicts) != 1 or not isinstance(verdicts[0], dict):
+        return summary
+    distractors = verdicts[0].get("distractors")
+    summary["distractorCount"] = (
+        len(distractors) if isinstance(distractors, (dict, list)) else None
+    )
+    if isinstance(distractors, dict):
+        summary["distractorIds"] = [
+            key if key in {"D0", "D1", "D2", "D3"} else "UNEXPECTED_ID"
+            for key in list(distractors)[:10]
+        ]
+        summary["boundIds"] = [
+            evidence.get("id")
+            if isinstance(evidence, dict) and evidence.get("id") in ("D0", "D1", "D2", "D3")
+            else "INVALID"
+            for evidence in list(distractors.values())[:10]
+        ]
+    elif isinstance(distractors, list):
+        summary["legacyIndexes"] = [
+            evidence.get("index")
+            if isinstance(evidence, dict) and type(evidence.get("index")) is int
+            and 0 <= evidence["index"] <= 10 else "INVALID"
+            for evidence in distractors[:10]
+        ]
+    return summary
+
+
+def _parse_contextual_choice_plan_verdict(
+    raw: Any, *, expected_order: int,
+) -> _ContextualChoicePlanVerdict:
+    def fail(reason_code: str) -> NoReturn:
+        raise _ContextualChoiceLexicalVerifierContractError(
+            reason_code, expected_order=expected_order,
+        )
+
+    if not isinstance(raw, dict) or not isinstance(raw.get("verdicts"), list):
+        fail("LEXICAL_VERIFIER_RESPONSE_SCHEMA_INVALID")
+    verdicts = raw["verdicts"]
+    if len(verdicts) != 1:
+        fail("LEXICAL_VERIFIER_ORDER_COVERAGE_INVALID")
+    verdict = verdicts[0]
+    if not isinstance(verdict, dict):
+        fail("LEXICAL_VERIFIER_RESPONSE_SCHEMA_INVALID")
+    if type(verdict.get("globalOrder")) is not int or verdict["globalOrder"] != expected_order:
+        fail("LEXICAL_VERIFIER_ORDER_MISMATCH")
+    distractors = verdict.get("distractors")
+    if not isinstance(distractors, dict) or set(distractors) != {"D0", "D1", "D2"}:
+        fail("LEXICAL_VERIFIER_DISTRACTOR_COVERAGE_INVALID")
+    if verdict.get("targetId") != "TARGET":
+        fail("LEXICAL_VERIFIER_TARGET_ID_INVALID")
+    for target_id in ("D0", "D1", "D2"):
+        evidence = distractors[target_id]
+        if not isinstance(evidence, dict) or evidence.get("id") != target_id:
+            fail("LEXICAL_VERIFIER_DISTRACTOR_ID_MISMATCH")
+    try:
+        payload = _ContextualChoicePlanVerificationPayload.model_validate(raw)
+    except ValidationError as exc:
+        raise _ContextualChoiceLexicalVerifierContractError(
+            "LEXICAL_VERIFIER_RESPONSE_SCHEMA_INVALID", expected_order=expected_order,
+        ) from exc
+    return payload.verdicts[0]
 
 
 class _ContextualChoiceDistractorReplacement(BaseModel):
@@ -866,9 +1098,25 @@ class _PracticeCandidatePayload(BaseModel):
     questions: list[dict[str, Any]]
 
 
+class _ReadingInferencePlan(BaseModel):
+    questionOrder: int
+    clueQuote: str
+    unstatedInference: str
+
+
 class _ReadingPassagePayload(BaseModel):
     passageId: str
     passageText: str
+    inferenceClueQuote: str | None = None
+    unstatedInference: str | None = None
+    inferencePlans: list[_ReadingInferencePlan] | None = None
+    questionPlans: list[ReadingQuestionPlan] | None = None
+
+
+@dataclass(frozen=True)
+class _PlannedPassage:
+    text: str
+    plans: tuple[ReadingQuestionPlan, ...] = ()
 
 
 class _OriginExplanationItem(BaseModel):
@@ -890,6 +1138,8 @@ class _QuestionSlot:
     question_type: PracticeQuestionType | None = None
     passage_id: str | None = None
     passage_text: str | None = None
+    reading_plan: ReadingQuestionPlan | None = None
+    same_passage_plans: tuple[ReadingQuestionPlan, ...] = ()
     review_canonical_key: str | None = None
     review_expression: str | None = None
     previous_question_types: tuple[str, ...] = ()
@@ -935,6 +1185,11 @@ class _QuestionSlot:
                 mode=self.reading_mode,
                 skill_tag=self.skill_tag,
             ).generation_payload()
+            if self.reading_plan is not None:
+                payload["currentQuestionPlan"] = self.reading_plan.model_dump(by_alias=True)
+                payload["samePassageQuestionPlans"] = [
+                    plan.model_dump(by_alias=True) for plan in self.same_passage_plans
+                ]
         if self.vocabulary_mode is not None:
             if self.question_type is None:
                 raise ValueError("Vocabulary slot requires its server-selected question type")
@@ -982,6 +1237,12 @@ class _QuestionSlot:
 
 class ReadingVocabularyGenerationService:
     TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION"
+    READING_SOL_TYPE_NAME = "LANGUAGE_LEARNING_READING_QUESTION_GENERATION_SOL"
+
+    def _generation_timeout_for(self, request: PracticeGenerationRequest) -> float:
+        if request.domain == PracticeDomain.READING and settings.AI_READING_GENERATION_MODEL == "SOL":
+            return max(self.timeout_seconds, 80.0)
+        return self.timeout_seconds
     DISTRACTOR_REPAIR_TYPE_NAME = "LANGUAGE_LEARNING_READING_DISTRACTOR_REPAIR"
     PASSAGE_TYPE_NAME = "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION"
     PRESCREEN_TYPE_NAME = "LANGUAGE_LEARNING_READING_VOCABULARY_USAGE_PRESCREEN"
@@ -1103,6 +1364,19 @@ class ReadingVocabularyGenerationService:
             )
             questions = sorted(questions, key=lambda item: item.order)
             self._validate(request, questions)
+            reading_bundle = None
+            if request.domain == PracticeDomain.READING and request.question_count in (2, 3):
+                passage_id = "p1" if request.question_offset == 0 else "p2"
+                planned_passage = passages[passage_id]
+                if not planned_passage.plans or len(questions) != len(planned_passage.plans):
+                    raise ValueError("Reading passage bundle is incomplete")
+                reading_bundle = ReadingPassageBundle(
+                    passage_id=passage_id,
+                    prompt_version=PRACTICE_GENERATION_PROMPT_VERSION,
+                    passage_sha256=hashlib.sha256(planned_passage.text.encode("utf-8")).hexdigest(),
+                    question_plans=list(planned_passage.plans),
+                    questions=questions,
+                )
             response = PracticeGenerationResponse(
                 request_id=request.request_id,
                 prompt_version=(
@@ -1115,6 +1389,7 @@ class ReadingVocabularyGenerationService:
                 complexity_band=request.complexity_band,
                 questions=questions,
                 vocabulary_plan=vocabulary_plan,
+                reading_bundle=reading_bundle,
             )
             await self.difficulty_shadow.collect_if_selected(request, response.questions)
             if not contextual_choice:
@@ -1179,15 +1454,17 @@ class ReadingVocabularyGenerationService:
     async def _generate_reading_passages(
         self,
         request: PracticeGenerationRequest,
-    ) -> dict[str, str]:
+    ) -> dict[str, _PlannedPassage]:
         if request.domain != PracticeDomain.READING:
             return {}
 
         passages = {
-            question.passage_id: question.passage_text
+            question.passage_id: _PlannedPassage(question.passage_text)
             for question in request.previous_questions
             if question.passage_id and question.passage_text
         }
+        planned_bundle = request.question_count in (2, 3)
+        planned_slots = self._build_slots(request, {}) if planned_bundle else []
         required_passages = {
             1 if index <= 3 else 2
             for index in range(
@@ -1200,7 +1477,7 @@ class ReadingVocabularyGenerationService:
             if passage_id in passages:
                 self._assert_language_lane(
                     request.learning_language,
-                    [passages[passage_id]],
+                    [passages[passage_id].text],
                     reason="Reading passage is not in learningLanguage",
                 )
                 continue
@@ -1219,10 +1496,44 @@ class ReadingVocabularyGenerationService:
                                 request,
                                 passage_id=passage_id,
                                 passage_number=passage_number,
+                                planned_slots=([
+                                    {
+                                        "globalOrder": request.question_offset + slot.order,
+                                        "skillTag": slot.skill_tag,
+                                        "difficulty": slot.difficulty.value,
+                                        "complexityBand": slot.complexity_band,
+                                        "questionDemand": question_demand_recipe(
+                                            slot.complexity_band, mode=request.mode,
+                                            skill_tag=slot.skill_tag,
+                                        ).generation_payload(),
+                                        **({"structureJudgmentContract": structure_judgment_contract(
+                                            band=slot.complexity_band,
+                                            position=(request.question_offset + slot.order
+                                                      if request.question_offset + slot.order <= 3
+                                                      else request.question_offset + slot.order - 3),
+                                            count=3 if passage_number == 1 else 2,
+                                        )} if request.mode == ReadingMode.STRUCTURE.value
+                                            and slot.complexity_band == 5 else {}),
+                                    }
+                                    for slot in planned_slots if slot.passage_id == passage_id
+                                ] if planned_bundle else None),
                             ),
-                            schema=_READING_PASSAGE_SCHEMA,
+                            schema=(
+                                _PLANNED_PASSAGE_SCHEMAS[
+                                    "b1" if request.mode == ReadingMode.COMPREHENSION.value
+                                    and request.complexity_band == 1 else
+                                    "context" if request.mode == ReadingMode.CONTEXT_INFERENCE.value
+                                    else "default"
+                                ] if planned_bundle else
+                                _B1_COMPREHENSION_PASSAGE_SCHEMA
+                                if request.mode == ReadingMode.COMPREHENSION.value
+                                and request.complexity_band == 1
+                                else _CONTEXT_INFERENCE_PASSAGE_SCHEMA
+                                if request.mode == ReadingMode.CONTEXT_INFERENCE.value
+                                else _READING_PASSAGE_SCHEMA
+                            ),
                         ),
-                        timeout=self.timeout_seconds,
+                        timeout=self._generation_timeout_for(request),
                     )
                     payload = _ReadingPassagePayload.model_validate(raw)
                     passage_text = payload.passageText.strip()
@@ -1238,7 +1549,67 @@ class ReadingVocabularyGenerationService:
                     )
                     if not passage_validation.passed:
                         raise ValueError(passage_validation.primary_issue)
-                    passages[passage_id] = passage_text
+                    if (request.mode == ReadingMode.COMPREHENSION.value
+                            and request.complexity_band == 1):
+                        clue = (payload.inferenceClueQuote or "").strip()
+                        inference = (payload.unstatedInference or "").strip()
+                        if (not clue or not inference or clue not in passage_text
+                                or self._normalize_for_leak_check(inference)
+                                in self._normalize_for_leak_check(passage_text)):
+                            raise ValueError("B1 comprehension passage lacks an explicit implicit-inference plan")
+                        self._assert_language_lane(
+                            request.learning_language, [inference],
+                            reason="Reading unstated inference is not in learningLanguage",
+                        )
+                    if request.mode == ReadingMode.CONTEXT_INFERENCE.value:
+                        plans = payload.inferencePlans or []
+                        expected_orders = [1, 2, 3] if passage_number == 1 else [4, 5]
+                        if [plan.questionOrder for plan in plans] != expected_orders:
+                            raise ValueError("Context inference passage lacks one plan per future slot")
+                        clues: set[str] = set()
+                        inferences: set[str] = set()
+                        normalized_passage = self._normalize_for_leak_check(passage_text)
+                        for plan in plans:
+                            clue = plan.clueQuote.strip()
+                            inference = plan.unstatedInference.strip()
+                            normalized_clue = self._normalize_for_leak_check(clue)
+                            normalized_inference = self._normalize_for_leak_check(inference)
+                            if (not clue or not inference or clue not in passage_text
+                                    or normalized_clue in clues or normalized_inference in inferences
+                                    or normalized_inference in normalized_passage):
+                                raise ValueError("Context inference plans must be distinct and unstated")
+                            clues.add(normalized_clue)
+                            inferences.add(normalized_inference)
+                            self._assert_language_lane(
+                                request.learning_language, [inference],
+                                reason="Reading unstated inference is not in learningLanguage",
+                            )
+                    question_plans = tuple(payload.questionPlans or ())
+                    if planned_bundle:
+                        passage_slots = [slot for slot in planned_slots if slot.passage_id == passage_id]
+                        expected_orders = [request.question_offset + slot.order for slot in passage_slots]
+                        if [plan.global_order for plan in question_plans] != expected_orders:
+                            raise ValueError("Reading plan does not cover exact passage orders")
+                        focuses: set[str] = set()
+                        for plan, slot in zip(question_plans, passage_slots, strict=True):
+                            focus = self._normalize_for_leak_check(plan.question_focus)
+                            if (plan.skill_tag != slot.skill_tag
+                                    or plan.difficulty != slot.difficulty
+                                    or plan.complexity_band != slot.complexity_band
+                                    or not plan.clue_quote.strip()
+                                    or plan.clue_quote not in passage_text
+                                    or not focus or focus in focuses):
+                                raise ValueError("Reading passage plan violates server slot binding")
+                            focuses.add(focus)
+                            if slot.skill_tag in {ReadingSkill.INFERENCE.value,
+                                                  ReadingSkill.CONTEXT_INFERENCE.value}:
+                                inference = (plan.unstated_inference or "").strip()
+                                if (not inference or self._normalize_for_leak_check(inference)
+                                        in self._normalize_for_leak_check(passage_text)):
+                                    raise ValueError("Reading inference plan lacks an unstated conclusion")
+                                self._assert_language_lane(request.learning_language, [inference],
+                                    reason="Reading plan inference is not in learningLanguage")
+                    passages[passage_id] = _PlannedPassage(passage_text, question_plans)
                     break
                 except (ValidationError, ValueError, TimeoutError, asyncio.TimeoutError) as exc:
                     last_error = exc
@@ -1311,10 +1682,22 @@ class ReadingVocabularyGenerationService:
     def _build_slots(
         self,
         request: PracticeGenerationRequest,
-        passages: dict[str, str],
+        passages: Mapping[str, str | _PlannedPassage],
     ) -> list[_QuestionSlot]:
         difficulties = self._difficulty_plan(request)
         if request.domain == PracticeDomain.READING:
+            if request.reading_slot_targets:
+                selected_targets = request.reading_slot_targets[
+                    request.question_offset: request.question_offset + request.question_count
+                ]
+                if (len(selected_targets) != request.question_count
+                        or sum(target.difficulty == PracticeDifficulty.EASIER
+                               for target in selected_targets) != request.easier_count
+                        or sum(target.difficulty == PracticeDifficulty.CURRENT
+                               for target in selected_targets) != request.current_count
+                        or sum(target.difficulty == PracticeDifficulty.CHALLENGE
+                               for target in selected_targets) != request.challenge_count):
+                    raise ValueError("Reading slot targets changed difficulty quotas")
             skill_cycle = {
                 ReadingMode.COMPREHENSION.value: [
                     ReadingSkill.CONTENT.value,
@@ -1341,13 +1724,24 @@ class ReadingVocabularyGenerationService:
             slots: list[_QuestionSlot] = []
             for index, difficulty in enumerate(difficulties, 1):
                 global_index = request.question_offset + index
-                band = self._band_for(request, difficulty)
+                target = (request.reading_slot_targets[global_index - 1]
+                          if request.reading_slot_targets else None)
+                if target is not None:
+                    difficulty = target.difficulty
+                band = (target.complexity_band if target is not None
+                        else self._band_for(request, difficulty))
                 passage_id = "p1" if global_index <= 3 else "p2"
                 skill_tag = calibrated_reading_skill(
                     mode=request.mode,
                     band=band,
                     planned_skill=skill_cycle[global_index - 1],
                 )
+                if target is not None and (target.global_order != global_index
+                                           or target.skill_tag != skill_tag
+                                           or target.complexity_band != self._band_for(request, difficulty)):
+                    raise ValueError("Reading slot target changed server curriculum")
+                planned_passage = passages.get(passage_id)
+                plans = planned_passage.plans if isinstance(planned_passage, _PlannedPassage) else ()
                 slots.append(
                     _QuestionSlot(
                         order=index,
@@ -1355,7 +1749,10 @@ class ReadingVocabularyGenerationService:
                         complexity_band=band,
                         skill_tag=skill_tag,
                         passage_id=passage_id,
-                        passage_text=passages[passage_id],
+                        passage_text=(planned_passage.text if isinstance(planned_passage, _PlannedPassage)
+                                      else planned_passage),
+                        reading_plan=next((plan for plan in plans if plan.global_order == global_index), None),
+                        same_passage_plans=plans,
                         reading_mode=request.mode,
                     )
                 )
@@ -2117,17 +2514,24 @@ class ReadingVocabularyGenerationService:
                 ],
             ),
             schema=_contextual_choice_plan_verification_schema(
-                demand.decisive_dimensions
+                demand.decisive_dimensions, global_order=item.global_order,
             ),
         )
-        payload = _ContextualChoicePlanVerificationPayload.model_validate(raw)
-        if len(payload.verdicts) != 1 or payload.verdicts[0].globalOrder != item.global_order:
-            raise ValueError("CONTEXTUAL_CHOICE plan verifier coverage mismatch")
-        verdict = payload.verdicts[0]
-        if len(verdict.distractors) != 3 or {
-            distractor.index for distractor in verdict.distractors
-        } != {0, 1, 2}:
-            raise ValueError("CONTEXTUAL_CHOICE distractor verifier coverage mismatch")
+        try:
+            verdict = _parse_contextual_choice_plan_verdict(
+                raw, expected_order=item.global_order,
+            )
+        except _ContextualChoiceLexicalVerifierContractError as exc:
+            logger.warning(
+                "CONTEXTUAL_CHOICE lexical verifier contract failed. "
+                "request_id=%s reason_code=%s expected_order=%d expected_ids=%s "
+                "received_coverage=%s",
+                request.request_id, exc.reason_code, item.global_order,
+                ["TARGET", "D0", "D1", "D2"],
+                _contextual_choice_verifier_coverage_summary(raw),
+            )
+            raise
+        distractors = verdict.distractors.ordered()
         # The verifier's reasonCode/reason are diagnostic only. All rejection and
         # repair authority below is derived from the structured boolean verdicts.
         codes: list[str] = []
@@ -2169,12 +2573,12 @@ class ReadingVocabularyGenerationService:
                 ),
             )
             for distractor in sorted(
-                verdict.distractors,
+                distractors,
                 key=lambda candidate: candidate.index,
             )
         )
         close_competitor_indexes: set[int] = set()
-        for distractor in verdict.distractors:
+        for distractor in distractors:
             index = distractor.index
             base_valid = True
             if not distractor.expressionWellFormed:
@@ -2219,7 +2623,7 @@ class ReadingVocabularyGenerationService:
             )
             nonclose_valid_indexes = [
                 distractor.index
-                for distractor in verdict.distractors
+                for distractor in distractors
                 if distractor.index not in invalid_indexes
                 and distractor.index not in close_competitor_indexes
             ]
@@ -2413,16 +2817,24 @@ class ReadingVocabularyGenerationService:
     ) -> Any:
         setattr(telemetry, counter, getattr(telemetry, counter) + 1)
         started = time.perf_counter()
+        outcome = "FAILED"
         try:
-            return await asyncio.wait_for(
+            raw = await asyncio.wait_for(
                 self.provider.call(type_name=type_name, data=data, schema=schema),
                 timeout=self.timeout_seconds,
             )
+            outcome = "SUCCEEDED"
+            return raw
+        except asyncio.CancelledError:
+            outcome = "CANCELLED"
+            raise
         finally:
             logger.info(
-                "CONTEXTUAL_CHOICE V3 stage completed. request_id=%s stage=%s latency_ms=%d",
+                "CONTEXTUAL_CHOICE V3 stage finished. request_id=%s stage=%s "
+                "status=%s latency_ms=%d",
                 request.request_id,
                 stage,
+                outcome,
                 int((time.perf_counter() - started) * 1000),
             )
 
@@ -2456,6 +2868,28 @@ class ReadingVocabularyGenerationService:
             evidence.index: evidence
             for evidence in lexical_assessment.distractor_repair_evidence
         }
+        required_dimensions = set(lexical_assessment.decisive_dimensions)
+        # Only unchanged, still-valid competitors survive the effective repair
+        # scope. A full bundle/set replacement cannot reuse their old close count.
+        preserved_close_count = sum(
+            1
+            for index, evidence in evidence_by_index.items()
+            if preserve_target
+            and index not in allowed_indexes
+            and evidence.expression_well_formed
+            and evidence.same_surface_category
+            and evidence.bundle_relevant
+            and not evidence.malformed_by_grammar
+            and evidence.skill_contrast_relevant
+            and evidence.close_competitor
+            and bool(set(evidence.covered_decisive_dimensions) & required_dimensions)
+            and set(evidence.covered_decisive_dimensions) <= required_dimensions
+        )
+        additional_close_needed = max(
+            0,
+            lexical_assessment.required_close_distractors - preserved_close_count,
+        )
+        close_required_indexes = set(allowed_indexes[:additional_close_needed])
         forbidden_expressions = list(
             dict.fromkeys([item.target_expression, *item.distractors])
         )
@@ -2468,12 +2902,8 @@ class ReadingVocabularyGenerationService:
             "requiredCloseDistractors": (
                 lexical_assessment.required_close_distractors
             ),
-            "currentValidCloseDistractorCount": (
-                lexical_assessment.current_valid_close_distractor_count
-            ),
-            "additionalCloseDistractorsNeeded": (
-                lexical_assessment.additional_close_distractors_needed
-            ),
+            "currentValidCloseDistractorCount": preserved_close_count,
+            "additionalCloseDistractorsNeeded": additional_close_needed,
             "repairRequirements": {
                 str(index): {
                     "mustBeNonEmpty": True,
@@ -2487,7 +2917,7 @@ class ReadingVocabularyGenerationService:
                     "mustBeSkillContrastRelevant": True,
                     "mustBeMalformedByGrammar": False,
                     "mustBeCloseCompetitor": index
-                    in lexical_assessment.close_required_replacement_indexes,
+                    in close_required_indexes,
                 }
                 for index in allowed_indexes
             },
@@ -3711,6 +4141,9 @@ class ReadingVocabularyGenerationService:
             semantic_outcome = await self._semantic_verification_outcome(
                 request,
                 unverified,
+                previous_reading_questions=[
+                    accepted[order] for order in sorted(semantically_verified)
+                ],
             )
 
             semantic_exhausted: list[int] = []
@@ -3773,6 +4206,7 @@ class ReadingVocabularyGenerationService:
                     < _MAX_DISTRACTOR_REPAIR_ATTEMPTS_PER_SLOT
                     and semantic_attempts[question.order]
                     < _MAX_READING_SEMANTIC_ATTEMPTS_PER_SLOT
+                    and failure == "distractors are too weak or unrelated"
                     and verdict is not None
                     and self._is_reading_distractor_only_failure(
                         verdict,
@@ -4094,6 +4528,25 @@ class ReadingVocabularyGenerationService:
         for slot in slots:
             payload = slot.prompt_payload()
             if (
+                request.domain == PracticeDomain.READING
+                and request.mode in {ReadingMode.STRUCTURE.value, ReadingMode.CONTEXT_INFERENCE.value}
+            ):
+                global_order = request.question_offset + slot.order
+                payload["samePassageTaskPosition"] = (
+                    global_order if global_order <= 3 else global_order - 3
+                )
+                payload["samePassageTaskCount"] = 3 if global_order <= 3 else 2
+                if request.mode == ReadingMode.STRUCTURE.value and slot.complexity_band == 5:
+                    payload["structureJudgmentContract"] = structure_judgment_contract(
+                        band=5,
+                        position=payload["samePassageTaskPosition"],
+                        count=payload["samePassageTaskCount"],
+                    )
+                    payload["reservedFutureQuestionFocuses"] = [
+                        plan.question_focus for plan in slot.same_passage_plans
+                        if plan.global_order > global_order
+                    ]
+            if (
                 request.domain == PracticeDomain.VOCABULARY
                 and request.mode
                 in {
@@ -4128,16 +4581,25 @@ class ReadingVocabularyGenerationService:
         try:
             raw = await asyncio.wait_for(
                 self.provider.call(
-                    type_name=self.TYPE_NAME,
+                    type_name=(
+                        self.READING_SOL_TYPE_NAME
+                        if request.domain == PracticeDomain.READING
+                        and settings.AI_READING_GENERATION_MODEL == "SOL"
+                        else self.TYPE_NAME
+                    ),
                     data=build_practice_generation_prompt(
                         request,
                         slot_payloads,
                         excluded_canonical_keys=accepted_keys_payload,
                         excluded_target_expressions=accepted_targets_payload,
+                        previous_questions=(
+                            [*request.previous_questions, *accepted.values()]
+                            if request.domain == PracticeDomain.READING else None
+                        ),
                     ),
                     schema=self._candidate_schema_for(request, slots),
                 ),
-                timeout=self.timeout_seconds,
+                timeout=self._generation_timeout_for(request),
             )
             payload = _PracticeCandidatePayload.model_validate(raw)
         except Exception as exc:
@@ -4176,8 +4638,17 @@ class ReadingVocabularyGenerationService:
                 normalized_item = item
                 if request.domain == PracticeDomain.READING:
                     reading_slot = slot_by_order[order]
+                    if (request.mode == ReadingMode.COMPREHENSION.value
+                            and request.complexity_band == 1
+                            and reading_slot.skill_tag == ReadingSkill.INFERENCE.value):
+                        self._validate_b1_inference_candidate_evidence(
+                            request, reading_slot, item,
+                        )
                     normalized_item = {
-                        **item,
+                        # Inference evidence is an internal generator contract. It is checked
+                        # above, then excluded from the public question DTO for every B1 slot.
+                        **{key: value for key, value in item.items()
+                           if key not in {"inferenceClueQuote", "unstatedInference"}},
                         # Difficulty labels are application-owned plan metadata. They do not prove
                         # that the generated question achieved the intended cognitive demand.
                         "difficulty": reading_slot.difficulty.value,
@@ -4299,11 +4770,41 @@ class ReadingVocabularyGenerationService:
                 )
         return failures
 
+    def _validate_b1_inference_candidate_evidence(
+        self,
+        request: PracticeGenerationRequest,
+        slot: _QuestionSlot,
+        item: dict[str, Any],
+    ) -> None:
+        clue = item.get("inferenceClueQuote")
+        inference = item.get("unstatedInference")
+        passage = slot.passage_text or ""
+        if (not isinstance(clue, str) or not clue.strip()
+                or clue.strip() not in passage
+                or not isinstance(inference, str) or not inference.strip()
+                or self._normalize_for_leak_check(inference)
+                in self._normalize_for_leak_check(passage)):
+            raise ValueError("B1 inference candidate lacks an unstated passage-grounded conclusion")
+        if slot.reading_plan is not None and (
+            clue.strip() != slot.reading_plan.clue_quote.strip()
+            or self._normalize_for_leak_check(inference)
+            != self._normalize_for_leak_check(slot.reading_plan.unstated_inference or "")
+        ):
+            raise ValueError("B1 inference candidate changed its private passage plan")
+        self._assert_language_lane(
+            request.learning_language, [inference],
+            reason="B1 candidate inference is not in learningLanguage",
+        )
+
     @staticmethod
     def _candidate_schema_for(
         request: PracticeGenerationRequest,
         slots: list[_QuestionSlot] | None = None,
     ) -> dict[str, Any]:
+        if (request.domain == PracticeDomain.READING
+                and request.mode == ReadingMode.COMPREHENSION.value
+                and request.complexity_band == 1):
+            return _B1_COMPREHENSION_CANDIDATE_SCHEMA
         if (
             request.domain == PracticeDomain.VOCABULARY
             and request.mode == VocabularyMode.CONTEXTUAL_CHOICE.value
@@ -4937,6 +5438,35 @@ class ReadingVocabularyGenerationService:
 
     @staticmethod
     def _reading_retry_feedback(reason: str) -> str:
+        if reason in {
+            "question stem presupposition is not supported by passage",
+            "stem evidence quote is missing from passage",
+        }:
+            return (
+                "REPAIR_READING_STEM_GROUNDING: keep the exact passage and fixed skill. "
+                "Remove or correct every stem premise not entailed by the passage; a locally "
+                "supported answer is insufficient. Cite exact passage text for the revised stem."
+            )
+        if reason in {
+            "question repeats a previous reading judgment",
+            "reading candidate repeats a normalized prompt on the same passage",
+        }:
+            return (
+                "REPAIR_READING_DUPLICATE: keep the exact passage and fixed skill, but ask a "
+                "materially different reading judgment from previousQuestions, not a paraphrase "
+                "of the same discourse relation or answer."
+            )
+        if reason == "inference question only requires direct retrieval":
+            return (
+                "REPAIR_READING_INFERENCE: keep the passage and fixed inference skill. "
+                "Require a supported inference from the visible context rather than copying "
+                "a fact explicitly stated in one sentence."
+            )
+        if reason == "structure question does not require discourse reasoning":
+            return (
+                "REPAIR_READING_STRUCTURE: keep the passage and fixed STRUCTURE skill. "
+                "Ask about the role or relationship of text units, not merely the cause of an event."
+            )
         if reason == "ambiguous single-choice item":
             return (
                 "REPAIR_READING_AMBIGUITY: keep the exact assigned passage. Rewrite only the "
@@ -5096,6 +5626,20 @@ class ReadingVocabularyGenerationService:
                 raise ValueError("reading vocabularyCandidates must not contain blanks")
             if any(value not in (question.passage_text or "") for value in normalized_candidates):
                 raise ValueError("reading vocabularyCandidates must use passage surface forms")
+            normalized_prompt = self._normalize_for_leak_check(
+                unicodedata.normalize("NFKC", question.prompt)
+            )
+            if any(
+                previous.passage_id == question.passage_id
+                and self._normalize_for_leak_check(
+                    unicodedata.normalize("NFKC", previous.prompt)
+                ) == normalized_prompt
+                for previous in [
+                    *request.previous_questions,
+                    *(item for order, item in accepted.items() if order != question.order),
+                ]
+            ):
+                raise ValueError("reading candidate repeats a normalized prompt on the same passage")
             return
 
         if question.passage_id is not None or question.passage_text is not None:
@@ -5478,7 +6022,15 @@ class ReadingVocabularyGenerationService:
         expected_answer_key: str,
     ) -> bool:
         return (
-            verdict.bestAnswerKey == expected_answer_key
+            (
+                not isinstance(verdict, _ReadingPracticeVerificationVerdict)
+                or (
+                    verdict.stemPresuppositionsSupported
+                    and verdict.distinctReadingTask
+                    and bool(verdict.stemEvidenceSpanIds)
+                )
+            )
+            and verdict.bestAnswerKey == expected_answer_key
             and not verdict.ambiguous
             and verdict.supported
             and verdict.modeFit
@@ -5546,7 +6098,7 @@ class ReadingVocabularyGenerationService:
                     ),
                     schema=_READING_DISTRACTOR_REPAIR_SCHEMA,
                 ),
-                timeout=self.timeout_seconds,
+                timeout=self._generation_timeout_for(request),
             )
             repair = _ReadingDistractorRepairPayload.model_validate(raw)
             repaired = self._reassemble_reading_distractors(question, repair)
@@ -5619,17 +6171,49 @@ class ReadingVocabularyGenerationService:
         self,
         request: PracticeGenerationRequest,
         questions: list[PracticeGeneratedQuestion],
+        *,
+        previous_reading_questions: list[PracticeGeneratedQuestion] | None = None,
     ) -> _SemanticVerificationOutcome:
         single_choice = [question for question in questions if question.question_type == PracticeQuestionType.SINGLE_CHOICE]
         if not single_choice:
             return _SemanticVerificationOutcome(failures={}, verdicts={})
+        def reading_demand(question: PracticeGeneratedQuestion) -> dict[str, object] | None:
+            demand = question_demand_recipe(
+                question.complexity_band,
+                mode=request.mode,
+                skill_tag=question.skill_tag,
+            ).question_demand
+            return demand.generation_payload() if demand is not None else None
+
         verification_input = [
             {
                 "order": question.order,
+                **({"passageId": question.passage_id} if request.domain == PracticeDomain.READING else {}),
                 "passageText": question.passage_text,
                 "prompt": question.prompt,
                 "options": [option.model_dump(by_alias=True) for option in question.options],
                 "skillTag": question.skill_tag,
+                **({"questionDemand": reading_demand(question)} if request.domain == PracticeDomain.READING else {}),
+                **({"structureJudgmentContract": structure_judgment_contract(
+                    band=5,
+                    position=(request.question_offset + question.order
+                              if request.question_offset + question.order <= 3
+                              else request.question_offset + question.order - 3),
+                    count=3 if request.question_offset + question.order <= 3 else 2,
+                )} if request.domain == PracticeDomain.READING
+                    and request.mode == ReadingMode.STRUCTURE.value
+                    and question.complexity_band == 5 else {}),
+                **({
+                    "samePassageTaskPosition": (
+                        request.question_offset + question.order
+                        if request.question_offset + question.order <= 3
+                        else request.question_offset + question.order - 3
+                    ),
+                    "samePassageTaskCount": (
+                        3 if request.question_offset + question.order <= 3 else 2
+                    ),
+                } if request.domain == PracticeDomain.READING
+                    and request.mode == ReadingMode.STRUCTURE.value else {}),
                 **(
                     {
                         "reviewTarget": question.review_target,
@@ -5648,6 +6232,46 @@ class ReadingVocabularyGenerationService:
         expected_by_order = {
             question.order: question.correct_answer[0] for question in single_choice
         }
+        question_by_order = {question.order: question for question in single_choice}
+        evidence_spans: list[dict[str, str]] = []
+        span_by_id: dict[str, tuple[str, str]] = {}
+        if request.domain == PracticeDomain.READING:
+            passage_by_id: dict[str, str] = {}
+            for question in single_choice:
+                passage_id = question.passage_id or ""
+                passage_text = question.passage_text or ""
+                if (not passage_id or not passage_text
+                        or (passage_id in passage_by_id
+                            and passage_by_id[passage_id] != passage_text)):
+                    raise ValueError("Reading verifier passage binding is invalid")
+                passage_by_id[passage_id] = passage_text
+            for passage_id, passage_text in passage_by_id.items():
+                span_number = 0
+                for match in re.finditer(r"[^。！？.!?\r\n]+[。！？.!?]?", passage_text):
+                    exact_text = match.group().strip()
+                    if not exact_text:
+                        continue
+                    span_number += 1
+                    span_id = f"{passage_id}:s{span_number}"
+                    evidence_spans.append({
+                        "id": span_id, "passageId": passage_id, "text": exact_text,
+                    })
+                    span_by_id[span_id] = (passage_id, exact_text)
+            if not evidence_spans:
+                raise ValueError("Reading verifier passage lacks evidence spans")
+        verification_schema = (
+            _STRUCTURE_VERIFICATION_SCHEMA
+            if request.domain == PracticeDomain.READING
+            and request.mode == ReadingMode.STRUCTURE.value
+            else _READING_VERIFICATION_SCHEMA
+            if request.domain == PracticeDomain.READING
+            else _PRACTICE_VERIFICATION_SCHEMA
+        )
+        if request.domain == PracticeDomain.READING:
+            verification_schema = copy.deepcopy(verification_schema)
+            verification_schema["properties"]["verdicts"]["items"]["properties"][
+                "stemEvidenceSpanIds"
+            ]["items"]["enum"] = list(span_by_id)
 
         last_error: Exception | None = None
         for verification_attempt in (1, 2, 3):
@@ -5655,19 +6279,46 @@ class ReadingVocabularyGenerationService:
                 raw = await asyncio.wait_for(
                     self.provider.call(
                         type_name=self.VERIFICATION_TYPE_NAME,
-                        data=build_practice_verification_prompt(request, verification_input),
-                        schema=_PRACTICE_VERIFICATION_SCHEMA,
+                        data=build_practice_verification_prompt(
+                            request,
+                            verification_input,
+                            previous_reading_questions=[
+                                *request.previous_questions,
+                                *(previous_reading_questions or []),
+                            ] if request.domain == PracticeDomain.READING else None,
+                            reading_evidence_spans=evidence_spans,
+                        ),
+                        schema=verification_schema,
                     ),
                     timeout=self.timeout_seconds,
                 )
-                payload = _PracticeVerificationPayload.model_validate(raw)
-                verdict_by_order = {verdict.order: verdict for verdict in payload.verdicts}
-                if set(verdict_by_order) != set(expected_by_order):
+                if request.domain == PracticeDomain.READING:
+                    verdicts = cast(
+                        list[_PracticeVerificationVerdict],
+                        (_StructurePracticeVerificationPayload.model_validate(raw).verdicts
+                         if request.mode == ReadingMode.STRUCTURE.value
+                         else _ReadingPracticeVerificationPayload.model_validate(raw).verdicts),
+                    )
+                else:
+                    verdicts = _PracticeVerificationPayload.model_validate(raw).verdicts
+                verdict_by_order = {verdict.order: verdict for verdict in verdicts}
+                if len(verdicts) != len(expected_by_order) or set(verdict_by_order) != set(expected_by_order):
                     raise ValueError("semantic verifier verdict coverage mismatch")
+                if request.domain == PracticeDomain.READING:
+                    for order, verdict in verdict_by_order.items():
+                        assert isinstance(verdict, _ReadingPracticeVerificationVerdict)
+                        selected = verdict.stemEvidenceSpanIds
+                        passage_id = question_by_order[order].passage_id
+                        if (not selected or len(selected) != len(set(selected))
+                                or any(span_by_id.get(span_id, (None,))[0] != passage_id
+                                       for span_id in selected)):
+                            # A verifier binding failure is not a question-quality rejection.
+                            raise ValueError("semantic verifier evidence span binding mismatch")
                 failures: dict[int, str] = {}
                 for order, expected_key in expected_by_order.items():
                     verdict = verdict_by_order[order]
                     if request.domain == PracticeDomain.READING:
+                        assert isinstance(verdict, _ReadingPracticeVerificationVerdict)
                         assessment = normalize_reading_semantic_assessment(
                             best_answer_key=verdict.bestAnswerKey,
                             ambiguous=verdict.ambiguous,
@@ -5675,13 +6326,30 @@ class ReadingVocabularyGenerationService:
                             mode_fit=verdict.modeFit,
                             answer_leakage=verdict.answerLeakage,
                             distractors_plausible=verdict.distractorsPlausible,
+                            stem_presuppositions_supported=verdict.stemPresuppositionsSupported,
+                            distinct_reading_task=verdict.distinctReadingTask,
+                            reading_operation=verdict.readingOperation,
                         )
                         decision = ReadingSemanticQualityPolicy().decide(
                             assessment=assessment,
-                            context=ReadingAcceptanceContext(expected_answer_key=expected_key),
+                            context=ReadingAcceptanceContext(
+                                expected_answer_key=expected_key,
+                                skill_tag=question_by_order[order].skill_tag,
+                                mode=request.mode,
+                                same_passage_task_position=(
+                                    request.question_offset + order
+                                    if request.question_offset + order <= 3
+                                    else request.question_offset + order - 3
+                                ) if request.mode == ReadingMode.STRUCTURE.value else None,
+                            ),
                         )
                         if decision.action != "ACCEPT":
                             failures[order] = decision.reason
+                        elif (request.mode == ReadingMode.STRUCTURE.value
+                              and isinstance(verdict, _StructurePracticeVerificationVerdict)
+                              and request.question_offset + order not in {3, 5}
+                              and not verdict.boundedStructureScope):
+                            failures[order] = "structure question consumes future passage tasks"
                     else:
                         if (
                             request.mode == VocabularyMode.MEANING_RELATION.value
