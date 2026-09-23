@@ -80,6 +80,21 @@ def _canonical(value: Any) -> str | None:
     return str(value).strip()
 
 
+def _equal_text(expected: Any, actual: Any) -> bool:
+    """Missing values never count as a successful extraction."""
+    return expected is not None and actual is not None and _canonical(expected) == _canonical(actual)
+
+
+def _equal_decimal(expected: Any, actual: Any) -> bool:
+    """Compare monetary values numerically while rejecting null==null."""
+    if expected is None or actual is None:
+        return False
+    try:
+        return Decimal(str(expected)) == Decimal(str(actual))
+    except Exception:
+        return False
+
+
 def _match(
     truth: list[dict[str, Any]], predictions: list[dict[str, Any]]
 ) -> tuple[list[tuple[int, int, float]], list[int], list[int]]:
@@ -93,16 +108,16 @@ def _match(
             else:
                 compared = (
                     ("storeName", "store_name"),
-                    ("originalAmount", "original_amount"),
+                    ("bookAmount", "book_amount"),
                     ("currency", "detected_currency_code"),
                     ("transactionDate", "transaction_date"),
                 )
-                score = sum(
-                    _canonical(expected.get(expected_key))
-                    == _canonical(actual.get(actual_key))
+                scored = [
+                    _equal_text(expected.get(expected_key), actual.get(actual_key))
                     for expected_key, actual_key in compared
                     if expected.get(expected_key) is not None
-                ) / 4
+                ]
+                score = sum(scored) / len(scored) if scored else 0
             if score > 0:
                 pairs.append((score, truth_index, prediction_index))
     matched_truth: set[int] = set()
@@ -194,13 +209,29 @@ async def _evaluate(image: dict[str, Any], semaphore: asyncio.Semaphore) -> dict
     for truth_index, prediction_index, score in matches:
         expected = truth[truth_index]
         actual = predictions[prediction_index]
+        expected_purchase_total = (
+            expected["purchaseTotal"]
+            if "purchaseTotal" in expected
+            else expected.get("originalAmount")
+        )
+        expected_book_amount = (
+            expected["bookAmount"]
+            if "bookAmount" in expected
+            else expected.get("originalAmount")
+        )
         fields = {
-            "amount": _canonical(expected.get("originalAmount"))
-            == _canonical(actual.get("original_amount")),
-            "currency": _canonical(expected.get("currency"))
-            == _canonical(actual.get("detected_currency_code")),
-            "date": _canonical(expected.get("transactionDate"))
-            == _canonical(actual.get("transaction_date")),
+            "purchaseTotal": _equal_decimal(
+                expected_purchase_total, actual.get("purchase_total")
+            ),
+            "bookAmount": _equal_decimal(
+                expected_book_amount, actual.get("book_amount")
+            ),
+            "currency": _equal_text(
+                expected.get("currency"), actual.get("detected_currency_code")
+            ),
+            "date": _equal_text(
+                expected.get("transactionDate"), actual.get("transaction_date")
+            ),
         }
         critical_ok = all(fields.values())
         if actual.get("status") == "READY" and not critical_ok:
@@ -250,8 +281,12 @@ def _metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
             "numerator": sum(item["expectedReceiptCount"] == item["actualReceiptCount"] for item in real),
             "denominator": len(real),
         },
-        "amountAccuracy": {
-            "numerator": sum(row["fieldMatches"]["amount"] for row in field_rows),
+        "purchaseTotalAccuracy": {
+            "numerator": sum(row["fieldMatches"]["purchaseTotal"] for row in field_rows),
+            "denominator": len(field_rows),
+        },
+        "bookAmountAccuracy": {
+            "numerator": sum(row["fieldMatches"]["bookAmount"] for row in field_rows),
             "denominator": len(field_rows),
         },
         "currencyAccuracy": {

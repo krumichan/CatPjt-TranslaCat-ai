@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import time
 from typing import Any
 
 from fastapi import HTTPException
@@ -97,6 +98,23 @@ class OpenAIService:
         mime_type: str,
         schema: dict | None = None,
     ) -> Any:
+        result = await self.call_with_image_with_metadata(
+            type_name=type_name,
+            prompt=prompt,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            schema=schema,
+        )
+        return result.data
+
+    async def call_with_image_with_metadata(
+        self,
+        type_name: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        schema: dict | None = None,
+    ) -> StructuredGenerationResult:
         encoded = base64.b64encode(image_bytes).decode("ascii")
         image_url = f"data:{mime_type};base64,{encoded}"
         user_input = [
@@ -113,12 +131,11 @@ class OpenAIService:
                 ],
             }
         ]
-        result = await self._create_response(
+        return await self._create_response(
             type_name=type_name,
             user_input=user_input,
             schema=schema,
         )
-        return result.data
 
     async def translate_chat_message(
         self,
@@ -209,6 +226,7 @@ class OpenAIService:
             verbosity=policy.verbosity,
         )
 
+        started = time.perf_counter()
         try:
             # Reading Sol/high may legitimately take longer than the generic
             # Luna deadline. The service's 80s boundary remains authoritative.
@@ -227,12 +245,23 @@ class OpenAIService:
             data = decode_response(response, structured=schema is not None)
 
             usage = getattr(response, "usage", None)
+            incomplete = getattr(response, "incomplete_details", None)
+            incomplete_reason = (
+                incomplete.get("reason")
+                if isinstance(incomplete, dict)
+                else getattr(incomplete, "reason", None)
+            )
             return StructuredGenerationResult(
                 data=data,
                 input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
                 output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
                 provider="openai",
                 model=str(getattr(response, "model", None) or model),
+                status=str(getattr(response, "status", None) or "completed"),
+                incomplete_reason=(
+                    str(incomplete_reason) if incomplete_reason is not None else None
+                ),
+                latency_ms=round((time.perf_counter() - started) * 1000),
             )
         except Exception as exc:
             # Never log prompt data or provider raw response bodies here.

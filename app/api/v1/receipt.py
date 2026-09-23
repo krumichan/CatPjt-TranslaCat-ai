@@ -5,7 +5,8 @@ from pydantic import ValidationError
 
 from app.api.dependencies import get_receipt_analysis_service
 from app.features.receipt.service import ReceiptAnalysisService
-from app.schemas.receipt import ReceiptAnalysisOptions, ReceiptAnalysisResponse
+from app.features.receipt.runtime_identity import get_receipt_runtime_identity
+from app.schemas.receipt import ReceiptAnalysisOptions, ReceiptAnalysisResponse, ReceiptRuntimeIdentity
 
 router = APIRouter(
     prefix="/account-book/receipts",
@@ -13,14 +14,24 @@ router = APIRouter(
 )
 
 
+@router.get("/runtime-identity", response_model=ReceiptRuntimeIdentity)
+async def receipt_runtime_identity() -> ReceiptRuntimeIdentity:
+    return get_receipt_runtime_identity()
+
+
 @router.post("/analyze", response_model=ReceiptAnalysisResponse)
 async def analyze_receipt(
     file: UploadFile = File(...),
     options: str | None = Form(None),
+    trace_id: str | None = Form(None),
     service: ReceiptAnalysisService = Depends(get_receipt_analysis_service),
 ) -> ReceiptAnalysisResponse:
     parsed_options = _parse_options(options)
-    return await service.analyze(file=file, options=parsed_options)
+    return await service.analyze(
+        file=file,
+        options=parsed_options,
+        trace_id=trace_id,
+    )
 
 
 def _parse_options(options: str | None) -> ReceiptAnalysisOptions:

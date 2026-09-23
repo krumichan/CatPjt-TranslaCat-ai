@@ -1,14 +1,17 @@
 import asyncio
 import io
 import json
+import time
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import UploadFile
+from PIL import Image
 from starlette.datastructures import Headers
 
+from app.ai.ports import StructuredGenerationResult, TextGenerationProvider
 from app.core.config import settings
 from app.features.receipt.parser import (
     extract_receipt_candidates,
@@ -127,6 +130,23 @@ def test_ambiguous_date_uses_explicit_source_evidence_only():
     assert transaction_date.isoformat() == "2026-03-04"
 
 
+def test_turkish_fiscal_date_uses_matching_currency_and_language_locale_evidence():
+    item = receipt(
+        transaction_date=None,
+        source_date="06-11-2023",
+        date_order=None,
+        date_order_evidence=None,
+        detected_currency_code="TRY",
+        detected_language="tr",
+    )
+
+    result = validate(item).receipts[0]
+
+    assert result.transaction_date is not None
+    assert result.transaction_date.isoformat() == "2023-11-06"
+    assert "DATE_ORDER_FROM_TURKISH_LOCALE" in result.warnings
+
+
 def test_single_receipt_decimal_json_contract():
     response = validate(receipt())
     assert response.receipt_count == 1
@@ -217,6 +237,39 @@ def test_cash_tendered_is_not_double_counted_as_the_cash_allocation():
     assert item.book_amount == Decimal("9.00")
     assert item.status == ReceiptStatus.READY
     assert "CASH_TENDERED_NOT_DOUBLE_COUNTED" in item.warnings
+
+
+def test_cash_tendered_without_change_keeps_a_reconciled_cash_payment():
+    item = validate(
+        receipt(
+            purchase_total="70.00",
+            original_amount=None,
+            payment_breakdown=[{"payment_type": "CASH", "amount": "70.00"}],
+            cash_tendered="70.00",
+            change=None,
+        )
+    ).receipts[0]
+    assert item.book_amount == Decimal("70.00")
+    assert item.original_amount == Decimal("70.00")
+    assert item.status == ReceiptStatus.READY
+    assert "CASH_TENDERED_DUPLICATE_WITHOUT_CHANGE" in item.warnings
+
+
+def test_zero_cash_tendered_is_normalized_to_missing_without_rejecting_the_batch():
+    response = validate(
+        receipt(
+            purchase_total="12.34",
+            original_amount=None,
+            payment_breakdown=[],
+            cash_tendered="0",
+            change="0",
+        ),
+        receipt(purchase_total="9.99", original_amount=None),
+    )
+    assert response.receipt_count == 2
+    assert response.receipts[0].cash_tendered is None
+    assert response.receipts[0].change == Decimal("0")
+    assert response.receipts[0].book_amount == Decimal("12.34")
 
 
 def test_unlabelled_exact_card_duplicate_is_collapsed_only_to_reconcile_total():
@@ -415,26 +468,37 @@ def test_no_hallucinated_fx_or_ocr_fields_in_contract():
     assert amount_schema["type"] == "STRING"
 
 
-def test_category_must_be_exact_existing_candidate():
-    item = validate(receipt(category_name="식비")).receipts[0]
-    assert item.category_name is None
-    assert "CATEGORY_NOT_IN_ACCOUNT_BOOK" in item.warnings
-    assert (
-        validate(receipt(category_name="食費"), categories=["食費"])
-        .receipts[0]
-        .category_name
-        == "食費"
-    )
+def test_category_reuses_existing_and_preserves_safe_new_suggestion():
+    existing = validate(
+        receipt(category_name="食費", category_source="EXISTING"),
+        categories=["食費"],
+    ).receipts[0]
+    assert existing.category_name == "食費"
+    assert existing.category_source == "EXISTING"
+
+    suggested = validate(
+        receipt(
+            category_name="반려동물",
+            category_source="NEW",
+            category_reason="반려동물 용품이 확인됨",
+        )
+    ).receipts[0]
+    assert suggested.category_name == "반려동물"
+    assert suggested.category_source == "NEW"
+    assert "CATEGORY_NEW_SUGGESTION" in suggested.warnings
 
 
-def test_no_category_candidates_does_not_invent_category():
+def test_no_category_candidates_uses_stable_fallback_instead_of_blank():
     response = validate_response(
-        {"receipts": [receipt()]},
+        {"receipts": [receipt(category_name=None)]},
         ReceiptAnalysisOptions(),
         ocr_engine="vision",
         used_ai=True,
     )
-    assert response.receipts[0].category_name is None
+    item = response.receipts[0]
+    assert item.category_name == "기타"
+    assert item.category_source == "FALLBACK"
+    assert "CATEGORY_FALLBACK_USED" in item.warnings
 
 
 @pytest.mark.parametrize(
@@ -504,12 +568,683 @@ def test_vision_success_does_not_run_ocr():
     ocr.extract_document_from_upload.assert_not_awaited()
 
 
+def test_vision_debug_trace_preserves_provider_and_validation_stages(tmp_path, monkeypatch):
+    class MetadataProvider:
+        async def call_with_image_with_metadata(self, **_kwargs):
+            return StructuredGenerationResult(
+                data={"receipts": [receipt()]},
+                input_tokens=321,
+                output_tokens=123,
+                provider="openai",
+                model="gpt-5.6-luna",
+                status="completed",
+                latency_ms=456,
+            )
+
+    monkeypatch.setenv("RECEIPT_DEBUG_TRACE_DIR", str(tmp_path))
+    svc = ReceiptAnalysisService(
+        OCRService(), cast(TextGenerationProvider, MetadataProvider())
+    )
+    response = asyncio.run(
+        svc.analyze(
+            upload(),
+            ReceiptAnalysisOptions(analysis_mode=ReceiptAnalysisMode.VISION_ONLY),
+            trace_id="receipt-trace-test",
+        )
+    )
+    payload = json.loads((tmp_path / "receipt-trace-test.json").read_text("utf-8"))
+    assert response.analysis_trace_id == "receipt-trace-test"
+    assert payload["input"]["sha256"]
+    assert payload["providerCallCount"] == 1
+    assert payload["providerAttempts"][0]["model"] == "gpt-5.6-luna"
+    assert payload["providerAttempts"][0]["candidateCount"] == 1
+    assert payload["validation"]["candidateCount"] == 1
+    assert payload["request"]["imageDetail"] == "high"
+    assert response.runtime_identity is not None
+    assert payload["runtimeIdentity"]["run_id"] == response.runtime_identity.run_id
+    assert payload["runtimeIdentity"]["source_fingerprint"] == response.runtime_identity.source_fingerprint
+    assert payload["runtimeIdentity"]["process_id"] == response.runtime_identity.process_id
+
+
+def test_incomplete_bounded_receipt_is_recovered_from_an_automatic_source_crop():
+    class RecoveryProvider:
+        def __init__(self):
+            self.calls = []
+
+        async def call_with_image(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return {
+                    "receipts": [
+                        receipt(
+                            title="LAWSON 船堀店",
+                            store_name="LAWSON",
+                            original_amount=None,
+                            purchase_total=None,
+                            detected_currency_code="JPY",
+                            transaction_date="2026-09-19",
+                            bounding_box=[0.75, 0.1, 1.0, 0.95],
+                            status="NEEDS_REVIEW",
+                        )
+                    ]
+                }
+            return {
+                "receipts": [
+                    receipt(
+                        title="LAWSON 船堀店",
+                        store_name="LAWSON",
+                        original_amount=None,
+                        purchase_total="1680",
+                        detected_currency_code="JPY",
+                        transaction_date="2026-09-19",
+                        status="READY",
+                    )
+                ]
+            }
+
+    encoded = io.BytesIO()
+    Image.new("RGB", (1200, 1600), "white").save(encoded, format="JPEG")
+    image = UploadFile(
+        filename="multi.jpg",
+        file=io.BytesIO(encoded.getvalue()),
+        headers=Headers({"content-type": "image/jpeg"}),
+    )
+    provider = RecoveryProvider()
+    response = asyncio.run(
+        ReceiptAnalysisService(
+            OCRService(), cast(TextGenerationProvider, provider)
+        ).analyze(
+            image,
+            ReceiptAnalysisOptions(
+                analysis_mode=ReceiptAnalysisMode.VISION_ONLY,
+                category_candidates=["Food"],
+            ),
+        )
+    )
+    assert len(provider.calls) == 2
+    assert len(provider.calls[1]["image_bytes"]) < len(encoded.getvalue())
+    assert provider.calls[1]["schema"] == _RECEIPT_ANALYSIS_SCHEMA
+    assert response.receipt_count == 1
+    assert response.receipts[0].purchase_total == Decimal("1680")
+    assert response.receipts[0].book_amount == Decimal("1680")
+    assert "REGION_RECOVERY_USED" in response.receipts[0].warnings
+    assert "VISION_REGION_RECOVERY_USED" in response.warnings
+
+
+def test_identical_identity_strings_from_crop_still_require_source_review():
+    class SameWrongIdentityProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def call_with_image(self, **_kwargs):
+            self.calls += 1
+            common = receipt(
+                title="AEON フードスタイル船橋店",
+                store_name="AEON",
+                branch_name="フードスタイル船橋店",
+                merchant_evidence="AEON" if self.calls == 1 else "株式会社イオンフードスタイル",
+                branch_evidence="フードスタイル船橋店",
+                purchase_total="6238",
+                detected_currency_code="JPY",
+                transaction_date="2026-09-21",
+                bounding_box=[0.54, 0.30, 0.79, 0.94],
+            )
+            return {"receipts": [common]}
+
+    encoded = io.BytesIO()
+    Image.new("RGB", (1600, 1200), "white").save(encoded, format="JPEG")
+    provider = SameWrongIdentityProvider()
+    response = asyncio.run(
+        ReceiptAnalysisService(
+            OCRService(), cast(TextGenerationProvider, provider)
+        ).analyze(
+            upload(encoded.getvalue()),
+            ReceiptAnalysisOptions(
+                analysis_mode=ReceiptAnalysisMode.VISION_ONLY,
+                category_candidates=["Food"],
+            ),
+        )
+    )
+
+    assert provider.calls == 2
+    item = response.receipts[0]
+    assert item.status == ReceiptStatus.NEEDS_REVIEW
+    assert item.identity_verification == "SOURCE_REGION_MODEL_REREAD"
+    assert item.identity_source_box == pytest.approx([0.54, 0.30, 0.79, 0.4792])
+    assert "IDENTITY_SOURCE_REVIEW_REQUIRED" in item.warnings
+    assert "REGION_RECOVERY_USED" in item.warnings
+
+
+def test_two_incomplete_regions_recover_in_parallel_without_rereading_healthy_candidate():
+    class ParallelRecoveryProvider:
+        def __init__(self):
+            self.calls = 0
+            self.active_recoveries = 0
+            self.max_active_recoveries = 0
+
+        async def call_with_image(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "receipts": [
+                        receipt(
+                            title="A",
+                            store_name="A",
+                            purchase_total=None,
+                            original_amount=None,
+                            bounding_box=[0.02, 0.02, 0.31, 0.98],
+                            status="NEEDS_REVIEW",
+                        ),
+                        receipt(
+                            title="B",
+                            store_name="B",
+                            purchase_total=None,
+                            original_amount=None,
+                            bounding_box=[0.35, 0.02, 0.64, 0.98],
+                            status="NEEDS_REVIEW",
+                        ),
+                        receipt(
+                            title="Healthy",
+                            store_name="Healthy",
+                            merchant_evidence="Healthy",
+                            purchase_total="30.00",
+                            original_amount=None,
+                            bounding_box=[0.68, 0.02, 0.98, 0.98],
+                        ),
+                    ]
+                }
+            self.active_recoveries += 1
+            self.max_active_recoveries = max(
+                self.max_active_recoveries, self.active_recoveries
+            )
+            try:
+                await asyncio.sleep(0.05)
+                amount = "10.00" if self.calls == 2 else "20.00"
+                return {"receipts": [receipt(purchase_total=amount, original_amount=None)]}
+            finally:
+                self.active_recoveries -= 1
+
+    encoded = io.BytesIO()
+    Image.new("RGB", (1600, 1200), "white").save(encoded, format="JPEG")
+    provider = ParallelRecoveryProvider()
+    response = asyncio.run(
+        ReceiptAnalysisService(
+            OCRService(), cast(TextGenerationProvider, provider)
+        ).analyze(
+            upload(encoded.getvalue()),
+            ReceiptAnalysisOptions(
+                analysis_mode=ReceiptAnalysisMode.VISION_ONLY,
+                category_candidates=["Food"],
+            ),
+        )
+    )
+
+    assert provider.calls == 3
+    assert provider.max_active_recoveries == 2
+    assert response.receipt_count == 3
+    assert response.receipts[2].purchase_total == Decimal("30.00")
+
+
+def test_region_crop_accepts_camera_original_larger_than_the_ocr_decode_limit():
+    encoded = io.BytesIO()
+    width, height = 3024, 4032
+    Image.new("RGB", (width, height), "white").save(encoded, format="JPEG")
+    raw = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+        purchase_total="1680",
+        original_amount=None,
+        detected_currency_code="JPY",
+        transaction_date="2026-09-19",
+        bounding_box=[0.81, 0.49, 1.0, 0.93],
+    )
+
+    prepared = object.__new__(ReceiptAnalysisService)._prepare_recovery_regions(
+        [raw], encoded.getvalue(), "prompt", 4
+    )
+
+    assert width * height > settings.OCR_MAX_IMAGE_PIXELS
+    assert width * height <= settings.RECEIPT_VISION_MAX_IMAGE_PIXELS
+    assert len(prepared) == 1
+    assert prepared[0].plan.kind == "IDENTITY_REGION_RECOVERY"
+
+
+def test_shared_receipt_provider_limit_caps_concurrent_photo_calls_at_three():
+    class ConcurrencyProvider:
+        def __init__(self):
+            self.active = 0
+            self.maximum = 0
+
+        async def call_with_image(self, **_kwargs):
+            self.active += 1
+            self.maximum = max(self.maximum, self.active)
+            try:
+                await asyncio.sleep(0.04)
+                return {"receipts": [receipt()]}
+            finally:
+                self.active -= 1
+
+    async def exercise() -> int:
+        provider = ConcurrencyProvider()
+        services = [
+            ReceiptAnalysisService(OCRService(), cast(TextGenerationProvider, provider))
+            for _ in range(7)
+        ]
+        await asyncio.gather(*(
+            service.analyze(
+                upload(),
+                ReceiptAnalysisOptions(analysis_mode=ReceiptAnalysisMode.VISION_ONLY),
+            )
+            for service in services
+        ))
+        return provider.maximum
+
+    assert asyncio.run(exercise()) == 3
+
+
+def test_recovery_failure_preserves_other_candidates_and_releases_shared_permit():
+    class PartiallyFailingProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def call_with_image(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "receipts": [
+                        receipt(
+                            title="Broken",
+                            store_name="Broken",
+                            purchase_total=None,
+                            original_amount=None,
+                            bounding_box=[0.02, 0.02, 0.48, 0.98],
+                            status="NEEDS_REVIEW",
+                        ),
+                        receipt(
+                            title="Healthy",
+                            store_name="Healthy",
+                            purchase_total="30.00",
+                            original_amount=None,
+                            bounding_box=[0.52, 0.02, 0.98, 0.98],
+                        ),
+                    ]
+                }
+            raise TimeoutError("synthetic crop timeout")
+
+    encoded = io.BytesIO()
+    Image.new("RGB", (1400, 1000), "white").save(encoded, format="JPEG")
+    provider = PartiallyFailingProvider()
+    response = asyncio.run(
+        ReceiptAnalysisService(
+            OCRService(), cast(TextGenerationProvider, provider)
+        ).analyze(
+            upload(encoded.getvalue()),
+            ReceiptAnalysisOptions(analysis_mode=ReceiptAnalysisMode.VISION_ONLY),
+        )
+    )
+
+    assert response.receipt_count == 2
+    assert response.receipts[1].purchase_total == Decimal("30.00")
+    assert "REGION_RECOVERY_TIMEOUT" in response.receipts[0].warnings
+
+    follow_up, _, follow_up_provider = service()
+    assert run(follow_up, ReceiptAnalysisMode.VISION_ONLY).receipt_count == 1
+    follow_up_provider.call_with_image.assert_awaited_once()
+
+
+def test_total_deadline_skips_new_recovery_when_remaining_budget_is_too_small(monkeypatch):
+    class SlowInitialProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def call_with_image(self, **_kwargs):
+            self.calls += 1
+            await asyncio.sleep(0.03)
+            return {
+                "receipts": [
+                    receipt(
+                        purchase_total=None,
+                        original_amount=None,
+                        bounding_box=[0.05, 0.05, 0.95, 0.95],
+                        status="NEEDS_REVIEW",
+                    )
+                ]
+            }
+
+    monkeypatch.setattr(
+        settings, "RECEIPT_ANALYSIS_TOTAL_TIMEOUT_SECONDS", 0.08, raising=False
+    )
+    monkeypatch.setattr(
+        settings, "RECEIPT_VISION_RECOVERY_MIN_REMAINING_SECONDS", 0.06, raising=False
+    )
+    encoded = io.BytesIO()
+    Image.new("RGB", (1200, 1200), "white").save(encoded, format="JPEG")
+    provider = SlowInitialProvider()
+    started = time.perf_counter()
+    response = asyncio.run(
+        ReceiptAnalysisService(
+            OCRService(), cast(TextGenerationProvider, provider)
+        ).analyze(
+            upload(encoded.getvalue()),
+            ReceiptAnalysisOptions(analysis_mode=ReceiptAnalysisMode.VISION_ONLY),
+        )
+    )
+
+    assert time.perf_counter() - started < 0.08
+    assert provider.calls == 1
+    assert response.receipt_count == 1
+    assert "REGION_RECOVERY_SKIPPED_TIME_BUDGET" in response.receipts[0].warnings
+
+
+def test_recovery_plan_keeps_financial_completion_when_identity_also_needs_review():
+    raw = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+        original_amount=None,
+        purchase_total=None,
+        detected_currency_code=None,
+        transaction_date=None,
+        bounding_box=[0.75, 0.1, 1.0, 0.95],
+    )
+
+    plan = ReceiptAnalysisService._recovery_plan(raw)
+
+    assert plan is not None
+    assert plan.identity_needed is True
+    assert plan.financial_needed is True
+    assert plan.kind == "INCOMPLETE_REGION_RECOVERY"
+
+
+def test_same_receipt_financial_recovery_survives_identity_conflict():
+    target = receipt(
+        title="LAWSON 船橋店",
+        store_name="LAWSON",
+        branch_name="船橋店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船橋店",
+        purchase_total=None,
+        original_amount=None,
+        detected_currency_code=None,
+        transaction_date=None,
+    )
+    recovery = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+        purchase_total="1680",
+        original_amount="1680",
+        detected_currency_code="JPY",
+        transaction_date="2026-09-19",
+    )
+
+    changed = ReceiptAnalysisService._merge_missing_receipt_fields(
+        target,
+        recovery,
+        same_receipt_region=True,
+        merge_identity=True,
+        merge_financial=True,
+    )
+
+    assert changed is True
+    assert target["branch_name"] == "船橋店"
+    assert target["identity_verification"] == "SOURCE_REGION_CONFLICT"
+    assert target["purchase_total"] == "1680"
+    assert target["original_amount"] == "1680"
+    assert target["detected_currency_code"] == "JPY"
+    assert target["transaction_date"] == "2026-09-19"
+    assert target["financial_recovery_provenance"] == "SAME_RECEIPT_SOURCE_REGION"
+
+
+def test_unproven_recovery_does_not_merge_finance_from_another_receipt():
+    target = receipt(
+        title="LAWSON",
+        store_name="LAWSON",
+        merchant_evidence="LAWSON",
+        purchase_total=None,
+        original_amount=None,
+    )
+    recovery = receipt(
+        title="Other shop",
+        store_name="Other shop",
+        merchant_evidence="Other shop",
+        purchase_total="9999",
+        original_amount="9999",
+    )
+
+    changed = ReceiptAnalysisService._merge_missing_receipt_fields(
+        target,
+        recovery,
+        same_receipt_region=False,
+        merge_identity=True,
+        merge_financial=True,
+    )
+
+    assert changed is True
+    assert target["purchase_total"] is None
+    assert target["original_amount"] is None
+    assert target["identity_verification"] == "SOURCE_REGION_CONFLICT"
+
+
+def test_model_evidence_string_agreement_is_not_image_verification():
+    item = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+    )
+
+    ReceiptAnalysisService._annotate_identity_verification(item)
+
+    assert item["identity_verification"] == "MODEL_TEXT_SELF_CONSISTENT"
+
+
+def test_visibly_truncated_merchant_identity_is_recovered_from_source_crop():
+    target = receipt(
+        title="LAWS... 船堀店",
+        store_name="LAWS...",
+        bounding_box=[0.75, 0.1, 1.0, 0.95],
+    )
+    recovery = receipt(
+        title="LAWSON 船堀店", store_name="LAWSON", merchant_evidence="LAWSON"
+    )
+    assert ReceiptAnalysisService._needs_region_recovery(target) is True
+    assert ReceiptAnalysisService._merge_missing_receipt_fields(
+        target, recovery, same_receipt_region=True,
+        merge_identity=True, merge_financial=False,
+    ) is True
+    assert target["title"] == "LAWSON 船堀店"
+    assert target["store_name"] == "LAWSON"
+
+
+def test_merchant_identity_is_replaced_by_literal_source_crop_without_confidence_ranking():
+    target = receipt(
+        title="Wrong merchant 船堀店",
+        store_name="Wrong merchant",
+        branch_name="船堀店",
+        confidence=0.72,
+        bounding_box=[0.75, 0.1, 1.0, 0.95],
+    )
+    recovery = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+        confidence=0.95,
+    )
+
+    assert ReceiptAnalysisService._needs_region_recovery(target) is True
+    assert ReceiptAnalysisService._merge_missing_receipt_fields(
+        target, recovery, same_receipt_region=True,
+        merge_identity=True, merge_financial=False,
+    ) is True
+    assert target["title"] == "LAWSON 船堀店"
+    assert target["store_name"] == "LAWSON"
+    assert target["confidence"] == 0.72
+
+
+def test_high_confidence_wrong_branch_is_replaced_by_literal_crop_evidence_only():
+    target = receipt(
+        title="どらっぐ ぱぱす 船橋店",
+        store_name="どらっぐ ぱぱす",
+        branch_name="船橋店",
+        merchant_evidence="どらっぐ ぱぱす",
+        branch_evidence="判読不能",
+        confidence=0.99,
+        bounding_box=[0.05, 0.05, 0.45, 0.95],
+        purchase_total="7089",
+        payment_breakdown=[
+            {"payment_type": "LOYALTY_POINTS", "amount": "2069", "evidence": "ポイント支払", "duplicate_group": None},
+            {"payment_type": "CREDIT_CARD", "amount": "5020", "evidence": "クレジット", "duplicate_group": None},
+        ],
+    )
+    recovery = receipt(
+        title="どらっぐ ぱぱす 船堀店",
+        store_name="どらっぐ ぱぱす",
+        branch_name="船堀店",
+        merchant_evidence="どらっぐ ぱぱす",
+        branch_evidence="船堀店",
+        confidence=0.70,
+        purchase_total="9999",
+        payment_breakdown=[],
+    )
+
+    assert ReceiptAnalysisService._needs_region_recovery(target) is True
+    assert ReceiptAnalysisService._merge_missing_receipt_fields(
+        target, recovery, same_receipt_region=True,
+        merge_identity=True, merge_financial=False,
+    ) is True
+    assert target["title"] == "どらっぐ ぱぱす 船堀店"
+    assert target["branch_name"] == "船堀店"
+    assert target["purchase_total"] == "7089"
+    assert target["payment_breakdown"][1]["amount"] == "5020"
+
+
+def test_validation_preserves_identity_evidence_and_source_region():
+    raw = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+        identity_source_box=[0.8, 0.3, 1.0, 0.55],
+        identity_verification="SOURCE_REGION_CONFIRMED",
+    )
+
+    item = validate(raw).receipts[0]
+
+    assert item.merchant_evidence == "LAWSON"
+    assert item.branch_evidence == "船堀店"
+    assert item.identity_source_box == [0.8, 0.3, 1.0, 0.55]
+    assert item.identity_verification == "SOURCE_REGION_CONFIRMED"
+
+
+def test_source_crop_cannot_truncate_a_supported_complete_branch_literal():
+    target = receipt(
+        title="ROYAL KITCHENS! 千葉県千葉市美浜区中瀬2-1",
+        store_name="ROYAL KITCHENS!",
+        branch_name="千葉県千葉市美浜区中瀬2-1",
+        merchant_evidence="ROYAL KITCHENS!",
+        branch_evidence="千葉県千葉市美浜区中瀬2-1",
+    )
+    recovery = receipt(
+        title="ROYAL KITCHENS! 千葉市美浜区中瀬2-1",
+        store_name="ROYAL KITCHENS!",
+        branch_name="千葉市美浜区中瀬2-1",
+        merchant_evidence="ROYAL KITCHENS!",
+        branch_evidence="千葉市美浜区中瀬2-1",
+    )
+
+    assert ReceiptAnalysisService._merge_missing_receipt_fields(
+        target, recovery, same_receipt_region=True,
+        merge_identity=True, merge_financial=False,
+    ) is True
+    assert target["title"] == "ROYAL KITCHENS! 千葉県千葉市美浜区中瀬2-1"
+    assert target["branch_name"] == "千葉県千葉市美浜区中瀬2-1"
+    assert target["branch_evidence"] == "千葉県千葉市美浜区中瀬2-1"
+    assert target["identity_verification"] == "SOURCE_REGION_CONFLICT"
+    assert target["status"] == "NEEDS_REVIEW"
+    assert "IDENTITY_REGION_CONFLICT" in target["warnings"]
+
+
+def test_two_source_supported_but_conflicting_branch_observations_do_not_rank_by_order():
+    target = receipt(
+        title="LAWSON 船堀店",
+        store_name="LAWSON",
+        branch_name="船堀店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船堀店",
+        confidence=0.51,
+    )
+    recovery = receipt(
+        title="LAWSON 船橋店",
+        store_name="LAWSON",
+        branch_name="船橋店",
+        merchant_evidence="LAWSON",
+        branch_evidence="船橋店",
+        confidence=0.99,
+    )
+
+    assert ReceiptAnalysisService._merge_missing_receipt_fields(
+        target, recovery, same_receipt_region=True,
+        merge_identity=True, merge_financial=False,
+    ) is True
+    assert target["title"] == "LAWSON 船堀店"
+    assert target["branch_name"] == "船堀店"
+    assert target["identity_verification"] == "SOURCE_REGION_CONFLICT"
+    assert "IDENTITY_REGION_CONFLICT" in target["warnings"]
+
+
+def test_identity_recovery_without_literal_evidence_is_rejected_and_financial_facts_stay_unchanged():
+    target = receipt(
+        title="LAWSON 船橋店", store_name="LAWSON", branch_name="船橋店",
+        merchant_evidence="LAWSON", branch_evidence="船橋店", confidence=0.99,
+        bounding_box=[0.05, 0.05, 0.45, 0.95], purchase_total="1680",
+    )
+    recovery = receipt(
+        title="LAWSON 船堀店", store_name="LAWSON", branch_name="船堀店",
+        merchant_evidence="different header", branch_evidence="different branch",
+        confidence=1.0, purchase_total="1",
+    )
+
+    assert ReceiptAnalysisService._merge_missing_receipt_fields(
+        target, recovery, same_receipt_region=True,
+        merge_identity=True, merge_financial=False,
+    ) is True
+    assert target["title"] == "LAWSON 船橋店"
+    assert target["purchase_total"] == "1680"
+    assert target["identity_verification"] == "SOURCE_REGION_CONFLICT"
+    assert target["status"] == "NEEDS_REVIEW"
+
+
 def test_default_mode_is_vision_first(monkeypatch):
     monkeypatch.setattr(settings, "RECEIPT_ANALYSIS_MODE", "VISION_FIRST")
     svc, ocr, provider = service()
     run(svc)
     provider.call_with_image.assert_awaited_once()
     ocr.extract_document_from_upload.assert_not_awaited()
+
+
+def test_invalid_configured_mode_fails_closed_to_vision_only(monkeypatch):
+    monkeypatch.setattr(settings, "RECEIPT_ANALYSIS_MODE", "vision-with-typo")
+    svc, ocr, provider = service(vision_error=RuntimeError("provider unavailable"))
+
+    response = run(svc)
+
+    provider.call_with_image.assert_awaited_once()
+    ocr.extract_document_from_upload.assert_not_awaited()
+    assert response.receipt_count == 0
+    assert response.ocr_engine == "vision"
+    assert "ANALYSIS_UNAVAILABLE" in response.warnings
 
 
 def test_partial_low_confidence_vision_preserved_without_whole_image_fallback():

@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
 
@@ -24,6 +24,14 @@ class ReceiptAmountReviewStatus(str, Enum):
     EXCLUDED = "EXCLUDED"
 
 
+class ReceiptCategorySource(str, Enum):
+    EXISTING = "EXISTING"
+    DEFAULT = "DEFAULT"
+    NEW = "NEW"
+    FALLBACK = "FALLBACK"
+    USER = "USER"
+
+
 class ReceiptPaymentType(str, Enum):
     LOYALTY_POINTS = "LOYALTY_POINTS"
     CASH = "CASH"
@@ -43,11 +51,29 @@ class ReceiptPaymentItem(BaseModel):
     duplicate_group: str | None = None
 
 
+class ReceiptRuntimeIdentity(BaseModel):
+    run_id: str
+    source_fingerprint: str
+    started_at: datetime
+    process_id: int
+    working_directory: str
+    command_fingerprint: str
+    git_head: str | None = None
+    provider_call_count: int = Field(ge=0)
+
+
 class ReceiptAnalysisItem(BaseModel):
     receipt_id: str
     title: str | None = None
     store_name: str | None = None
     branch_name: str | None = None
+    merchant_evidence: str | None = None
+    branch_evidence: str | None = None
+    bounding_box: list[float] | None = None
+    identity_source_box: list[float] | None = None
+    identity_verification: str | None = None
+    financial_source_box: list[float] | None = None
+    financial_recovery_provenance: str | None = None
     purchase_total: Decimal | None = Field(default=None, gt=0)
     payment_breakdown: list[ReceiptPaymentItem] = Field(default_factory=list)
     cash_tendered: Decimal | None = Field(default=None, gt=0)
@@ -63,6 +89,8 @@ class ReceiptAnalysisItem(BaseModel):
     transaction_date: date | None = None
     transaction_time: time | None = None
     category_name: str | None = None
+    category_source: ReceiptCategorySource = ReceiptCategorySource.FALLBACK
+    category_reason: str | None = None
     memo: str | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     currency_confidence: float | None = Field(default=None, ge=0, le=1)
@@ -77,10 +105,13 @@ class ReceiptAnalysisResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     ocr_engine: str = "none"
     used_ai: bool = False
+    analysis_trace_id: str | None = None
+    runtime_identity: ReceiptRuntimeIdentity | None = None
 
 
 class ReceiptAnalysisOptions(BaseModel):
     category_candidates: list[str] = Field(default_factory=list, max_length=500)
+    default_category_candidates: list[str] = Field(default_factory=list, max_length=100)
     currency_code: str | None = Field(
         default=None,
         description="Deprecated target currency; accepted but ignored for source detection",

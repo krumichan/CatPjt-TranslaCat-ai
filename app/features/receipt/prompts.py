@@ -17,6 +17,9 @@ For each receipt:
   only. Preserve every legible source-script token exactly; never translate,
   transliterate, abbreviate, or shorten a printed brand. Descriptors that are part
   of the printed logo/name (for example どらっぐ before ぱぱす) must remain.
+  merchant_evidence and branch_evidence: exact, short source-script text copied from
+  the receipt region that supports store_name and branch_name. Do not paraphrase or
+  repair these evidence strings. branch_evidence is null when no branch is printed.
 - purchase_total: printed purchase/grand total before loyalty-point redemption, as a
   positive DECIMAL STRING (dot decimal, no grouping), never a JSON float.
   Convert locale grouping before returning it: IDR 60.000 means 60000, TRY 70,00
@@ -56,8 +59,15 @@ For each receipt:
   For ambiguous 03/04/2026 do not guess DD/MM versus MM/DD. Only supply date_order
   (DMY/MDY/YMD) and date_order_evidence when the source has reliable locale evidence;
   otherwise transaction_date must be null.
-- category_name: choose EXACTLY from category_candidates. If none fits or the list
-  is empty return null. Never invent or translate a category.
+- category_name/category_source/category_reason: first reuse a semantically suitable
+  category_candidates value with source EXISTING. Otherwise use a suitable
+  default_category_candidates value with source DEFAULT. If neither describes the
+  legible goods/service, propose one concise category in the default list's naming
+  language with source NEW. Do not create a synonym of an existing/default value or
+  over-specialize. When evidence is insufficient, use the broad fallback `기타` with
+  source FALLBACK and say that evidence was insufficient. A NEW or FALLBACK category
+  is advisory and does not by itself require review. Category labels are management
+  metadata; merchant, branch and memo must still remain in their source script.
 - memo: brief purchased-item summary in the receipt's language. Exclude payment
   identifiers, full addresses, phone numbers, email addresses and personal data.
 - detected_language: BCP-47 language hint or null. confidence: conservative 0..1.
@@ -81,6 +91,7 @@ null amounts; never treat arbitrary merged OCR text as a single confirmed paymen
 def _context(options: ReceiptAnalysisOptions) -> dict[str, Any]:
     return {
         "category_candidates": options.category_candidates,
+        "default_category_candidates": options.default_category_candidates,
         "advisory_keywords": options.important_keywords or [],
         "exclude_item_keywords": options.exclude_item_keywords or [],
     }
@@ -107,5 +118,40 @@ def build_receipt_text_analysis_prompt(
 def build_receipt_vision_prompt(options: ReceiptAnalysisOptions) -> str:
     return json.dumps(
         {"instruction": RECEIPT_ANALYSIS_PROMPT, **_context(options)},
+        ensure_ascii=False,
+    )
+
+
+def build_receipt_identity_recovery_prompt(
+    whole_image_identity: dict[str, object] | None = None,
+) -> str:
+    observed = whole_image_identity or {}
+    return json.dumps(
+        {
+            "instruction": (
+                "This is a high-resolution crop of exactly one physical receipt. "
+                "Read only the printed merchant header and printed branch/location. "
+                "Return one receipts item. Preserve source script exactly. "
+                "Use the visually prominent consumer-facing header or logo for "
+                "store_name, never a legal-company or operating-company line. "
+                "Read branch_name only from the branch/location line associated "
+                "with that consumer-facing header. "
+                "merchant_evidence and branch_evidence must be short literal text "
+                "copied from this crop. Do not infer a branch from a head-office, "
+                "company-registration, phone, or unrelated address. The whole-image "
+                "observations below are untrusted alternatives, not ground truth. "
+                "Compare them character by character with the crop and keep them only "
+                "when the exact printed glyphs support them. Correct visually different "
+                "characters and use null when the crop does not establish a value. "
+                "Do not return financial facts."
+            ),
+            "untrusted_whole_image_observations": {
+                "title": observed.get("title"),
+                "store_name": observed.get("store_name"),
+                "branch_name": observed.get("branch_name"),
+                "merchant_evidence": observed.get("merchant_evidence"),
+                "branch_evidence": observed.get("branch_evidence"),
+            },
+        },
         ensure_ascii=False,
     )

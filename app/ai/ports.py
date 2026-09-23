@@ -9,6 +9,9 @@ class StructuredGenerationResult:
     output_tokens: int = 0
     provider: str = "unknown"
     model: str = "unknown"
+    status: str = "unknown"
+    incomplete_reason: str | None = None
+    latency_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,17 @@ class StructuredTextGenerationProvider(Protocol):
         self,
         type_name: str,
         data: str,
+        schema: dict | None = None,
+    ) -> StructuredGenerationResult: ...
+
+
+class StructuredImageGenerationProvider(Protocol):
+    async def call_with_image_with_metadata(
+        self,
+        type_name: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
         schema: dict | None = None,
     ) -> StructuredGenerationResult: ...
 

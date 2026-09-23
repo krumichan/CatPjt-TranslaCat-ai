@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
         await get_voice_speech_evidence_guard().warm_up()
         await get_speech_runtime().warm_up()
 
-    if settings.OCR_WARM_UP:
+    if settings.OCR_WARM_UP and not settings.RECEIPT_VISION_DISABLE_OCR_WARMUP:
         await get_ocr_service().warm_up()
 
     try:

@@ -159,6 +159,23 @@ class AiProviderPool:
             schema=schema,
         )
 
+    async def call_with_image_with_metadata(
+        self,
+        type_name: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        schema: dict | None = None,
+    ) -> Any:
+        return await self._invoke(
+            "call_with_image_with_metadata",
+            type_name=type_name,
+            prompt=prompt,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            schema=schema,
+        )
+
     async def translate_chat_message(
         self,
         text: str,

@@ -39,7 +39,8 @@ def test_multipart_endpoint_returns_batch_and_decimal_strings():
             "/account-book/receipts/analyze",
             files={"file": ("receipt.jpg", b"test", "image/jpeg")},
             data={
-                "options": '{"category_candidates":["Food"],"analysis_mode":"VISION_FIRST"}'
+                "options": '{"category_candidates":["Food"],"analysis_mode":"VISION_FIRST"}',
+                "trace_id": "test-trace-123",
             },
         )
     assert result.status_code == 200
@@ -49,6 +50,7 @@ def test_multipart_endpoint_returns_batch_and_decimal_strings():
     assert fake_service.analyze.call_args.kwargs["options"].category_candidates == [
         "Food"
     ]
+    assert fake_service.analyze.call_args.kwargs["trace_id"] == "test-trace-123"
 
 
 @pytest.mark.parametrize(
@@ -63,6 +65,30 @@ def test_invalid_options_are_client_error(options):
 
 def test_old_target_currency_option_is_accepted_without_influencing_source():
     assert _parse_options('{"currency_code":"JPY"}').category_candidates == []
+
+
+def test_runtime_identity_endpoint_returns_process_start_snapshot_without_provider_call():
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        first = client.get("/account-book/receipts/runtime-identity")
+        second = client.get("/account-book/receipts/runtime-identity")
+    assert first.status_code == 200
+    assert first.json()["run_id"] == second.json()["run_id"]
+    assert first.json()["source_fingerprint"] == second.json()["source_fingerprint"]
+    assert first.json()["started_at"] == second.json()["started_at"]
+    assert first.json()["process_id"] > 0
+    assert first.json()["provider_call_count"] == second.json()["provider_call_count"]
+
+
+def test_runtime_identity_uses_the_process_start_fingerprint(monkeypatch):
+    from app.features.receipt import runtime_identity
+
+    before = runtime_identity.get_receipt_runtime_identity()
+    monkeypatch.setattr(runtime_identity, "receipt_source_fingerprint", lambda *_: "f" * 64)
+    after = runtime_identity.get_receipt_runtime_identity()
+    assert after.source_fingerprint == before.source_fingerprint
+    assert after.started_at == before.started_at
 
 
 def test_receipt_schema_survives_both_provider_adapters():
