@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 from app.ai.providers.openai.client import OpenAIService
 
 
-def test_chat_translation_records_latency_and_usage_without_live_provider():
+def test_general_text_generation_records_latency_and_usage_without_live_provider():
     # 준비: 실제 API 대신 완료 응답과 사용량을 반환하는 클라이언트를 주입한다.
     create = AsyncMock(
         return_value=SimpleNamespace(
@@ -22,7 +22,7 @@ def test_chat_translation_records_latency_and_usage_without_live_provider():
     # 실행: 일반 task 경로의 응답 생성과 지연 시간 측정을 함께 거친다.
     result = asyncio.run(
         provider.call_with_metadata(
-            type_name="CHAT_MESSAGE_TRANSLATION",
+            type_name="VOICE",
             data="Synthetic source",
         )
     )

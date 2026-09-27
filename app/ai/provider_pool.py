@@ -177,19 +177,6 @@ class AiProviderPool:
             schema=schema,
         )
 
-    async def translate_chat_message(
-        self,
-        text: str,
-        target_language_code: str,
-        source_language_code: str | None = None,
-    ) -> str:
-        return await self._invoke(
-            "translate_chat_message",
-            text=text,
-            target_language_code=target_language_code,
-            source_language_code=source_language_code,
-        )
-
     async def translate_voice_utterance(
         self,
         *,

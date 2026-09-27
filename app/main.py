@@ -72,7 +72,7 @@ app.openapi = lambda: set_custom_openapi(app)
 async def check_api_key_middleware(request: Request, call_next):
     exempt_paths = ["/", "/docs", "/redoc", "/openapi.json"]
 
-    # 전용 Chat 키는 두 POST 작업에만 유효하다. 공통 LL/Voice 키와 오류 wire는 유지한다.
+    # 전용 Chat 키는 범용 모델 실행 POST에만 유효하다. LL/Voice 키와 오류 wire는 유지한다.
     provided_api_key = request.headers.get("X-API-KEY")
     chat_decision = authorize_chat_api_key(
         settings, request.method, request.url.path, provided_api_key

@@ -2,9 +2,7 @@ from fastapi import HTTPException
 
 from app.ai.prompt_registry import get_prompt_rule
 from app.ai.providers.gemini.configs import (
-    build_chat_ai_reply_config,
     build_default_gemini_config,
-    build_fast_translation_config,
     build_voice_translation_config,
 )
 from app.core.config import settings
@@ -38,24 +36,10 @@ class GeminiConfigManager:
         if cache_key not in self._config_cache:
             rule = self.get_rule(type_name)
 
-            if type_name == "AI_CHAT_REPLY" and schema is not None:
-                self._config_cache[cache_key] = build_chat_ai_reply_config(
-                    rule=rule,
-                    schema=schema,
-                )
-            else:
-                self._config_cache[cache_key] = build_default_gemini_config(
-                    rule=rule,
-                    schema=schema,
-                )
-
-        return self._config_cache[cache_key]
-
-    def get_chat_translation_fast_config(self):
-        cache_key = "CHAT_TRANSLATION_FAST"
-
-        if cache_key not in self._config_cache:
-            self._config_cache[cache_key] = build_fast_translation_config()
+            self._config_cache[cache_key] = build_default_gemini_config(
+                rule=rule,
+                schema=schema,
+            )
 
         return self._config_cache[cache_key]
 

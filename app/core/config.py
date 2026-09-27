@@ -1,7 +1,21 @@
+import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _settings_environment_file() -> str:
+    # 명시한 실행 도구의 파일만 읽는다. 미지정 기존 실행은 종전 .env 계약을 유지한다.
+    configured = os.environ.get("AI_SETTINGS_ENV_FILE")
+    if configured is None:
+        return ".env"
+
+    path = Path(configured)
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError("AI_SETTINGS_ENV_FILE requires an existing absolute file path")
+    return str(path)
 
 
 class Settings(BaseSettings):
@@ -41,15 +55,6 @@ class Settings(BaseSettings):
     OPENAI_SPEECH_MODEL: str = "gpt-4o-mini-tts-2025-12-15"
     OPENAI_SPEECH_VOICE: str = "marin"
     OPENAI_SPEECH_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=300)
-
-    # AI Chat Member Reply
-    AI_CHAT_CONTEXT_DEFAULT_MAX_MESSAGES: int = 30
-    AI_CHAT_CONTEXT_HARD_MAX_MESSAGES: int = 100
-    AI_CHAT_CONTEXT_DEFAULT_MAX_CHARACTERS: int = 12_000
-    AI_CHAT_CONTEXT_HARD_MAX_CHARACTERS: int = 50_000
-    AI_CHAT_REPLY_MAX_CHARACTERS: int = 800
-    AI_CHAT_REPLY_HARD_MAX_CHARACTERS: int = 4_000
-    AI_CHAT_REPLY_TIMEOUT_SECONDS: float = 20.0
 
     # Language Learning / Adaptive Writing
     AI_LANGUAGE_LEARNING_HARD_MAX_SENTENCE_COUNT: int = 100
@@ -231,7 +236,7 @@ class Settings(BaseSettings):
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: bool = True
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_settings_environment_file(),
         env_file_encoding="utf-8",
         extra="ignore",
     )

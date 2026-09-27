@@ -4,8 +4,6 @@ from app.ai.provider_factory import (
 )
 from app.ai.providers.openai.client import OpenAIService
 from app.core.config import settings
-from app.features.chat_ai_reply.service import ChatAiReplyService
-from app.features.chat_translation.service import ChatTranslationService
 from app.features.receipt.service import ReceiptAnalysisService
 from app.features.speech_to_text import FasterWhisperRuntime
 from app.features.speech_to_text.runtime_policy import speaking_runtime
@@ -34,15 +32,6 @@ _ocr_service = OCRService()
 _translation_service = TranslationService(
     provider=_ai_provider,
 )
-
-_chat_translation_service = ChatTranslationService(
-    provider=_ai_provider,
-)
-
-_chat_ai_reply_service = ChatAiReplyService(
-    provider=_ai_provider,
-)
-
 
 _receipt_analysis_service = ReceiptAnalysisService(
     ocr_service=_ocr_service,
@@ -81,14 +70,6 @@ def get_speaking_speech_runtime() -> FasterWhisperRuntime:
 
 def get_translation_service() -> TranslationService:
     return _translation_service
-
-
-def get_chat_translation_service() -> ChatTranslationService:
-    return _chat_translation_service
-
-
-def get_chat_ai_reply_service() -> ChatAiReplyService:
-    return _chat_ai_reply_service
 
 
 def get_stt_service() -> STTService:

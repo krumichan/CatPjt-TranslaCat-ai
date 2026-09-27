@@ -1,4 +1,12 @@
 .env
+.env.*
+!.env.*.example
+.secrets/
+secrets/
+*.key
+*.pfx
+*.p12
+*.pem
 __pycache__/
 .venv/
 .vscode/

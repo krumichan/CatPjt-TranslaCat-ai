@@ -88,15 +88,6 @@ class SpeechSynthesisProvider(Protocol):
     ) -> SpeechSynthesisResult: ...
 
 
-class ChatTranslationProvider(Protocol):
-    async def translate_chat_message(
-        self,
-        text: str,
-        target_language_code: str,
-        source_language_code: str | None = None,
-    ) -> str: ...
-
-
 class VoiceTranslationProvider(Protocol):
     async def translate_voice_utterance(
         self,

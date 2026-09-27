@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Annotated
+from weakref import WeakValueDictionary
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,10 +19,22 @@ from app.ai.providers.openai.schema import OpenAISchemaConfigurationError
 from app.api.dependencies import get_model_execution_provider
 from app.common.provider_failure import provider_failure_origin
 from app.common.provider_retry import retry_after_details
+from app.core.config import settings
 from app.schemas.model_execution import ModelExecutionRequest, ModelExecutionResponse
 
 router = APIRouter(prefix="/model", tags=["Internal Model Execution"])
 _MAX_REQUEST_BYTES = 500_000
+_execution_slots: WeakValueDictionary[int, asyncio.Semaphore] = WeakValueDictionary()
+
+
+def _execution_slot() -> asyncio.Semaphore:
+    # 실제 worker의 event loop별로 공유해 범용 실행의 Provider 병렬 호출을 제한한다.
+    loop_id = id(asyncio.get_running_loop())
+    slot = _execution_slots.get(loop_id)
+    if slot is None:
+        slot = asyncio.Semaphore(settings.AI_TEXT_PROVIDER_MAX_CONCURRENCY)
+        _execution_slots[loop_id] = slot
+    return slot
 
 
 @router.post("/execute", response_model=ModelExecutionResponse)
@@ -48,18 +61,19 @@ async def execute_model(
 
     try:
         async with asyncio.timeout(command.remaining_milliseconds / 1000.0):
-            result = await provider.execute_explicit(
-                instructions=command.instructions,
-                messages=[message.model_dump() for message in command.messages],
-                tier=AiModelTier(command.tier.value),
-                reasoning_effort=command.reasoning_effort,
-                verbosity=command.verbosity,
-                max_output_tokens=command.max_output_tokens,
-                remaining_milliseconds=command.remaining_milliseconds,
-                response_schema=command.response_schema,
-                schema_name_value=command.schema_name,
-                strict=command.strict,
-            )
+            async with _execution_slot():
+                result = await provider.execute_explicit(
+                    instructions=command.instructions,
+                    messages=[message.model_dump() for message in command.messages],
+                    tier=AiModelTier(command.tier.value),
+                    reasoning_effort=command.reasoning_effort,
+                    verbosity=command.verbosity,
+                    max_output_tokens=command.max_output_tokens,
+                    remaining_milliseconds=command.remaining_milliseconds,
+                    response_schema=command.response_schema,
+                    schema_name_value=command.schema_name,
+                    strict=command.strict,
+                )
     except OpenAISchemaConfigurationError:
         raise HTTPException(
             422,

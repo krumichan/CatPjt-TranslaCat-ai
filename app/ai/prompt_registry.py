@@ -1,5 +1,3 @@
-from app.features.chat_ai_reply.prompts import AI_CHAT_REPLY_SYSTEM_PROMPT
-from app.features.chat_translation.prompts import CHAT_MESSAGE_TRANSLATION_PROMPT
 from app.features.receipt.prompts import RECEIPT_ANALYSIS_PROMPT
 from app.features.translation.prompts import TRANSLATION_PROMPT_MAP
 from app.features.voice_translation.prompts import VOICE_TRANSLATION_SYSTEM_PROMPT
@@ -7,8 +5,6 @@ from app.features.voice_translation.prompts import VOICE_TRANSLATION_SYSTEM_PROM
 PROMPT_MAP = {
     **TRANSLATION_PROMPT_MAP,
     "RECEIPT_ANALYSIS": RECEIPT_ANALYSIS_PROMPT,
-    "CHAT_MESSAGE_TRANSLATION": CHAT_MESSAGE_TRANSLATION_PROMPT,
-    "AI_CHAT_REPLY": AI_CHAT_REPLY_SYSTEM_PROMPT,
     "VOICE_TRANSLATION": VOICE_TRANSLATION_SYSTEM_PROMPT,
 }
 

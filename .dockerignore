@@ -1,4 +1,17 @@
 .env*
+**/.env*
+.secrets
+**/.secrets
+secrets
+**/secrets
+*.key
+**/*.key
+*.pfx
+**/*.pfx
+*.p12
+**/*.p12
+*.pem
+**/*.pem
 .git
 .github
 .venv

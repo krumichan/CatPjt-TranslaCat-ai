@@ -5,8 +5,7 @@ from pydantic import SecretStr
 
 CHAT_OPERATIONS = frozenset(
     {
-        ("POST", "/api/v1/chat/translate"),
-        ("POST", "/api/v1/chat/ai/reply"),
+        ("POST", "/internal/v1/model/execute"),
     }
 )
 
@@ -52,11 +51,6 @@ def authorize_chat_api_key(
     if provided and secrets.compare_digest(provided.encode(), key.encode()):
         return (method, path) in CHAT_OPERATIONS
 
-    # 전환 완료 모드에서는 옛 전역 키가 Chat 추론으로 진입하지 못한다.
-    if settings.CHAT_AUTH_MODE == "dedicated" and (
-        path == "/api/v1/chat" or path.startswith("/api/v1/chat/")
-    ):
-        return False
     return None
 
 

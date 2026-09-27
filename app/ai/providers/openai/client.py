@@ -33,8 +33,6 @@ from app.ai.providers.openai.response import (
 )
 from app.ai.providers.openai.schema import build_explicit_text_config, build_openai_text_config
 from app.core.config import settings
-from app.features.chat_translation.normalizer import normalize_chat_translation_result
-from app.features.chat_translation.prompts import build_chat_translation_prompt
 from app.features.voice_translation.prompts import build_voice_translation_prompt
 from app.schemas.voice_translation import VoiceTranslationProviderPayload
 
@@ -207,34 +205,6 @@ class OpenAIService:
             user_input=user_input,
             schema=schema,
         )
-
-    async def translate_chat_message(
-        self,
-        text: str,
-        target_language_code: str,
-        source_language_code: str | None = None,
-    ) -> str:
-        prompt = build_chat_translation_prompt(
-            text=text,
-            target_language_code=target_language_code,
-            source_language_code=source_language_code,
-        )
-        result = await self.call(
-            type_name="CHAT_MESSAGE_TRANSLATION",
-            data=prompt,
-        )
-        if not isinstance(result, str) or not result.strip():
-            raise HTTPException(
-                status_code=502,
-                detail="채팅 메시지 번역 결과가 비어 있습니다.",
-            )
-        normalized = normalize_chat_translation_result(result)
-        if not normalized:
-            raise HTTPException(
-                status_code=502,
-                detail="채팅 메시지 번역 결과가 비어 있습니다.",
-            )
-        return normalized
 
     async def translate_voice_utterance(
         self,

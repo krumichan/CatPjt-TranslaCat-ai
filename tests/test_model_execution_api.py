@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from openai import APIConnectionError, APITimeoutError
 
@@ -17,6 +18,64 @@ from app.ai.providers.openai.schema import (
 )
 from app.api.dependencies import get_model_execution_provider
 from app.core.config import settings
+
+
+@pytest.mark.asyncio
+async def test_explicit_execution_limits_provider_concurrency_without_hidden_retry():
+    # 준비: 같은 event loop의 두 요청을 첫 Provider 호출에서 멈춘다.
+    from app.main import app
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingProvider(FakeProvider):
+        async def execute_explicit(self, **kwargs):
+            self.calls.append(kwargs)
+            entered.set()
+            await release.wait()
+            return self.result
+
+    provider = BlockingProvider()
+    original_key = settings.SERVER_API_KEY
+    original_limit = settings.AI_TEXT_PROVIDER_MAX_CONCURRENCY
+    settings.SERVER_API_KEY = "synthetic-internal-key"
+    settings.AI_TEXT_PROVIDER_MAX_CONCURRENCY = 1
+    app.dependency_overrides[get_model_execution_provider] = lambda: provider
+
+    try:
+        # 실행: 두 번째 요청은 슬롯을 기다리고 첫 요청만 Provider에 진입한다.
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"X-API-KEY": "synthetic-internal-key"}
+            first = asyncio.create_task(
+                client.post(
+                    "/internal/v1/model/execute",
+                    json=_request(remainingMilliseconds=5000),
+                    headers=headers,
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            second = asyncio.create_task(
+                client.post(
+                    "/internal/v1/model/execute",
+                    json=_request(remainingMilliseconds=5000),
+                    headers=headers,
+                )
+            )
+            await asyncio.sleep(0.05)
+
+            # 검증: 대기 중 추가 SDK 호출은 없고 해제 뒤 각 요청이 한 번씩 실행된다.
+            assert len(provider.calls) == 1
+            assert not second.done()
+            release.set()
+            responses = await asyncio.gather(first, second)
+            assert [response.status_code for response in responses] == [200, 200]
+            assert len(provider.calls) == 2
+    finally:
+        release.set()
+        app.dependency_overrides.pop(get_model_execution_provider, None)
+        settings.SERVER_API_KEY = original_key
+        settings.AI_TEXT_PROVIDER_MAX_CONCURRENCY = original_limit
 
 
 def _request(**overrides):
@@ -127,6 +186,30 @@ def test_execution_preserves_safe_provider_retry_after():
         assert response.json()["detail"]["retryAfterSeconds"] == 2
         assert response.json()["detail"]["failureKind"] == "HTTP_STATUS"
         assert response.json()["detail"]["providerStatus"] == 429
+        assert "private diagnostic" not in response.text
+    finally:
+        _restore(original_key)
+
+
+@pytest.mark.parametrize("seconds", [600, 86_400])
+def test_execution_preserves_long_safe_provider_retry_after(seconds):
+    # 준비: SDK가 하루 상한 안의 재시도 시각을 기술 메타데이터로 전달한다.
+    failure = RuntimeError("private diagnostic")
+    failure.status_code = 429
+    failure.retry_after_seconds = seconds
+    client, original_key = _client(FakeProvider(failure=failure))
+
+    try:
+        # 실행
+        response = client.post(
+            "/internal/v1/model/execute",
+            json=_request(),
+            headers={"X-API-KEY": "synthetic-internal-key"},
+        )
+
+        # 검증: 긴 값을 잘라내지 않고 응답 본문은 안전한 코드만 포함한다.
+        assert response.status_code == 503
+        assert response.json()["detail"]["retryAfterSeconds"] == seconds
         assert "private diagnostic" not in response.text
     finally:
         _restore(original_key)

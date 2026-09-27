@@ -2,6 +2,50 @@ from app.ai.model_policy import _TASK_POLICIES
 from app.ai.prompt_registry import get_prompt_rule
 
 
+def test_retired_chat_business_symbols_are_absent_from_production_source():
+    # 준비: 인증 경계의 chat_auth는 유지하되 퇴역 업무 식별자는 소스 전체에서 검사한다.
+    from pathlib import Path
+
+    app_root = Path(__file__).resolve().parents[1] / "app"
+    retired_symbols = (
+        "AI_CHAT_REPLY",
+        "CHAT_MESSAGE_TRANSLATION",
+        "/api/v1/chat/",
+        "translate_chat_message",
+        "build_chat_ai_reply_prompt",
+        "normalize_chat_translation_result",
+    )
+
+    # 실행: 삭제된 파일뿐 아니라 이름만 바꿔 남긴 정책도 찾는다.
+    remaining = {
+        str(path.relative_to(app_root)): symbol
+        for path in app_root.rglob("*.py")
+        for symbol in retired_symbols
+        if symbol in path.read_text(encoding="utf-8")
+    }
+
+    # 검증: AI 운영 소스에는 Chat 업무 recipe가 남지 않는다.
+    assert remaining == {}
+
+
+def test_chat_business_tasks_and_routes_are_owned_by_chat_service():
+    # 준비
+    from unittest.mock import patch
+
+    with patch("app.core.config_logger.setup_logging"):
+        from app.main import app
+
+    # 실행
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+
+    # 검증 — 일반 실행 route는 남고 Python Chat 업무 recipe는 등록되지 않는다.
+    assert "/internal/v1/model/execute" in paths
+    assert not any(path.startswith("/api/v1/chat/") for path in paths)
+    for task in ("AI_CHAT_REPLY", "CHAT_MESSAGE_TRANSLATION"):
+        assert get_prompt_rule(task) is None
+        assert task not in _TASK_POLICIES
+
+
 def test_reading_vocabulary_pipeline_prompts_are_owned_by_ktor():
     # 준비: 실제 전환이 끝난 Practice task는 Python prompt registry에서 제거한다.
     for type_name in [
