@@ -12,7 +12,10 @@ from typing import Any
 from app.ai.ports import StructuredGenerationResult
 
 _ROOT = Path(__file__).resolve().parents[2] / "CatPjt-TranslaCat-ll"
-_CONTROL = Path(__file__).resolve().parents[1] / ".tmp_ktor_m0/listening-control.json"
+_CONTROL = (
+    Path(__file__).resolve().parents[2]
+    / ".codex-workspace/verification/ai/runtime/listening-control.json"
+)
 _SOURCES = (
     "京都で静かな寺を見学したいです。",
     "旅行の前にホテルを予約しておきました。",

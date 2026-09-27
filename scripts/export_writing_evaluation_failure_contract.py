@@ -22,8 +22,8 @@ from app.ai.providers.openai.schema import OpenAISchemaConfigurationError
 async def main() -> None:
     # 준비: 원본 메서드의 AST만 로드한다. 퇴역 package를 런타임 app에 되살리지 않는다.
     ll = Path(__file__).resolve().parents[2] / "CatPjt-TranslaCat-ll"
-    source = ll / (
-        ".tmp_ktor_m0/writing-python-retirement-20260926/"
+    source = ll.parent / (
+        ".codex-workspace/verification/ll/runtime/writing-python-retirement-20260926/"
         "app/features/language_learning/writing/service.py"
     )
     text = source.read_text(encoding="utf-8")

@@ -10,8 +10,7 @@ def synthetic(monkeypatch, tmp_path):
     # 준비: 제어 파일과 통계는 테스트별 임시 디렉터리로 격리한다.
     monkeypatch.setenv("TRANSLACAT_TEST_MODEL_EXECUTION", "1")
     monkeypatch.setattr(fixture, "ROOT", tmp_path)
-    directory = tmp_path / ".tmp_ktor_m0"
-    directory.mkdir()
+    directory = tmp_path
     return fixture.SyntheticSpeechProvider(), directory
 
 

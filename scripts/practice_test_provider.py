@@ -10,7 +10,8 @@ from typing import Any
 
 from app.ai.ports import StructuredGenerationResult
 
-_TEST_ROOT = Path(__file__).resolve().parents[1] / ".tmp_ktor_m0"
+# 로컬 검증 제어 파일은 저장소 밖 공통 Codex 작업 공간에서 읽는다.
+_TEST_ROOT = Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
 
 
 async def execute_practice_fixture(kwargs: dict[str, Any]) -> StructuredGenerationResult | None:
@@ -49,7 +50,7 @@ async def execute_practice_fixture(kwargs: dict[str, Any]) -> StructuredGenerati
     stats_path = _TEST_ROOT / "practice-stats.json"
     stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else {}
     stats[stage] = stats.get(stage, 0) + 1
-    _TEST_ROOT.mkdir(exist_ok=True)
+    _TEST_ROOT.mkdir(parents=True, exist_ok=True)
     stats_path.write_text(json.dumps(stats), encoding="utf-8")
     if (
         control.get("mode") == payload.get("mode")

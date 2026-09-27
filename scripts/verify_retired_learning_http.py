@@ -17,7 +17,7 @@ from scripts.verify_overview_http import external_token
 
 ROOT = Path(__file__).resolve().parents[2]
 LL = ROOT / "CatPjt-TranslaCat-ll"
-PLAN = LL / ".tmp_ktor_final_cleanup/data-reset-plan.json"
+PLAN = ROOT / ".codex-workspace/verification/ll/final-cleanup/data-reset-plan.json"
 TABLES = {
     "language_learning_daily_set": "writing",
     "language_learning_practice_set": "practice",
@@ -311,7 +311,7 @@ def main(browser: bool) -> None:
         # 선택한 브라우저 검사는 토큰을 환경으로만 전달하며 trace/video/스크린샷에 기록하지 않는다.
         if browser:
             stats_path = (
-                Path(__file__).resolve().parents[1] / ".tmp_ktor_m0/synthetic_execution_stats.json"
+                ROOT / ".codex-workspace/verification/ai/runtime/synthetic_execution_stats.json"
             )
             before_stats = json.loads(stats_path.read_text(encoding="utf-8"))
             assert os.environ.get("NEXTAUTH_SECRET"), (
@@ -411,7 +411,10 @@ def main(browser: bool) -> None:
             "syntheticEmailLength": len(credentials["email"]),
             "refreshTokenLength": len(session["refreshToken"]),
         }
-        output = LL / ".tmp_ktor_final_cleanup/retired-learning-http-result.json"
+        output = (
+            ROOT
+            / ".codex-workspace/verification/ll/final-cleanup/retired-learning-http-result.json"
+        )
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(report, ensure_ascii=False))
 

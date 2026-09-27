@@ -7,7 +7,8 @@ from pathlib import Path
 
 from app.ai.ports import StructuredGenerationResult
 
-ROOT = Path(__file__).resolve().parents[1]
+# 제어 파일과 실행 흔적은 저장소 밖 공통 검증 디렉터리에 둔다.
+ROOT = Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
 TASKS = {
     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION": "CONVERSATION",
     "LANGUAGE_LEARNING_SPEAKING_ASSISTANCE": "ASSISTANCE",
@@ -31,7 +32,7 @@ async def execute_speaking_runtime_fixture(kwargs):
         return None
 
     # 합성 제어는 Provider 응답·지연에만 적용한다. 세션·lease·Growth 상태는 LL이 처리한다.
-    control_path = ROOT / ".tmp_ktor_m0/speaking-control.json"
+    control_path = ROOT / "speaking-control.json"
     control = (
         json.loads(control_path.read_text(encoding="utf-8-sig")) if control_path.exists() else {}
     )
@@ -39,7 +40,7 @@ async def execute_speaking_runtime_fixture(kwargs):
     if control.get("stage") not in (None, stage):
         scenario = "normal"
     if scenario == "hold":
-        (ROOT / ".tmp_ktor_m0/speaking-provider-held.json").write_text(
+        (ROOT / "speaking-provider-held.json").write_text(
             json.dumps({"stage": stage, "held": True}), encoding="utf-8"
         )
         await asyncio.sleep(60)

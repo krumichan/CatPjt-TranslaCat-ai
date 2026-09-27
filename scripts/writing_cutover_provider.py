@@ -34,7 +34,9 @@ async def execute_writing_fixture(kwargs):
     candidates = fixtures["candidates"]
     if name == "writing_candidate_batch":
         payload = _payload(kwargs, "learning-data")
-        control_root = Path(__file__).resolve().parents[1] / ".tmp_ktor_m0"
+        control_root = (
+            Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
+        )
         control_path = control_root / "writing-control.json"
         control = (
             json.loads(control_path.read_text(encoding="utf-8")) if control_path.exists() else {}

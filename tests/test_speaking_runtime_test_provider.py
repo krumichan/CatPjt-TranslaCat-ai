@@ -78,8 +78,7 @@ async def test_coaching_failure_is_an_invalid_model_field_not_a_server_response(
     # 준비
     monkeypatch.setenv("TRANSLACAT_TEST_MODEL_EXECUTION", "1")
     monkeypatch.setattr(fixture, "ROOT", tmp_path)
-    folder = tmp_path / ".tmp_ktor_m0"
-    folder.mkdir()
+    folder = tmp_path
     (folder / "speaking-control.json").write_text(
         json.dumps({"scenario": "wrong_snapshot"}), encoding="utf-8"
     )

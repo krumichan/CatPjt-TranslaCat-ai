@@ -11,7 +11,10 @@ from typing import Any
 
 import httpx
 
-CONTROL = Path(__file__).resolve().parents[1] / ".tmp_ktor_m0/listening-control.json"
+CONTROL = (
+    Path(__file__).resolve().parents[2]
+    / ".codex-workspace/verification/ai/runtime/listening-control.json"
+)
 
 
 class ListeningClient:

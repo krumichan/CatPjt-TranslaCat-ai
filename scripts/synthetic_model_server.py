@@ -49,9 +49,10 @@ class SyntheticProvider:
     def record_calls(cls):
         # 프로세스가 바뀐 뒤에도 이전 계수로 차이를 계산하지 않도록 시작 시 0과 PID를 게시한다.
         stats_path = (
-            Path(__file__).resolve().parents[1] / ".tmp_ktor_m0" / "synthetic_execution_stats.json"
+            Path(__file__).resolve().parents[2]
+            / ".codex-workspace/verification/ai/runtime/synthetic_execution_stats.json"
         )
-        stats_path.parent.mkdir(exist_ok=True)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
         pending = stats_path.with_suffix(f".{os.getpid()}.tmp")
         pending.write_text(
             json.dumps({"processId": os.getpid(), "modelCalls": cls.calls, "paidCalls": 0}),
