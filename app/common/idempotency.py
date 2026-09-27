@@ -19,9 +19,7 @@ class InMemoryIdempotencyStore(Generic[T]):
         self.max_entries = max_entries
         self._items: OrderedDict[str, tuple[float, T]] = OrderedDict()
         self._lock = Lock()
-        self._async_locks: WeakValueDictionary[str, asyncio.Lock] = (
-            WeakValueDictionary()
-        )
+        self._async_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     def get(self, key: str) -> T | None:
         now = time.monotonic()

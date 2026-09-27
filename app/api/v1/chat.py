@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import (
@@ -18,7 +20,7 @@ router = APIRouter(
 @router.post("/translate", response_model=ChatTranslationResponse)
 async def translate_chat_message(
     request: ChatTranslationRequest,
-    service: ChatTranslationService = Depends(get_chat_translation_service),
+    service: Annotated[ChatTranslationService, Depends(get_chat_translation_service)],
 ) -> ChatTranslationResponse:
     translated_text = await service.translate(
         text=request.text,
@@ -26,14 +28,12 @@ async def translate_chat_message(
         source_language_code=request.source_language_code,
     )
 
-    return ChatTranslationResponse(
-        translated_text=translated_text
-    )
+    return ChatTranslationResponse(translated_text=translated_text)
 
 
 @router.post("/ai/reply", response_model=ChatAiReplyResponse)
 async def generate_chat_ai_reply(
     request: ChatAiReplyRequest,
-    service: ChatAiReplyService = Depends(get_chat_ai_reply_service),
+    service: Annotated[ChatAiReplyService, Depends(get_chat_ai_reply_service)],
 ) -> ChatAiReplyResponse:
     return await service.generate_reply(request)

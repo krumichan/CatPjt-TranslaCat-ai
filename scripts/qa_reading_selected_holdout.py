@@ -3,49 +3,89 @@
 The fixed corpus, 3+2 contract, old verifier/budgets, and every failed set are
 preserved. This is direct AI content evidence, not BE persistence or gold labels.
 """
+
 from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import date
 import hashlib
 import json
-from pathlib import Path
 import sys
+from datetime import date
+from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.qa_campaign_budget import atomic_json
-from scripts.qa_campaign_integration import _owned_manifest
 from scripts.qa_reading_model_comparison import _run
 
+from scripts.qa_campaign_budget import atomic_json
+from scripts.qa_campaign_integration import _owned_manifest
 
 CASES = (
-    {"id": "holdout-b1-library", "band": 1, "mode": "COMPREHENSION",
-     "keywords": ["図書館", "学校"], "weak": ["DETAIL"], "mistakes": ["場所を取り違える"]},
-    {"id": "holdout-b2-travel", "band": 2, "mode": "COMPREHENSION",
-     "keywords": ["旅行", "食事"], "weak": ["GIST"], "mistakes": []},
-    {"id": "holdout-b3-community", "band": 3, "mode": "CONTEXT_INFERENCE",
-     "keywords": ["防災", "地域"], "weak": ["CONTEXT_INFERENCE"], "mistakes": ["暗示と事実を混同"]},
-    {"id": "holdout-b4-workplace", "band": 4, "mode": "STRUCTURE",
-     "keywords": ["働き方", "制度"], "weak": ["STRUCTURE"], "mistakes": []},
-    {"id": "holdout-b5-tourism", "band": 5, "mode": "STRUCTURE",
-     "keywords": ["観光", "公共政策"], "weak": ["STRUCTURE"], "mistakes": ["筆者の立場を読み違える"]},
+    {
+        "id": "holdout-b1-library",
+        "band": 1,
+        "mode": "COMPREHENSION",
+        "keywords": ["図書館", "学校"],
+        "weak": ["DETAIL"],
+        "mistakes": ["場所を取り違える"],
+    },
+    {
+        "id": "holdout-b2-travel",
+        "band": 2,
+        "mode": "COMPREHENSION",
+        "keywords": ["旅行", "食事"],
+        "weak": ["GIST"],
+        "mistakes": [],
+    },
+    {
+        "id": "holdout-b3-community",
+        "band": 3,
+        "mode": "CONTEXT_INFERENCE",
+        "keywords": ["防災", "地域"],
+        "weak": ["CONTEXT_INFERENCE"],
+        "mistakes": ["暗示と事実を混同"],
+    },
+    {
+        "id": "holdout-b4-workplace",
+        "band": 4,
+        "mode": "STRUCTURE",
+        "keywords": ["働き方", "制度"],
+        "weak": ["STRUCTURE"],
+        "mistakes": [],
+    },
+    {
+        "id": "holdout-b5-tourism",
+        "band": 5,
+        "mode": "STRUCTURE",
+        "keywords": ["観光", "公共政策"],
+        "weak": ["STRUCTURE"],
+        "mistakes": ["筆者の立場を読み違える"],
+    },
 )
 
 
 def manifest(output: Path, *, learning_date: str | None = None) -> dict:
     from app.core.config import Settings
+
     if Settings.model_fields["AI_READING_GENERATION_MODEL"].default != "SOL":
         raise ValueError("Selected production Reading model must default to SOL")
-    return {"version": "reading-selected-holdout-v1", "model": "SOL",
-            "sourceSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            "comparisonSha256": hashlib.sha256(
-                (output / "reading-comparison-summary.json").read_bytes()).hexdigest(),
-            "learningDate": learning_date or date.today().isoformat(), "cases": list(CASES),
-            "maxApplicationStartsPerSet": 35,
-            "boundary": "Single run per fixed unseen case, 3+2, all failure evidence retained; no BE DB integration"}
+    return {
+        "version": "reading-selected-holdout-v1",
+        "model": "SOL",
+        "sourceSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "comparisonSha256": hashlib.sha256(
+            (output / "reading-comparison-summary.json").read_bytes()
+        ).hexdigest(),
+        "learningDate": learning_date or date.today().isoformat(),
+        "cases": list(CASES),
+        "maxApplicationStartsPerSet": 35,
+        "boundary": (
+            "Single run per fixed unseen case, 3+2, all failure evidence retained; "
+            "no BE DB integration"
+        ),
+    }
 
 
 def main() -> None:
@@ -73,12 +113,26 @@ def main() -> None:
     case = next(value for value in CASES if value["id"] == args.case_id)
     if (output / f"{case['id']}-B.json").exists():
         raise ValueError("Holdout already started; preserve result")
-    result = asyncio.run(_run(case, "B", output, {"arms": {"B": "SOL"},
-                                          "learningDate": saved["learningDate"]}))
-    print(json.dumps({key: result.get(key) for key in (
-        "caseId", "status", "failureType", "latencySeconds", "providerStarts",
-        "inputTokens", "outputTokens", "modelCounts",
-    )}))
+    result = asyncio.run(
+        _run(case, "B", output, {"arms": {"B": "SOL"}, "learningDate": saved["learningDate"]})
+    )
+    print(
+        json.dumps(
+            {
+                key: result.get(key)
+                for key in (
+                    "caseId",
+                    "status",
+                    "failureType",
+                    "latencySeconds",
+                    "providerStarts",
+                    "inputTokens",
+                    "outputTokens",
+                    "modelCounts",
+                )
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

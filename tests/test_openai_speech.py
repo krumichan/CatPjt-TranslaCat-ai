@@ -7,9 +7,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.ai.provider_factory import create_speech_synthesis_provider, create_text_generation_provider
+from app.ai.provider_factory import (
+    create_speech_synthesis_provider,
+    create_text_generation_provider,
+)
 from app.ai.providers.openai.speech import (
-    OpenAISpeechService, normalize_complete_speech_wav, validate_speech_wav,
+    OpenAISpeechService,
+    normalize_complete_speech_wav,
+    validate_speech_wav,
 )
 from app.core.config import settings
 
@@ -25,7 +30,9 @@ def _wav(seconds: float = 1.0) -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_factory_uses_openai_speech_without_gemini_key(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_factory_uses_openai_speech_without_gemini_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "GOOGLE_API_KEY", "")
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "local-test-only")
     provider = create_speech_synthesis_provider()
@@ -33,7 +40,9 @@ async def test_factory_uses_openai_speech_without_gemini_key(monkeypatch: pytest
     assert provider.ready
     create = AsyncMock(return_value=SimpleNamespace(aread=AsyncMock(return_value=_wav())))
     provider._client = SimpleNamespace(audio=SimpleNamespace(speech=SimpleNamespace(create=create)))  # type: ignore[assignment]
-    result = await provider.synthesize_speech(text="明日は会議です。", voice="marin", language="ja", speed="NORMAL")
+    result = await provider.synthesize_speech(
+        text="明日は会議です。", voice="marin", language="ja", speed="NORMAL"
+    )
     assert result.provider == "openai"
     assert result.duration_seconds == 1
     assert create.call_args.kwargs["response_format"] == "wav"
@@ -47,7 +56,9 @@ async def test_gemini_voice_rejected_before_any_speech_call() -> None:
     create = AsyncMock()
     provider._client = SimpleNamespace(audio=SimpleNamespace(speech=SimpleNamespace(create=create)))  # type: ignore[assignment]
     with pytest.raises(ValueError, match="voice"):
-        await provider.synthesize_speech(text="こんにちは", voice="Kore", language="ja", speed="NORMAL")
+        await provider.synthesize_speech(
+            text="こんにちは", voice="Kore", language="ja", speed="NORMAL"
+        )
     create.assert_not_called()
 
 
@@ -79,5 +90,3 @@ def test_complete_streaming_wav_with_unknown_header_lengths_uses_actual_frames()
     assert int.from_bytes(normalized[4:8], "little") == len(normalized) - 8
     assert int.from_bytes(normalized[40:44], "little") == len(normalized) - 44
     assert normalized[44:] == audio[44:]
-
-

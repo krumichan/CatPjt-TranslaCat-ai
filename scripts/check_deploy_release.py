@@ -2,6 +2,7 @@
 Run: python scripts/check_deploy_release.py
 No server connections, images, containers or credentials are used.
 """
+
 from __future__ import annotations
 
 import base64
@@ -28,7 +29,7 @@ def _bash_path(path: Path) -> str:
     return str(absolute)
 
 
-FAKE = r'''#!/usr/bin/env python3
+FAKE = r"""#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
 name = Path(sys.argv[0]).name
@@ -81,7 +82,8 @@ if args[0] == "rm":
     end()
 if args[0] == "logs": end(0, "simulated log")
 end(99, "unsupported probe call: " + repr(args))
-'''
+"""
+
 
 def main() -> None:
     bash = shutil.which("bash")
@@ -90,12 +92,25 @@ def main() -> None:
             "Bash is required (Linux/macOS or Git Bash/WSL). No live deployment is performed.",
         )
     results = []
-    cases = [(name, True, True) for name in (
-        "checkout", "environment", "network", "build", "stop", "rename", "run", "revision",
-        "health", "success",
-    )]
+    cases = [
+        (name, True, True)
+        for name in (
+            "checkout",
+            "environment",
+            "network",
+            "build",
+            "stop",
+            "rename",
+            "run",
+            "revision",
+            "health",
+            "success",
+        )
+    ]
     cases += [
-        ("health", True, False), ("success", False, False), ("health", False, False),
+        ("health", True, False),
+        ("success", False, False),
+        ("health", False, False),
         ("rollback_start", True, True),
     ]
     for fault, exists, running in cases:
@@ -104,33 +119,52 @@ def main() -> None:
             bins = root / "bin"
             bins.mkdir()
             # 준비: 실제 명령 대신 격리된 실행 파일과 컨테이너 상태 자료를 만든다.
-            original = ({NAME: {"running": running, "sha": "old-sha", "env": "old-env"}}
-                        if exists else {})
+            original = (
+                {NAME: {"running": running, "sha": "old-sha", "env": "old-env"}} if exists else {}
+            )
             (root / "state.json").write_text(json.dumps(original))
             (root / "calls.jsonl").write_text("")
             for command in ("git", "docker", "curl", "sleep"):
                 executable = bins / command
                 executable.write_text(
                     FAKE.replace(
-                        "#!/usr/bin/env python3", "#!" + _bash_path(Path(sys.executable)) + " -S",
+                        "#!/usr/bin/env python3",
+                        "#!" + _bash_path(Path(sys.executable)) + " -S",
                     ),
                     newline="\n",
                 )
                 executable.chmod(0o755)
             environment = os.environ | {
                 "PATH": str(bins) + os.pathsep + os.environ["PATH"],
-                "PROBE_STATE": str(root / "state.json"), "PROBE_CALLS": str(root / "calls.jsonl"),
-                "PROBE_FAULT": fault, "PROBE_CONTAINER": NAME, "PROBE_SHA": SHA,
-                "DEPLOY_ENV_B64": ("%%%bad-base64" if fault == "environment"
-                                   else base64.b64encode(b"FAKE=probe\n").decode()),
-                "DEPLOY_HEALTH_ATTEMPTS": "2", "DEPLOY_HEALTH_DELAY_SECONDS": "0",
+                "PROBE_STATE": str(root / "state.json"),
+                "PROBE_CALLS": str(root / "calls.jsonl"),
+                "PROBE_FAULT": fault,
+                "PROBE_CONTAINER": NAME,
+                "PROBE_SHA": SHA,
+                "DEPLOY_ENV_B64": (
+                    "%%%bad-base64"
+                    if fault == "environment"
+                    else base64.b64encode(b"FAKE=probe\n").decode()
+                ),
+                "DEPLOY_HEALTH_ATTEMPTS": "2",
+                "DEPLOY_HEALTH_DELAY_SECONDS": "0",
             }
             # 실행: Windows의 System32 WSL shim 대신 확인한 Bash 실행 파일을 사용한다.
             process = subprocess.run(
-                [bash, "-c",
-                 'export PATH="$1:$PATH"; probe_script="$2"; shift 2; source "$probe_script"',
-                 "release-probe", _bash_path(bins), _bash_path(SCRIPT), SHA],
-                cwd=root, env=environment, capture_output=True, text=True, timeout=20,
+                [
+                    bash,
+                    "-c",
+                    'export PATH="$1:$PATH"; probe_script="$2"; shift 2; source "$probe_script"',
+                    "release-probe",
+                    _bash_path(bins),
+                    _bash_path(SCRIPT),
+                    SHA,
+                ],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
             )
 
             # 검증: 모든 외부 호출이 합성이며 실패 시 이전 상태와 비밀 파일 정리가 보존된다.
@@ -143,8 +177,11 @@ def main() -> None:
                 assert after[NAME]["sha"] == SHA and after[NAME]["running"]
                 if exists:
                     backups = [item for key, item in after.items() if key != NAME]
-                    assert (len(backups) == 1 and backups[0]["env"] == "old-env"
-                            and not backups[0]["running"])
+                    assert (
+                        len(backups) == 1
+                        and backups[0]["env"] == "old-env"
+                        and not backups[0]["running"]
+                    )
             else:
                 assert process.returncode != 0, (fault, "failure reported success")
                 if fault == "rollback_start":
@@ -153,11 +190,21 @@ def main() -> None:
                     assert after == original, (fault, original, after, process.stderr)
                 if fault in ("checkout", "environment", "network", "build"):
                     assert not any(call[:2] == ["docker", "stop"] for call in calls), (fault, calls)
-            results.append({"fault": fault, "previous_exists": exists, "previous_running": running,
-                            "exit": process.returncode, "assertions": "PASS"})
+            results.append(
+                {
+                    "fault": fault,
+                    "previous_exists": exists,
+                    "previous_running": running,
+                    "exit": process.returncode,
+                    "assertions": "PASS",
+                }
+            )
             print(f"PASS {fault}: previous={exists}/{running}, exit={process.returncode}")
-    print(f"{len(results)}/{len(results)} failure-injection scenarios passed. "
-          "All external commands were fake.")
+    print(
+        f"{len(results)}/{len(results)} failure-injection scenarios passed. "
+        "All external commands were fake."
+    )
+
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
 """원문 없이 Provider 예외의 기술적 출처만 전달한다."""
+
 import httpx
 from openai import APIConnectionError, APITimeoutError
 
@@ -7,9 +8,16 @@ def provider_failure_origin(error: Exception) -> dict[str, str | int]:
     # SDK가 상태 없이 주는 표식은 고정 enum으로만 전달하며 원문은 경계를 넘기지 않는다.
     details = _exception_origin(error)
     message = f"{type(error).__name__} {error}".lower()
-    if any(marker in message for marker in (
-        "rate limit", "ratelimit", "resource_exhausted", "resource exhausted", "too many requests",
-    )):
+    if any(
+        marker in message
+        for marker in (
+            "rate limit",
+            "ratelimit",
+            "resource_exhausted",
+            "resource exhausted",
+            "too many requests",
+        )
+    ):
         details["failureSignal"] = "RATE_LIMIT"
     elif "deadline exceeded" in message:
         details["failureSignal"] = "DEADLINE"

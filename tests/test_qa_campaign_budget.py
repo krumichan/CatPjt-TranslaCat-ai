@@ -50,7 +50,7 @@ def test_reservation_survives_restart_and_unknown_usage(tmp_path):
     second = CampaignLedger(path, "fixed")
     assert second.snapshot()["totalsIncludingReserved"]["usd"] == 19.9
     with pytest.raises(CampaignBudgetExceeded):
-        second.reserve("text", "model", Reservation(usd=.2))
+        second.reserve("text", "model", Reservation(usd=0.2))
     assert len(second.snapshot()["calls"]) == 1
 
 
@@ -92,12 +92,12 @@ def test_start_limit_denial_is_durable_without_counting_rejected_start(tmp_path,
     assert len(ledger.snapshot()["calls"]) == 1
 
 
-@pytest.mark.parametrize("settled_usd", [.1, 20.1])
+@pytest.mark.parametrize("settled_usd", [0.1, 20.1])
 def test_late_usage_settlement_neither_reopens_nor_overwrites_denial(tmp_path, settled_usd):
     ledger = CampaignLedger(tmp_path / "ledger.json", "fixed")
     active = ledger.reserve("in-flight", "fake", Reservation(usd=19.9))
     with pytest.raises(CampaignBudgetExceeded, match="RESERVATION_DENIED_USD"):
-        ledger.reserve("too-expensive", "fake", Reservation(usd=.2))
+        ledger.reserve("too-expensive", "fake", Reservation(usd=0.2))
     ledger.finish(active, status="COMPLETED", elapsed=1, accounted=Reservation(usd=settled_usd))
     state = ledger.snapshot()
     assert state["stoppedReason"] == "RESERVATION_DENIED_USD"
@@ -108,7 +108,9 @@ def test_late_usage_settlement_neither_reopens_nor_overwrites_denial(tmp_path, s
 
 
 @pytest.mark.asyncio
-async def test_tts_reservation_denial_blocks_otherwise_affordable_text_provider(tmp_path, monkeypatch):
+async def test_tts_reservation_denial_blocks_otherwise_affordable_text_provider(
+    tmp_path, monkeypatch
+):
     from unittest.mock import AsyncMock
 
     from app.core.config import settings
@@ -120,17 +122,22 @@ async def test_tts_reservation_denial_blocks_otherwise_affordable_text_provider(
     attempt = ledger.reserve("previous-unknown", "fake", Reservation(usd=19.9))
     ledger.finish(attempt, status="FAILED", elapsed=0, failure="SyntheticUnknownUsage")
     generated = AsyncMock()
-    models = SimpleNamespace(generate_content=generated,
-                             _api_client=SimpleNamespace(_http_options=SimpleNamespace(retry_options=None)))
-    speech = SimpleNamespace(client=SimpleNamespace(aio=SimpleNamespace(models=models)),
-                             synthesize_speech=AsyncMock())
+    models = SimpleNamespace(
+        generate_content=generated,
+        _api_client=SimpleNamespace(_http_options=SimpleNamespace(retry_options=None)),
+    )
+    speech = SimpleNamespace(
+        client=SimpleNamespace(aio=SimpleNamespace(models=models)), synthesize_speech=AsyncMock()
+    )
     with pytest.raises(CampaignBudgetExceeded, match="RESERVATION_DENIED_USD"):
         await BudgetedSpeechProvider(speech, ledger, phase="offline").synthesize_speech(
-            text="synthetic", voice="Kore", language="en", speed="NORMAL")
+            text="synthetic", voice="Kore", language="en", speed="NORMAL"
+        )
     text = SimpleNamespace(call_with_metadata=AsyncMock())
     with pytest.raises(CampaignBudgetExceeded, match="RESERVATION_DENIED_USD"):
         await BudgetedTextProvider(text, ledger, phase="offline").call(
-            "LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic")
+            "LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic"
+        )
     speech.synthesize_speech.assert_not_called()
     generated.assert_not_called()
     text.call_with_metadata.assert_not_called()
@@ -140,10 +147,10 @@ async def test_tts_reservation_denial_blocks_otherwise_affordable_text_provider(
 
 def test_success_settles_and_overage_stops(tmp_path):
     ledger = CampaignLedger(tmp_path / "ledger.json", "fixed")
-    n = ledger.reserve("text", "model", Reservation(100, 200, usd=.5))
-    ledger.finish(n, status="COMPLETED", elapsed=1, accounted=Reservation(10, 20, usd=.1))
-    n = ledger.reserve("text", "model", Reservation(10, 20, usd=.1))
-    ledger.finish(n, status="COMPLETED", elapsed=1, accounted=Reservation(11, 20, usd=.1))
+    n = ledger.reserve("text", "model", Reservation(100, 200, usd=0.5))
+    ledger.finish(n, status="COMPLETED", elapsed=1, accounted=Reservation(10, 20, usd=0.1))
+    n = ledger.reserve("text", "model", Reservation(10, 20, usd=0.1))
+    ledger.finish(n, status="COMPLETED", elapsed=1, accounted=Reservation(11, 20, usd=0.1))
     with pytest.raises(CampaignBudgetExceeded, match="USAGE_EXCEEDED"):
         ledger.reserve("text", "model", Reservation())
 
@@ -151,6 +158,7 @@ def test_success_settles_and_overage_stops(tmp_path):
 @pytest.mark.asyncio
 async def test_wrapper_timeout_flushes_without_second_start(tmp_path, monkeypatch):
     from app.core.config import settings
+
     monkeypatch.setattr(settings, "AI_TEXT_PROVIDER", "openai")
     calls = []
 
@@ -159,7 +167,12 @@ async def test_wrapper_timeout_flushes_without_second_start(tmp_path, monkeypatc
         await asyncio.Event().wait()
 
     ledger = CampaignLedger(tmp_path / "ledger.json", "fixed")
-    provider = BudgetedTextProvider(SimpleNamespace(call_with_metadata=call_with_metadata), ledger, phase="test", call_seconds=.005)
+    provider = BudgetedTextProvider(
+        SimpleNamespace(call_with_metadata=call_with_metadata),
+        ledger,
+        phase="test",
+        call_seconds=0.005,
+    )
     with pytest.raises(TimeoutError):
         await provider.call("LANGUAGE_LEARNING_PRACTICE_GENERATION", "safe synthetic")
     state = ledger.snapshot()
@@ -198,7 +211,9 @@ async def test_expired_before_reservation_never_starts_provider(tmp_path, monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("remaining", [[1, 0], [1, 1, 0]])
-async def test_expiry_during_reservation_or_context_entry_keeps_unknown_charge_without_start(tmp_path, monkeypatch, remaining):
+async def test_expiry_during_reservation_or_context_entry_keeps_unknown_charge_without_start(
+    tmp_path, monkeypatch, remaining
+):
     from unittest.mock import AsyncMock, Mock
 
     upstream = SimpleNamespace(call_with_metadata=AsyncMock())
@@ -229,7 +244,7 @@ async def test_swallowed_timeout_is_failure_and_halts_only_current_run(tmp_path)
     path = tmp_path / "ledger.json"
     ledger = CampaignLedger(path, "fixed")
     upstream = SimpleNamespace(call_with_metadata=ignores_cancel)
-    provider = BudgetedTextProvider(upstream, ledger, phase="test", call_seconds=.005)
+    provider = BudgetedTextProvider(upstream, ledger, phase="test", call_seconds=0.005)
     with pytest.raises(TimeoutError):
         await provider.call("LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic")
     state = ledger.snapshot()
@@ -239,11 +254,15 @@ async def test_swallowed_timeout_is_failure_and_halts_only_current_run(tmp_path)
     assert state["stoppedReason"] is None
     with pytest.raises(CampaignBudgetExceeded, match="QA_CALL_TIMEOUT"):
         await BudgetedTextProvider(upstream, ledger, phase="same-run").call(
-            "LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic")
+            "LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic"
+        )
     assert len(calls) == 1
     next_authorized_run = CampaignLedger(path, "fixed")
     assert next_authorized_run.run_stop_reason is None
-    assert next_authorized_run.snapshot()["totalsIncludingReserved"] == state["totalsIncludingReserved"]
+    assert (
+        next_authorized_run.snapshot()["totalsIncludingReserved"]
+        == state["totalsIncludingReserved"]
+    )
 
 
 @pytest.mark.asyncio
@@ -260,7 +279,9 @@ async def test_swallowed_external_cancellation_stays_cancelled_and_blocks_follow
             return SimpleNamespace(data={}, input_tokens=1, output_tokens=1)
 
     ledger = CampaignLedger(tmp_path / "ledger.json", "fixed")
-    provider = BudgetedTextProvider(SimpleNamespace(call_with_metadata=ignores_cancel), ledger, phase="test")
+    provider = BudgetedTextProvider(
+        SimpleNamespace(call_with_metadata=ignores_cancel), ledger, phase="test"
+    )
     task = asyncio.create_task(provider.call("LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic"))
     await started.wait()
     task.cancel()
@@ -279,7 +300,9 @@ async def test_swallowed_external_cancellation_stays_cancelled_and_blocks_follow
 async def test_intrinsic_provider_timeout_does_not_change_existing_retry_policy(tmp_path):
     from unittest.mock import AsyncMock
 
-    call = AsyncMock(side_effect=[TimeoutError(), SimpleNamespace(data={}, input_tokens=1, output_tokens=1)])
+    call = AsyncMock(
+        side_effect=[TimeoutError(), SimpleNamespace(data={}, input_tokens=1, output_tokens=1)]
+    )
     ledger = CampaignLedger(tmp_path / "ledger.json", "fixed")
     provider = BudgetedTextProvider(SimpleNamespace(call_with_metadata=call), ledger, phase="test")
     with pytest.raises(TimeoutError):
@@ -287,8 +310,6 @@ async def test_intrinsic_provider_timeout_does_not_change_existing_retry_policy(
     assert ledger.run_stop_reason is None
     assert await provider.call("LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic") == {}
     assert call.call_count == 2
-
-
 
 
 @pytest.mark.asyncio
@@ -300,8 +321,12 @@ async def test_request_scoped_opt_in_still_halts_on_qa_own_timeout(tmp_path):
         await asyncio.Event().wait()
 
     ledger = CampaignLedger(tmp_path / "ledger.json", "fixed", stop_on_caller_cancel=False)
-    provider = BudgetedTextProvider(SimpleNamespace(call_with_metadata=call_with_metadata), ledger,
-                                    phase="test", call_seconds=.005)
+    provider = BudgetedTextProvider(
+        SimpleNamespace(call_with_metadata=call_with_metadata),
+        ledger,
+        phase="test",
+        call_seconds=0.005,
+    )
     with pytest.raises(TimeoutError):
         await provider.call("LANGUAGE_LEARNING_PRACTICE_GENERATION", "synthetic")
     assert ledger.run_stop_reason == "QA_CALL_TIMEOUT"

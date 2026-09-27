@@ -24,7 +24,6 @@ class _FakeProvider:
         return f"{self.name}-model"
 
 
-
 def test_transient_failure_falls_through_to_next_docked_provider():
     async def run():
         first = _FakeProvider("first", fail=True)

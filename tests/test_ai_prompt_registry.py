@@ -59,8 +59,12 @@ def test_level_test_pipeline_is_owned_by_ktor():
     with patch("app.core.config_logger.setup_logging"):
         from app.main import app
     tasks = [
-        "GENERATION", "VOCAB_CONTEXT_DESIGN", "VOCAB_CONTEXT_REPAIR", "CHOICE_VERIFICATION",
-        "TASK_SUFFICIENCY_VERIFICATION", "SPEAKING_EVALUATION",
+        "GENERATION",
+        "VOCAB_CONTEXT_DESIGN",
+        "VOCAB_CONTEXT_REPAIR",
+        "CHOICE_VERIFICATION",
+        "TASK_SUFFICIENCY_VERIFICATION",
+        "SPEAKING_EVALUATION",
     ]
 
     # 실행

@@ -38,6 +38,7 @@ def test_equal_runtime_policy_reuses_existing_model_without_duplicate_load():
     # 검증
     assert selected is shared
 
+
 def test_effective_di_preserves_other_features_runtime():
     # 준비: 업무 STT adapter가 제거돼도 기술 런타임 선택은 그대로 유지한다.
     from app.api import dependencies as d

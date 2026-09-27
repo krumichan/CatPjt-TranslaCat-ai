@@ -48,8 +48,11 @@ class FakeProvider:
     def __init__(self, result=None, failure=None):
         self.calls = []
         self.result = result or StructuredGenerationResult(
-            data={"answer": "synthetic"}, input_tokens=12, output_tokens=3,
-            provider="fake-sdk", model="synthetic-model",
+            data={"answer": "synthetic"},
+            input_tokens=12,
+            output_tokens=3,
+            provider="fake-sdk",
+            model="synthetic-model",
         )
         self.failure = failure
 
@@ -83,14 +86,18 @@ def test_internal_execution_auth_and_explicit_contract():
     try:
         assert client.post("/internal/v1/model/execute", json=_request()).status_code == 401
         response = client.post(
-            "/internal/v1/model/execute", json=_request(),
+            "/internal/v1/model/execute",
+            json=_request(),
             headers={"X-API-KEY": "synthetic-internal-key"},
         )
         assert response.status_code == 200
         assert response.json() == {
-            "output": {"answer": "synthetic"}, "inputTokens": 12,
-            "outputTokens": 3, "provider": "fake-sdk",
-            "model": "synthetic-model", "providerCalls": 1,
+            "output": {"answer": "synthetic"},
+            "inputTokens": 12,
+            "outputTokens": 3,
+            "provider": "fake-sdk",
+            "model": "synthetic-model",
+            "providerCalls": 1,
         }
         assert len(fake.calls) == 1
         assert fake.calls[0]["instructions"] == "Synthetic system instruction"
@@ -109,8 +116,11 @@ def test_execution_preserves_safe_provider_retry_after():
     client, original_key = _client(FakeProvider(failure=failure))
     try:
         # 실행
-        response = client.post("/internal/v1/model/execute", json=_request(),
-                               headers={"X-API-KEY": "synthetic-internal-key"})
+        response = client.post(
+            "/internal/v1/model/execute",
+            json=_request(),
+            headers={"X-API-KEY": "synthetic-internal-key"},
+        )
 
         # 검증
         assert response.status_code == 503
@@ -150,7 +160,8 @@ def test_deep_invalid_json_uses_fixed_protocol_error_without_provider_call():
         )
         assert response.status_code == 422
         assert response.json()["detail"] == {
-            "code": "EXECUTION_REQUEST_INVALID", "retryable": False,
+            "code": "EXECUTION_REQUEST_INVALID",
+            "retryable": False,
         }
         assert fake.calls == []
     finally:
@@ -158,13 +169,18 @@ def test_deep_invalid_json_uses_fixed_protocol_error_without_provider_call():
 
 
 def test_provider_refusal_and_schema_failure_remain_distinct():
-    refusal = FakeProvider(failure=OpenAIProviderResponseError(
-        "provider refused", reason_code="REFUSAL", retryable=False,
-    ))
+    refusal = FakeProvider(
+        failure=OpenAIProviderResponseError(
+            "provider refused",
+            reason_code="REFUSAL",
+            retryable=False,
+        )
+    )
     client, original_key = _client(refusal)
     try:
         response = client.post(
-            "/internal/v1/model/execute", json=_request(),
+            "/internal/v1/model/execute",
+            json=_request(),
             headers={"X-API-KEY": "synthetic-internal-key"},
         )
         assert response.status_code == 502
@@ -177,7 +193,8 @@ def test_provider_refusal_and_schema_failure_remain_distinct():
     client, original_key = _client(schema_failure)
     try:
         response = client.post(
-            "/internal/v1/model/execute", json=_request(),
+            "/internal/v1/model/execute",
+            json=_request(),
             headers={"X-API-KEY": "synthetic-internal-key"},
         )
         assert response.status_code == 422
@@ -189,7 +206,10 @@ def test_provider_refusal_and_schema_failure_remain_distinct():
 def test_schema_adapter_preserves_supplied_provider_schema_and_strict_flag():
     schema = _request()["responseSchema"]
     config = build_explicit_text_config(
-        schema=schema, schema_name_value="synthetic_answer", strict=True, verbosity="low",
+        schema=schema,
+        schema_name_value="synthetic_answer",
+        strict=True,
+        verbosity="low",
     )
     assert config["format"]["schema"] == schema
     assert config["format"]["strict"] is True
@@ -204,12 +224,30 @@ def test_sdk_transport_timeout_and_configuration_keep_technical_failure_classes(
     cases = [
         (APITimeoutError(request=request), 504, "PROVIDER_TIMEOUT", True, "SDK_TIMEOUT", None),
         (TimeoutError(), 504, "PROVIDER_TIMEOUT", True, "TIMEOUT", None),
-        (APIConnectionError(request=request), 503, "PROVIDER_UNAVAILABLE", True,
-         "SDK_CONNECTION", None),
-        (httpx.ConnectError("PRIVATE_SYNTHETIC_MARKER"), 503, "PROVIDER_UNAVAILABLE", True,
-         "CONNECTION", None),
-        (configuration("PRIVATE_SYNTHETIC_MARKER"), 502, "PROVIDER_CONFIGURATION_ERROR", False,
-         "HTTP_STATUS", 401),
+        (
+            APIConnectionError(request=request),
+            503,
+            "PROVIDER_UNAVAILABLE",
+            True,
+            "SDK_CONNECTION",
+            None,
+        ),
+        (
+            httpx.ConnectError("PRIVATE_SYNTHETIC_MARKER"),
+            503,
+            "PROVIDER_UNAVAILABLE",
+            True,
+            "CONNECTION",
+            None,
+        ),
+        (
+            configuration("PRIVATE_SYNTHETIC_MARKER"),
+            502,
+            "PROVIDER_CONFIGURATION_ERROR",
+            False,
+            "HTTP_STATUS",
+            401,
+        ),
     ]
     for failure, status, code, retryable, kind, provider_status in cases:
         fake = FakeProvider(failure=failure)
@@ -217,7 +255,8 @@ def test_sdk_transport_timeout_and_configuration_keep_technical_failure_classes(
         try:
             # 실행: 범용 HTTP 경계가 기술 실패를 한 번만 분류한다.
             response = client.post(
-                "/internal/v1/model/execute", json=_request(),
+                "/internal/v1/model/execute",
+                json=_request(),
                 headers={"X-API-KEY": "synthetic-internal-key"},
             )
 
@@ -240,8 +279,10 @@ def test_openai_sdk_adapter_uses_explicit_messages_profile_and_one_call():
         async def create(self, **kwargs):
             calls.append(kwargs)
             return SimpleNamespace(
-                status="completed", output_text=json.dumps({"answer": "synthetic"}),
-                output=[], model="synthetic-model",
+                status="completed",
+                output_text=json.dumps({"answer": "synthetic"}),
+                output=[],
+                model="synthetic-model",
                 usage=SimpleNamespace(input_tokens=8, output_tokens=2),
             )
 
@@ -255,13 +296,20 @@ def test_openai_sdk_adapter_uses_explicit_messages_profile_and_one_call():
     provider = OpenAIService()
     provider._client = FakeClient()
     schema = _request()["responseSchema"]
-    result = asyncio.run(provider.execute_explicit(
-        instructions="Synthetic system instruction",
-        messages=[{"role": "user", "content": "Synthetic input"}],
-        tier=AiModelTier.MINI, reasoning_effort="low", verbosity="low",
-        max_output_tokens=2048, remaining_milliseconds=1000,
-        response_schema=schema, schema_name_value="synthetic_answer", strict=True,
-    ))
+    result = asyncio.run(
+        provider.execute_explicit(
+            instructions="Synthetic system instruction",
+            messages=[{"role": "user", "content": "Synthetic input"}],
+            tier=AiModelTier.MINI,
+            reasoning_effort="low",
+            verbosity="low",
+            max_output_tokens=2048,
+            remaining_milliseconds=1000,
+            response_schema=schema,
+            schema_name_value="synthetic_answer",
+            strict=True,
+        )
+    )
     assert result.data == {"answer": "synthetic"}
     assert len(calls) == 1
     assert calls[0]["instructions"] == "Synthetic system instruction"
@@ -272,21 +320,27 @@ def test_openai_sdk_adapter_uses_explicit_messages_profile_and_one_call():
 
 def test_provider_signal_crosses_http_as_enum_without_original_message():
     # 준비: 상태 없는 SDK 오류도 원본 재시도 정책에서 구분하던 표식을 제공한다.
-    for message, signal in (("rate limit", "RATE_LIMIT"), ("deadline exceeded", "DEADLINE"),
-                            ("safety blocked", "SAFETY")):
+    for message, signal in (
+        ("rate limit", "RATE_LIMIT"),
+        ("deadline exceeded", "DEADLINE"),
+        ("safety blocked", "SAFETY"),
+    ):
         fake = FakeProvider(failure=RuntimeError(f"{message} PRIVATE_SYNTHETIC_MARKER"))
         client, original_key = _client(fake)
         try:
             # 실행: 기술 API는 모델 실행 한 번 뒤 고정된 진단 enum만 전달한다.
             response = client.post(
-                "/internal/v1/model/execute", json=_request(),
+                "/internal/v1/model/execute",
+                json=_request(),
                 headers={"X-API-KEY": "synthetic-internal-key"},
             )
 
             # 검증: 원문은 응답에서 제외하며 업무별 채택·재시도는 결정하지 않는다.
             assert response.status_code == 502
             assert response.json()["detail"] == {
-                "code": "PROVIDER_EXECUTION_FAILED", "retryable": False, "failureSignal": signal,
+                "code": "PROVIDER_EXECUTION_FAILED",
+                "retryable": False,
+                "failureSignal": signal,
             }
             assert len(fake.calls) == 1
             assert "PRIVATE_SYNTHETIC_MARKER" not in response.text

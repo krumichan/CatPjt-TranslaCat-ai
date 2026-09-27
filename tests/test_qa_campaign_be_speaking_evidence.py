@@ -12,19 +12,43 @@ from scripts.qa_campaign_be_workflows import _audio, speaking, speaking_evidence
 
 
 def evaluation(mode: str = "GUIDED") -> dict[str, Any]:
-    axes = ["MEANING"] if mode == "READ_ALOUD" else [
-        "GRAMMAR", "VOCABULARY", "NATURALNESS", "MEANING", "EXPRESSIVENESS", "INTERACTION",
-    ]
+    axes = (
+        ["MEANING"]
+        if mode == "READ_ALOUD"
+        else [
+            "GRAMMAR",
+            "VOCABULARY",
+            "NATURALNESS",
+            "MEANING",
+            "EXPRESSIVENESS",
+            "INTERACTION",
+        ]
+    )
     return {
-        "status": "EVALUATED", "overallScore": 70,
+        "status": "EVALUATED",
+        "overallScore": 70,
         "evidencePolicyVersion": "speaking-transcript-evidence-v2",
-        "evidenceSource": "TRANSCRIPT_OBSERVATION", "evaluatedAxes": axes,
+        "evidenceSource": "TRANSCRIPT_OBSERVATION",
+        "evaluatedAxes": axes,
         "evaluationCoverage": 0.1 if mode == "READ_ALOUD" else 0.65,
         "pronunciationPracticeJson": "[]",
-        "metrics": [{"metricType": axis, "state": "EVALUATED" if axis in axes else "NOT_EVALUABLE",
-                     "score": 70 if axis in axes else None}
-                    for axis in ("GRAMMAR", "VOCABULARY", "NATURALNESS", "MEANING", "EXPRESSIVENESS",
-                                 "FLUENCY", "PRONUNCIATION", "INTERACTION")],
+        "metrics": [
+            {
+                "metricType": axis,
+                "state": "EVALUATED" if axis in axes else "NOT_EVALUABLE",
+                "score": 70 if axis in axes else None,
+            }
+            for axis in (
+                "GRAMMAR",
+                "VOCABULARY",
+                "NATURALNESS",
+                "MEANING",
+                "EXPRESSIVENESS",
+                "FLUENCY",
+                "PRONUNCIATION",
+                "INTERACTION",
+            )
+        ],
     }
 
 
@@ -52,14 +76,20 @@ def test_read_aloud_problem_dto_does_not_fabricate_unexposed_metric_rows():
         speaking_evidence_v2(value, "READ_ALOUD", metrics_required=True)
 
 
-@pytest.mark.parametrize("mutation,code", [
-    (lambda value: value.pop("evidencePolicyVersion"), "POLICY_MISSING"),
-    (lambda value: value.update(evaluationCoverage=1), "COVERAGE_MISMATCH"),
-    (lambda value: value["evaluatedAxes"].append("PRONUNCIATION"), "AXES_INVALID"),
-    (lambda value: value["metrics"][5].update(score=50), "SCORED_UNSUPPORTED_ACOUSTICS"),
-    (lambda value: value["metrics"][3].update(state="NOT_EVALUABLE"), "ROWS_DISAGREE"),
-    (lambda value: value.update(pronunciationPracticeJson='[{"instruction":"unsupported"}]'), "PRONUNCIATION_PRACTICE"),
-])
+@pytest.mark.parametrize(
+    "mutation,code",
+    [
+        (lambda value: value.pop("evidencePolicyVersion"), "POLICY_MISSING"),
+        (lambda value: value.update(evaluationCoverage=1), "COVERAGE_MISMATCH"),
+        (lambda value: value["evaluatedAxes"].append("PRONUNCIATION"), "AXES_INVALID"),
+        (lambda value: value["metrics"][5].update(score=50), "SCORED_UNSUPPORTED_ACOUSTICS"),
+        (lambda value: value["metrics"][3].update(state="NOT_EVALUABLE"), "ROWS_DISAGREE"),
+        (
+            lambda value: value.update(pronunciationPracticeJson='[{"instruction":"unsupported"}]'),
+            "PRONUNCIATION_PRACTICE",
+        ),
+    ],
+)
 def test_invalid_evidence_is_reported_not_relabelled(mutation, code):
     value = evaluation()
     mutation(value)
@@ -69,15 +99,25 @@ def test_invalid_evidence_is_reported_not_relabelled(mutation, code):
 
 def test_insufficient_evidence_is_observed_without_requiring_fake_positive_score():
     value = evaluation()
-    value.update(status="INSUFFICIENT_EVIDENCE", overallScore=None,
-                 evaluatedAxes=[], evaluationCoverage=0, metrics=[])
+    value.update(
+        status="INSUFFICIENT_EVIDENCE",
+        overallScore=None,
+        evaluatedAxes=[],
+        evaluationCoverage=0,
+        metrics=[],
+    )
     observed = speaking_evidence_v2(value, "FREE", metrics_required=True)
     assert observed["evaluatedAxes"] == []
     assert observed["verifiedNotEvaluableAxes"] == []
     # Existing service retains metric observations when global confidence is low.
     model_insufficient = evaluation()
     model_insufficient.update(status="INSUFFICIENT_EVIDENCE", overallScore=None)
-    assert speaking_evidence_v2(model_insufficient, "FREE", metrics_required=True)["evaluationCoverage"] == 0.65
+    assert (
+        speaking_evidence_v2(model_insufficient, "FREE", metrics_required=True)[
+            "evaluationCoverage"
+        ]
+        == 0.65
+    )
 
 
 def wav_bytes() -> bytes:
@@ -115,7 +155,9 @@ def test_download_checksum_and_truncated_frames_cannot_pass(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["READ_ALOUD", "GUIDED", "FREE"])
-def test_v2_full_fixed_workflow_records_evidence_and_sha_without_extra_actions(tmp_path, monkeypatch, mode):
+def test_v2_full_fixed_workflow_records_evidence_and_sha_without_extra_actions(
+    tmp_path, monkeypatch, mode
+):
     from scripts import qa_campaign_be_workflows as workflow
 
     buffer = io.BytesIO()

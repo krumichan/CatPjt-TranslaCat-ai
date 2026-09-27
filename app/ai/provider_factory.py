@@ -7,9 +7,7 @@ from app.core.config import settings
 def create_text_generation_provider() -> AiProviderPool:
     pool = AiProviderPool()
     provider_names = [
-        value.strip().lower()
-        for value in settings.AI_TEXT_PROVIDER.split(",")
-        if value.strip()
+        value.strip().lower() for value in settings.AI_TEXT_PROVIDER.split(",") if value.strip()
     ]
 
     for provider_name in provider_names:

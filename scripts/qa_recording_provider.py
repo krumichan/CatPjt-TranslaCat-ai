@@ -1,4 +1,5 @@
 """범용 QA 호출 예산과 상태 기록. 요청·응답 원문은 보관하지 않는다."""
+
 from __future__ import annotations
 
 import asyncio
@@ -119,9 +120,9 @@ class RecordingProvider:
         result = await self._invoke(
             record,
             lambda: self.upstream.call_with_metadata(
-                    type_name=type_name,
-                    data=data,
-                    schema=schema,
+                type_name=type_name,
+                data=data,
+                schema=schema,
             ),
         )
         # 응답 원문 없이 실행 결과와 사용량만 기록한다.
@@ -140,17 +141,13 @@ class RecordingProvider:
             self._checkpoint()
         return result
 
-    async def _invoke(
-        self, record: dict[str, Any], operation: Callable[[], Awaitable[Any]]
-    ) -> Any:
+    async def _invoke(self, record: dict[str, Any], operation: Callable[[], Awaitable[Any]]) -> Any:
         started = time.perf_counter()
         remaining = max(0.0, self.caps.seconds - (started - self.started_at))
         if remaining <= 0:
             # 기록 I/O로 남은 시간이 소진되었으면 SDK에도 진입하지 않는다.
             record["status"] = "FAILED"
-            record["failure"] = {
-                "type": "QA_OVERALL_TIMEOUT", "source": "BEFORE_PROVIDER_ENTRY"
-            }
+            record["failure"] = {"type": "QA_OVERALL_TIMEOUT", "source": "BEFORE_PROVIDER_ENTRY"}
             self.budget_exhausted_reason = "wall-clock cap reached"
             self._finish_timing(record, started)
             self._checkpoint()
@@ -175,15 +172,14 @@ class RecordingProvider:
             record["status"] = "FAILED"
             if not deadline.expired():
                 # 공급자 자체 timeout과 QA 제한 초과는 별도로 기록한다.
-                record["failure"] = {
-                    "type": type(exc).__name__, "source": "PROVIDER"
-                }
+                record["failure"] = {"type": type(exc).__name__, "source": "PROVIDER"}
                 raise
             code = "QA_OVERALL_TIMEOUT" if overall_limited else "QA_CALL_TIMEOUT"
             record["failure"] = {"type": code, "timeoutSeconds": limit}
             self.budget_exhausted_reason = (
-                "wall-clock cap reached" if overall_limited else
-                f"provider call timed out after {self.caps.call_seconds:g} seconds"
+                "wall-clock cap reached"
+                if overall_limited
+                else f"provider call timed out after {self.caps.call_seconds:g} seconds"
             )
             error_type = QaOverallTimeout if overall_limited else QaCallTimeout
             raise error_type(self.budget_exhausted_reason) from exc
@@ -194,9 +190,7 @@ class RecordingProvider:
             if cancelled:
                 task = asyncio.current_task()
                 failure["source"] = "EXTERNAL_OR_UPSTREAM_UNDETERMINED"
-                failure["taskCancellationCount"] = (
-                    task.cancelling() if task is not None else None
-                )
+                failure["taskCancellationCount"] = task.cancelling() if task is not None else None
                 if self.stop_on_caller_cancel:
                     self.budget_exhausted_reason = "execution cancelled; no further starts"
             record["failure"] = failure
@@ -210,16 +204,13 @@ class RecordingProvider:
         type_name = str(kwargs.get("type_name", args[0] if args else "IMAGE_CALL"))
         prompt = str(kwargs.get("prompt", args[1] if len(args) > 1 else ""))
         record = self._start_call(type_name, prompt)
-        result = await self._invoke(
-            record, lambda: self.upstream.call_with_image(*args, **kwargs)
-        )
+        result = await self._invoke(record, lambda: self.upstream.call_with_image(*args, **kwargs))
         record["status"] = "SUCCEEDED"
         try:
             self._check_after_call(record)
         finally:
             self._checkpoint()
         return result
-
 
 
 def _call_summary(calls: list[dict[str, Any]]) -> dict[str, Any]:

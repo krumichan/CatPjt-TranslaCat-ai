@@ -1,6 +1,7 @@
 line-length = 100
 indent-width = 4
-target-version = "py312"
+# 배포 이미지와 CI의 Python 3.11 문법을 기준으로 검사한다.
+target-version = "py311"
 
 exclude = [
     ".git",

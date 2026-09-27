@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import time
 from typing import Any, cast
 
 from fastapi import HTTPException
@@ -117,13 +118,16 @@ class OpenAIService:
         """범용 모델 실행. task/prompt registry나 업무 validator를 참조하지 않는다."""
         model = get_model_name_for_tier(tier)
         text_config = build_explicit_text_config(
-            schema=response_schema, schema_name_value=schema_name_value,
-            strict=strict, verbosity=verbosity,
+            schema=response_schema,
+            schema_name_value=schema_name_value,
+            strict=strict,
+            verbosity=verbosity,
         )
         # LL이 전달한 남은 전체 deadline을 줄이는 방향으로만 적용한다.
         provider_timeout = (
             max(85.0, settings.OPENAI_REQUEST_TIMEOUT_SECONDS)
-            if tier == AiModelTier.SOL else settings.OPENAI_REQUEST_TIMEOUT_SECONDS
+            if tier == AiModelTier.SOL
+            else settings.OPENAI_REQUEST_TIMEOUT_SECONDS
         )
         timeout = min(remaining_milliseconds / 1000.0, provider_timeout)
         try:
@@ -149,8 +153,11 @@ class OpenAIService:
             logger.error(
                 "Explicit model execution failed. model=%s errorType=%s "
                 "status=%s providerCode=%s schemaSha256=%s",
-                model, type(exc).__name__, diagnostic["status_code"],
-                diagnostic["provider_code"], diagnostic["schema_sha256"],
+                model,
+                type(exc).__name__,
+                diagnostic["status_code"],
+                diagnostic["provider_code"],
+                diagnostic["schema_sha256"],
             )
             raise
 
@@ -162,6 +169,23 @@ class OpenAIService:
         mime_type: str,
         schema: dict | None = None,
     ) -> Any:
+        result = await self.call_with_image_with_metadata(
+            type_name=type_name,
+            prompt=prompt,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            schema=schema,
+        )
+        return result.data
+
+    async def call_with_image_with_metadata(
+        self,
+        type_name: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        schema: dict | None = None,
+    ) -> StructuredGenerationResult:
         encoded = base64.b64encode(image_bytes).decode("ascii")
         image_url = f"data:{mime_type};base64,{encoded}"
         user_input = [
@@ -178,12 +202,11 @@ class OpenAIService:
                 ],
             }
         ]
-        result = await self._create_response(
+        return await self._create_response(
             type_name=type_name,
             user_input=user_input,
             schema=schema,
         )
-        return result.data
 
     async def translate_chat_message(
         self,
@@ -274,13 +297,17 @@ class OpenAIService:
             verbosity=policy.verbosity,
         )
 
+        started = time.perf_counter()
         try:
             # Reading Sol/high may legitimately take longer than the generic
             # Luna deadline. The service's 80s boundary remains authoritative.
-            client = (self.client.with_options(
-                timeout=max(85.0, settings.OPENAI_REQUEST_TIMEOUT_SECONDS),
+            client = (
+                self.client.with_options(
+                    timeout=max(85.0, settings.OPENAI_REQUEST_TIMEOUT_SECONDS),
+                )
+                if model == "gpt-5.6-sol"
+                else self.client
             )
-                      if model == "gpt-5.6-sol" else self.client)
             response = await client.responses.create(
                 model=model,
                 instructions=rule,
@@ -294,12 +321,23 @@ class OpenAIService:
             data = decode_response(response, structured=schema is not None)
 
             usage = getattr(response, "usage", None)
+            incomplete = getattr(response, "incomplete_details", None)
+            incomplete_reason = (
+                incomplete.get("reason")
+                if isinstance(incomplete, dict)
+                else getattr(incomplete, "reason", None)
+            )
             return StructuredGenerationResult(
                 data=data,
                 input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
                 output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
                 provider="openai",
                 model=str(getattr(response, "model", None) or model),
+                status=str(getattr(response, "status", None) or "completed"),
+                incomplete_reason=(
+                    str(incomplete_reason) if incomplete_reason is not None else None
+                ),
+                latency_ms=round((time.perf_counter() - started) * 1000),
             )
         except Exception as exc:
             # Prompt/API key/Provider body 전체는 기록하지 않는다. 4xx 원인 판별에 필요한

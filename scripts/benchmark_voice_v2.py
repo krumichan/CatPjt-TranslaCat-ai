@@ -40,9 +40,7 @@ async def run_once(
 ) -> RunResult:
     bytes_per_frame = 16 * frame_duration_ms * 2
     if len(pcm_bytes) % bytes_per_frame != 0:
-        raise ValueError(
-            "PCM fixture byte length must be an exact multiple of one frame"
-        )
+        raise ValueError("PCM fixture byte length must be an exact multiple of one frame")
 
     session_id = str(uuid4())
     stream_open = {
@@ -93,9 +91,7 @@ async def run_once(
                     first_partial_at = time.perf_counter()
                 elif event_type == "VOICE_PIPELINE_FAILED":
                     error = event.get("error") or {}
-                    raise RuntimeError(
-                        f"Voice pipeline failed: {error.get('code', 'unknown')}"
-                    )
+                    raise RuntimeError(f"Voice pipeline failed: {error.get('code', 'unknown')}")
                 elif event_type == "VOICE_PIPELINE_COMPLETED":
                     completed_event = event
 
@@ -116,13 +112,9 @@ async def run_once(
         completed_at = time.perf_counter()
         assert completed_event is not None
 
-        await websocket.send(
-            json.dumps({"type": "STREAM_CLOSE", "reason": "BENCHMARK_COMPLETE"})
-        )
+        await websocket.send(json.dumps({"type": "STREAM_CLOSE", "reason": "BENCHMARK_COMPLETE"}))
         while True:
-            event = json.loads(
-                await asyncio.wait_for(websocket.recv(), timeout_seconds)
-            )
+            event = json.loads(await asyncio.wait_for(websocket.recv(), timeout_seconds))
             if event.get("type") == "STREAM_CLOSED":
                 break
 
@@ -130,9 +122,7 @@ async def run_once(
         model = completed_event.get("model") or {}
         return RunResult(
             first_partial_ms=(
-                (first_partial_at - first_audio_at) * 1000
-                if first_partial_at is not None
-                else None
+                (first_partial_at - first_audio_at) * 1000 if first_partial_at is not None else None
             ),
             speech_end_to_completed_ms=(completed_at - speech_ended_at) * 1000,
             ai_total_after_speech_ms=latency.get("aiTotalAfterSpeechMs"),
@@ -170,9 +160,7 @@ async def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         results.extend(batch)
 
     partial_values = [
-        result.first_partial_ms
-        for result in results
-        if result.first_partial_ms is not None
+        result.first_partial_ms for result in results if result.first_partial_ms is not None
     ]
     completion_values = [result.speech_end_to_completed_ms for result in results]
     first = results[0]
@@ -222,10 +210,7 @@ def percentile(ordered_values: list[float], quantile: float) -> float:
     if lower_index == upper_index:
         return ordered_values[lower_index]
     weight = position - lower_index
-    return (
-        ordered_values[lower_index] * (1 - weight)
-        + ordered_values[upper_index] * weight
-    )
+    return ordered_values[lower_index] * (1 - weight) + ordered_values[upper_index] * weight
 
 
 def parse_args() -> argparse.Namespace:

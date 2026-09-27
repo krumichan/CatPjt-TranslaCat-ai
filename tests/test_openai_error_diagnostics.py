@@ -52,7 +52,8 @@ def test_safe_openai_error_metadata_keeps_diagnostic_fields_without_raw_body() -
 def test_safe_openai_error_metadata_redacts_secret_like_values() -> None:
     exc = _BadRequest()
     exc.body = {
-        "message": "Bearer abc.def.ghi sk-secret123 data:image/png;base64,AAAA verylong=" + "A" * 100,
+        "message": "Bearer abc.def.ghi sk-secret123 data:image/png;base64,AAAA verylong="
+        + "A" * 100,
         "type": "invalid_request_error",
         "param": "input",
         "code": "bad_request",

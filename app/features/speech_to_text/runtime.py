@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
-from importlib.metadata import PackageNotFoundError, version
 from dataclasses import dataclass
 from enum import IntEnum
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from app.core.config import settings
@@ -77,13 +77,9 @@ class FasterWhisperRuntime:
     ) -> None:
         self.model_name = model_name or settings.AI_VOICE_STT_MODEL_NAME
         configured_revision = (
-            settings.AI_VOICE_STT_MODEL_REVISION
-            if model_revision is None
-            else model_revision
+            settings.AI_VOICE_STT_MODEL_REVISION if model_revision is None else model_revision
         )
-        self.model_revision = (
-            configured_revision.strip() if configured_revision else None
-        )
+        self.model_revision = configured_revision.strip() if configured_revision else None
         self.device = device or settings.AI_VOICE_STT_DEVICE
         self.compute_type = compute_type or settings.AI_VOICE_STT_COMPUTE_TYPE
         self.cpu_threads = cpu_threads or settings.AI_VOICE_STT_CPU_THREADS
@@ -199,13 +195,11 @@ class FasterWhisperRuntime:
         self._accepting = False
         self._ready = False
         timeout = (
-            settings.AI_VOICE_SHUTDOWN_GRACE_SECONDS
-            if grace_seconds is None
-            else grace_seconds
+            settings.AI_VOICE_SHUTDOWN_GRACE_SECONDS if grace_seconds is None else grace_seconds
         )
         try:
             await asyncio.wait_for(self._queue.join(), timeout=max(0.1, timeout))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("STT runtime shutdown grace period elapsed")
         finally:
             self._closed = True
@@ -279,18 +273,14 @@ class FasterWhisperRuntime:
                 end_seconds=float(segment.end),
                 text=str(segment.text),
                 avg_logprob=float(getattr(segment, "avg_logprob", -1.0)),
-                no_speech_probability=_optional_float(
-                    getattr(segment, "no_speech_prob", None)
-                ),
+                no_speech_probability=_optional_float(getattr(segment, "no_speech_prob", None)),
             )
             for segment in raw_segments
         ]
         return WhisperRuntimeResult(
             text="".join(segment.text for segment in segments).strip(),
             language=_optional_string(getattr(info, "language", None)),
-            language_probability=_optional_float(
-                getattr(info, "language_probability", None)
-            ),
+            language_probability=_optional_float(getattr(info, "language_probability", None)),
             duration_seconds=_optional_float(getattr(info, "duration", None)),
             segments=segments,
             provider="faster-whisper",
@@ -305,9 +295,7 @@ class FasterWhisperRuntime:
             except asyncio.QueueEmpty:
                 return
             if not request.future.done():
-                request.future.set_exception(
-                    SpeechRuntimeClosed("Speech runtime was shut down")
-                )
+                request.future.set_exception(SpeechRuntimeClosed("Speech runtime was shut down"))
             self._queue.task_done()
 
 

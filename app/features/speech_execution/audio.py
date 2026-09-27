@@ -92,9 +92,7 @@ class AudioDecoder:
             stream = next((item for item in container.streams if item.type == "audio"), None)
             if stream is None:
                 raise AudioDecodeError("AUDIO_STREAM_MISSING")
-            resampler = AudioResampler(
-                format="fltp", layout="mono", rate=self.TARGET_SAMPLE_RATE
-            )
+            resampler = AudioResampler(format="fltp", layout="mono", rate=self.TARGET_SAMPLE_RATE)
             chunks: list[np.ndarray] = []
             count = 0
             for frame in container.decode(stream):

@@ -12,18 +12,18 @@ from app.ai.ports import (
     VoiceReadingGenerationToken,
     VoiceTranslationGenerationResult,
 )
-from app.ai.providers.gemini.config_manager import GeminiConfigManager
 from app.ai.providers.gemini.client import GeminiService
+from app.ai.providers.gemini.config_manager import GeminiConfigManager
 from app.core.config import settings
-from app.features.voice_translation.audio import (
-    AudioFrameValidator,
-    VadPartial,
-    VoiceActivityDetector,
-)
 from app.features.speech_to_text import (
     FasterWhisperRuntime,
     InferencePriority,
     SpeechRuntimeQueueFull,
+)
+from app.features.voice_translation.audio import (
+    AudioFrameValidator,
+    VadPartial,
+    VoiceActivityDetector,
 )
 from app.features.voice_translation.errors import VoicePipelineException
 from app.features.voice_translation.language import (
@@ -119,9 +119,7 @@ class VoiceSchemaAndAudioTest(unittest.TestCase):
                 speech_rms_threshold=0.012,
             )
             self.assertEqual(
-                variable_validator.validate(
-                    pcm_frame(4000, duration_ms=duration_ms)
-                ).duration_ms,
+                variable_validator.validate(pcm_frame(4000, duration_ms=duration_ms)).duration_ms,
                 duration_ms,
             )
 
@@ -134,12 +132,8 @@ class VoiceSchemaAndAudioTest(unittest.TestCase):
         )
 
         detector = self._detector()
-        results = [
-            detector.process(validator.validate(pcm_frame(4000))) for _ in range(3)
-        ]
-        results.extend(
-            detector.process(validator.validate(pcm_frame(0))) for _ in range(3)
-        )
+        results = [detector.process(validator.validate(pcm_frame(4000))) for _ in range(3)]
+        results.extend(detector.process(validator.validate(pcm_frame(0))) for _ in range(3))
         utterance = results[-1].utterance
         self.assertIsNotNone(utterance)
         assert utterance is not None
@@ -149,8 +143,7 @@ class VoiceSchemaAndAudioTest(unittest.TestCase):
 
         short_detector = self._detector()
         short_results = [
-            short_detector.process(validator.validate(pcm_frame(4000)))
-            for _ in range(2)
+            short_detector.process(validator.validate(pcm_frame(4000))) for _ in range(2)
         ]
         short_results.extend(
             short_detector.process(validator.validate(pcm_frame(0))) for _ in range(3)
@@ -570,9 +563,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(VoicePipelineException) as caught:
-            await service.open_stream(
-                VoiceStreamOpen.model_validate(stream_open_payload())
-            )
+            await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
 
         self.assertEqual(caught.exception.code, VoiceErrorCode.MODEL_NOT_READY)
 
@@ -633,9 +624,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
             stt_provider=stt,
             translation_service=translation,
         )
-        context = await service.open_stream(
-            VoiceStreamOpen.model_validate(stream_open_payload())
-        )
+        context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
 
         for _ in range(8):
             await context.feed_audio(pcm_frame(4000))
@@ -683,19 +672,13 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 max_retries=0,
             ),
         )
-        context = await service.open_stream(
-            VoiceStreamOpen.model_validate(stream_open_payload())
-        )
+        context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
         for _ in range(5):
             await context.feed_audio(pcm_frame(0))
         await context.flush("TEST_FLUSH")
 
-        events = [
-            await asyncio.wait_for(context.next_event(), timeout=1) for _ in range(2)
-        ]
-        self.assertEqual(
-            [event.type for event in events], ["STREAM_READY", "NO_SPEECH"]
-        )
+        events = [await asyncio.wait_for(context.next_event(), timeout=1) for _ in range(2)]
+        self.assertEqual([event.type for event in events], ["STREAM_READY", "NO_SPEECH"])
         self.assertEqual(translation_provider.calls, 0)
         await service.release_stream(context)
 
@@ -710,9 +693,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
             ),
             speech_evidence_guard=RejectSpeechEvidenceGuard(),
         )
-        context = await service.open_stream(
-            VoiceStreamOpen.model_validate(stream_open_payload())
-        )
+        context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
         for _ in range(3):
             await context.feed_audio(pcm_frame(4000))
         for _ in range(3):
@@ -722,7 +703,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         for _ in range(3):
             events.append(await asyncio.wait_for(context.next_event(), timeout=1))
         self.assertEqual(
-            [getattr(event, "type") for event in events],
+            [event.type for event in events],
             ["STREAM_READY", "SPEECH_STARTED", "NO_SPEECH"],
         )
         self.assertEqual(stt.calls, [])
@@ -738,9 +719,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 max_retries=0,
             ),
         )
-        context = await service.open_stream(
-            VoiceStreamOpen.model_validate(stream_open_payload())
-        )
+        context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
         for _ in range(8):
             await context.feed_audio(pcm_frame(4000))
             await asyncio.sleep(0)
@@ -751,7 +730,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         event_types = []
         while "VOICE_PIPELINE_COMPLETED" not in event_types:
             event = await asyncio.wait_for(context.next_event(), timeout=1)
-            event_types.append(getattr(event, "type"))
+            event_types.append(event.type)
         self.assertNotIn("TRANSCRIPT_PARTIAL", event_types)
         self.assertIn("TRANSCRIPT_FINAL", event_types)
         await service.release_stream(context)
@@ -764,20 +743,16 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 max_retries=0,
             ),
         )
-        context = await service.open_stream(
-            VoiceStreamOpen.model_validate(stream_open_payload())
-        )
+        context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
         for _ in range(3):
             await context.feed_audio(pcm_frame(4000))
         for _ in range(3):
             await context.feed_audio(pcm_frame(0))
 
         events = []
-        while not any(
-            getattr(event, "type") == "VOICE_PIPELINE_FAILED" for event in events
-        ):
+        while not any(event.type == "VOICE_PIPELINE_FAILED" for event in events):
             events.append(await asyncio.wait_for(context.next_event(), timeout=1))
-        event_types = [getattr(event, "type") for event in events]
+        event_types = [event.type for event in events]
         self.assertLess(
             event_types.index("TRANSCRIPT_FINAL"),
             event_types.index("VOICE_PIPELINE_FAILED"),
@@ -826,15 +801,11 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
         first = None
         try:
-            first = await service.open_stream(
-                VoiceStreamOpen.model_validate(stream_open_payload())
-            )
+            first = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
             self.assertFalse(service.accepting_streams)
             with self.assertRaises(VoicePipelineException) as caught:
                 await service.open_stream(
-                    VoiceStreamOpen.model_validate(
-                        stream_open_payload(sessionId="session-2")
-                    )
+                    VoiceStreamOpen.model_validate(stream_open_payload(sessionId="session-2"))
                 )
             self.assertEqual(caught.exception.code, VoiceErrorCode.BACKPRESSURE)
             self.assertTrue(caught.exception.retryable)

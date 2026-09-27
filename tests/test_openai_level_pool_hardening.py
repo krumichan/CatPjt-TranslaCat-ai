@@ -5,10 +5,6 @@ from app.ai.provider_pool import AiProviderPool
 from app.ai.providers.openai.schema import normalize_openai_response_schema
 
 
-
-
-
-
 def test_openai_schema_turns_small_patterns_into_enums():
     normalized = normalize_openai_response_schema(
         {
@@ -28,14 +24,6 @@ def test_openai_schema_turns_small_patterns_into_enums():
     assert branch == {"type": "string", "enum": ["A", "B"]}
 
 
-
-
-
-
-
-
-
-
 def test_pool_waits_for_short_cooldown_instead_of_immediate_503():
     class Provider:
         ready = True
@@ -52,7 +40,3 @@ def test_pool_waits_for_short_cooldown_instead_of_immediate_503():
         assert time.monotonic() - started >= 0.005
 
     asyncio.run(run())
-
-
-
-

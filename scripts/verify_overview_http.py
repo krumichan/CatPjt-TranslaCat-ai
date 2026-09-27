@@ -197,9 +197,7 @@ def verify_boundaries(client: httpx.Client, user: int, email: str) -> int:
         # 기존 Listening 계열 오류는 공통 ErrorDto와 다른 code 필드 포장을 사용한다.
         external_body = external.json().get("body", {})
         code_field = "code" if code.startswith("LISTENING_") else "errorCode"
-        assert external_body.get(code_field) == code, (
-            f"boundary {path}: BE errorCode mismatch"
-        )
+        assert external_body.get(code_field) == code, f"boundary {path}: BE errorCode mismatch"
         assert internal.json().get("code") == code, f"boundary {path}: LL code mismatch"
     return len(cases) * 2
 

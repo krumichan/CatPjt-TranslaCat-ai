@@ -1,4 +1,5 @@
 """로컬 이행 검사에서만 사용하는 합성 오디오·전사 출력."""
+
 import asyncio
 import io
 import json
@@ -64,7 +65,11 @@ class SyntheticSpeechProvider:
             )
             writer.writeframes(b"".join(frames))
         return SpeechSynthesisResult(
-            buffer.getvalue(), "audio/wav", "test-provider", "synthetic-tts", duration,
+            buffer.getvalue(),
+            "audio/wav",
+            "test-provider",
+            "synthetic-tts",
+            duration,
         )
 
     async def transcribe(self, audio, **kwargs):
@@ -80,9 +85,14 @@ class SyntheticSpeechProvider:
                 "again next week."
             )
         return WhisperRuntimeResult(
-            transcript, "en", 0.99, 4.0,
+            transcript,
+            "en",
+            0.99,
+            4.0,
             [WhisperRuntimeSegment(0, 4.0, transcript, -0.1, 0.01)],
-            "test-provider", "synthetic-stt", "fixture-v1",
+            "test-provider",
+            "synthetic-stt",
+            "fixture-v1",
         )
 
     async def has_speech(self, pcm):

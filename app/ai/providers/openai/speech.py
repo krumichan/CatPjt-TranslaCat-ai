@@ -1,4 +1,5 @@
 """OpenAI Speech adapter for new audio; existing stored Gemini files remain untouched."""
+
 from __future__ import annotations
 
 import io
@@ -8,7 +9,6 @@ from openai import AsyncOpenAI
 
 from app.ai.ports import SpeechSynthesisResult
 from app.core.config import settings
-
 
 OPENAI_SPEECH_POLICY_VERSION = "openai-speech-v1"
 OPENAI_SPEECH_INSTRUCTIONS = (
@@ -41,8 +41,8 @@ def validate_speech_wav(audio_bytes: bytes) -> float:
         data_size = None
         data_offset = None
         while offset + 8 <= len(audio_bytes):
-            chunk_size = int.from_bytes(audio_bytes[offset + 4:offset + 8], "little")
-            if audio_bytes[offset:offset + 4] == b"data":
+            chunk_size = int.from_bytes(audio_bytes[offset + 4 : offset + 8], "little")
+            if audio_bytes[offset : offset + 4] == b"data":
                 data_size, data_offset = chunk_size, offset + 8
                 break
             if chunk_size == 0xFFFFFFFF:
@@ -55,9 +55,13 @@ def validate_speech_wav(audio_bytes: bytes) -> float:
             width = source.getsampwidth()
             rate = source.getframerate()
             frames = source.getnframes()
-            if (source.getcomptype() != "NONE" or channels not in {1, 2}
-                    or width not in {1, 2, 3, 4} or not 8000 <= rate <= 96000
-                    or frames <= 0):
+            if (
+                source.getcomptype() != "NONE"
+                or channels not in {1, 2}
+                or width not in {1, 2, 3, 4}
+                or not 8000 <= rate <= 96000
+                or frames <= 0
+            ):
                 raise ValueError("invalid PCM WAV format")
             decoded = source.readframes(frames)
             frame_bytes = channels * width
@@ -75,7 +79,8 @@ def validate_speech_wav(audio_bytes: bytes) -> float:
             return frames / rate
     except (EOFError, ValueError, wave.Error) as exc:
         raise SpeechAudioDecodeError(
-            byte_count=len(audio_bytes), header_magic=audio_bytes[:4].hex(),
+            byte_count=len(audio_bytes),
+            header_magic=audio_bytes[:4].hex(),
         ) from exc
 
 
@@ -84,19 +89,18 @@ def normalize_complete_speech_wav(audio_bytes: bytes) -> tuple[bytes, float]:
     duration = validate_speech_wav(audio_bytes)
     offset = 12
     while offset + 8 <= len(audio_bytes):
-        size = int.from_bytes(audio_bytes[offset + 4:offset + 8], "little")
-        if audio_bytes[offset:offset + 4] == b"data":
+        size = int.from_bytes(audio_bytes[offset + 4 : offset + 8], "little")
+        if audio_bytes[offset : offset + 4] == b"data":
             break
         offset += 8 + size + size % 2
-    if (audio_bytes[4:8] != b"\xff" * 4
-            and audio_bytes[offset + 4:offset + 8] != b"\xff" * 4):
+    if audio_bytes[4:8] != b"\xff" * 4 and audio_bytes[offset + 4 : offset + 8] != b"\xff" * 4:
         return audio_bytes, duration
     observed_size = len(audio_bytes) - offset - 8
     if len(audio_bytes) - 8 >= 0xFFFFFFFF or observed_size >= 0xFFFFFFFF:
         raise SpeechAudioDecodeError(byte_count=len(audio_bytes), header_magic="oversized")
     normalized = bytearray(audio_bytes)
     normalized[4:8] = (len(audio_bytes) - 8).to_bytes(4, "little")
-    normalized[offset + 4:offset + 8] = observed_size.to_bytes(4, "little")
+    normalized[offset + 4 : offset + 8] = observed_size.to_bytes(4, "little")
     return bytes(normalized), validate_speech_wav(bytes(normalized))
 
 
@@ -130,7 +134,12 @@ class OpenAISpeechService:
             self._client = None
 
     async def synthesize_speech(
-        self, *, text: str, voice: str, language: str, speed: str,
+        self,
+        *,
+        text: str,
+        voice: str,
+        language: str,
+        speed: str,
     ) -> SpeechSynthesisResult:
         # In particular, never send a Gemini voice name to OpenAI or disguise
         # a marin recording as Kore in downstream metadata.

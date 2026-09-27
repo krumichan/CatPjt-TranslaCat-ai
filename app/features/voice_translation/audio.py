@@ -91,9 +91,7 @@ class AudioFrameValidator:
                 retryable=False,
             )
 
-        bytes_per_ms = (
-            self.audio_format.sample_rate * self.audio_format.channels * 2 // 1000
-        )
+        bytes_per_ms = self.audio_format.sample_rate * self.audio_format.channels * 2 // 1000
         if len(data) % bytes_per_ms != 0:
             raise VoicePipelineException(
                 code=VoiceErrorCode.INVALID_AUDIO_FRAME,
@@ -102,11 +100,7 @@ class AudioFrameValidator:
                 retryable=False,
             )
         duration_ms = len(data) // bytes_per_ms
-        if not (
-            self.minimum_frame_duration_ms
-            <= duration_ms
-            <= self.maximum_frame_duration_ms
-        ):
+        if not (self.minimum_frame_duration_ms <= duration_ms <= self.maximum_frame_duration_ms):
             raise VoicePipelineException(
                 code=VoiceErrorCode.INVALID_AUDIO_FRAME,
                 stage=VoiceStage.AUDIO,
@@ -209,10 +203,7 @@ class VoiceActivityDetector:
         if self._active:
             return self._finalize_active(forced_split=False)
 
-        if (
-            self._idle_started_at_ms is not None
-            and self._offset_ms > self._idle_started_at_ms
-        ):
+        if self._idle_started_at_ms is not None and self._offset_ms > self._idle_started_at_ms:
             no_speech = VadNoSpeech(
                 started_at_offset_ms=self._idle_started_at_ms,
                 ended_at_offset_ms=self._offset_ms,
@@ -316,11 +307,7 @@ class VoiceActivityDetector:
 
         frames = self._frames_until(self._active_frames, ended_at_ms)
         started_at_ms = frames[0].started_at_offset_ms
-        preserved = (
-            self._tail_frames(frames, self.force_split_overlap_ms)
-            if forced_split
-            else []
-        )
+        preserved = self._tail_frames(frames, self.force_split_overlap_ms) if forced_split else []
 
         if speech_duration_ms < self.minimum_utterance_ms:
             no_speech = VadNoSpeech(
@@ -337,10 +324,7 @@ class VoiceActivityDetector:
             )
             rms = math.sqrt(weighted_square / sample_count)
             clipping_ratio = (
-                sum(
-                    item.frame.clipping_ratio * (len(item.frame.data) // 2)
-                    for item in frames
-                )
+                sum(item.frame.clipping_ratio * (len(item.frame.data) // 2) for item in frames)
                 / sample_count
             )
         else:
@@ -381,9 +365,7 @@ class VoiceActivityDetector:
 
     def _select_start_frames(self) -> list[TimedPcmFrame]:
         items = list(self._pre_roll)
-        first_speech_index = next(
-            index for index, item in enumerate(items) if item.frame.is_speech
-        )
+        first_speech_index = next(index for index, item in enumerate(items) if item.frame.is_speech)
         prefix: list[TimedPcmFrame] = []
         kept_ms = 0
         for index in range(first_speech_index - 1, -1, -1):

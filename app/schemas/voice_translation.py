@@ -6,7 +6,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
-
 SUPPORTED_VOICE_LANGUAGES = frozenset({"ko", "ja", "en"})
 
 
@@ -80,11 +79,9 @@ class VoiceStreamPolicy(VoiceCamelCaseModel):
     language_switch_consecutive_count: int = Field(default=3, ge=1, le=10)
 
     @model_validator(mode="after")
-    def validate_utterance_range(self) -> "VoiceStreamPolicy":
+    def validate_utterance_range(self) -> VoiceStreamPolicy:
         if self.min_utterance_duration_ms >= self.max_utterance_duration_ms:
-            raise ValueError(
-                "minUtteranceDurationMs must be smaller than maxUtteranceDurationMs"
-            )
+            raise ValueError("minUtteranceDurationMs must be smaller than maxUtteranceDurationMs")
         return self
 
 
@@ -102,15 +99,13 @@ class VoiceStreamOpen(VoiceCamelCaseModel):
     policy: VoiceStreamPolicy = Field(default_factory=VoiceStreamPolicy)
 
     @model_validator(mode="after")
-    def validate_languages(self) -> "VoiceStreamOpen":
+    def validate_languages(self) -> VoiceStreamOpen:
         if self.target_language not in SUPPORTED_VOICE_LANGUAGES:
             raise ValueError("targetLanguage must be one of ko, ja, en")
 
         if self.source_language_mode == VoiceSourceLanguageMode.MANUAL:
             if self.manual_source_language not in SUPPORTED_VOICE_LANGUAGES:
-                raise ValueError(
-                    "manualSourceLanguage must be one of ko, ja, en in MANUAL mode"
-                )
+                raise ValueError("manualSourceLanguage must be one of ko, ja, en in MANUAL mode")
         elif self.manual_source_language is not None:
             raise ValueError("manualSourceLanguage is only allowed in MANUAL mode")
         if (
@@ -281,7 +276,7 @@ class VoiceTranslationRetryRequest(VoiceCamelCaseModel):
     target_language: str = Field(..., min_length=2, max_length=3)
 
     @model_validator(mode="after")
-    def validate_supported_languages(self) -> "VoiceTranslationRetryRequest":
+    def validate_supported_languages(self) -> VoiceTranslationRetryRequest:
         if self.source_language not in SUPPORTED_VOICE_LANGUAGES:
             raise ValueError("sourceLanguage must be one of ko, ja, en")
         if self.target_language not in SUPPORTED_VOICE_LANGUAGES:

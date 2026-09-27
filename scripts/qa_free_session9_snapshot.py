@@ -66,24 +66,37 @@ def snapshot(campaign: Path, output: Path, evidence_output: Path) -> dict[str, o
         "JOIN language_learning_speaking_evaluation e ON e.id=m.evaluation_id "
         "WHERE e.session_id=9 ORDER BY m.metric_type;",
     ).splitlines()
+
     def decode(value: str) -> str | None:
         return None if value == "NULL" else bytes.fromhex(value).decode("utf-8")
 
     metrics = []
     for row in evidence_rows:
         kind, state, score, confidence, summary, items, reason = row.split("\t", 6)
-        metrics.append({
-            "type": kind, "state": state, "score": None if score == "NULL" else float(score),
-            "confidence": float(confidence), "summary": decode(summary),
-            "evidence": json.loads(decode(items) or "[]"), "notEvaluableReason": decode(reason),
-        })
+        metrics.append(
+            {
+                "type": kind,
+                "state": state,
+                "score": None if score == "NULL" else float(score),
+                "confidence": float(confidence),
+                "summary": decode(summary),
+                "evidence": json.loads(decode(items) or "[]"),
+                "notEvaluableReason": decode(reason),
+            }
+        )
     if len(metrics) != 8:
         raise ValueError("Expected the complete eight-metric stored response")
     atomic_json(output, report)
-    atomic_json(evidence_output, {
-        "source": "owned isolated QA DB evaluation_metric rows; provider raw response unavailable",
-        "sessionId": 9, "metrics": metrics,
-    })
+    atomic_json(
+        evidence_output,
+        {
+            "source": (
+                "owned isolated QA DB evaluation_metric rows; provider raw response unavailable"
+            ),
+            "sessionId": 9,
+            "metrics": metrics,
+        },
+    )
     return {
         "sessionId": 9,
         "requestSha256": report["requestSha256"],
@@ -102,9 +115,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--evidence-output", type=Path, required=True)
     args = parser.parse_args()
-    print(json.dumps(snapshot(
-        args.campaign.resolve(), args.output.resolve(), args.evidence_output.resolve()
-    )))
+    print(
+        json.dumps(
+            snapshot(args.campaign.resolve(), args.output.resolve(), args.evidence_output.resolve())
+        )
+    )
 
 
 if __name__ == "__main__":

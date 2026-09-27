@@ -8,6 +8,3 @@ def test_receipt_and_voice_translation_start_on_luna():
 
 def test_unknown_task_fails_quality_safe_to_mini():
     assert get_task_model_policy("NEW_UNCLASSIFIED_TASK").tier == AiModelTier.MINI
-
-
-

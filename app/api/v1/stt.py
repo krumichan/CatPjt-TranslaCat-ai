@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.dependencies import get_stt_service
@@ -16,8 +18,8 @@ router = APIRouter(
 
 @router.post("/transcribe")
 async def transcribe(
-    file: UploadFile = File(...),
-    service: STTService = Depends(get_stt_service),
+    file: Annotated[UploadFile, File()],
+    service: Annotated[STTService, Depends(get_stt_service)],
 ):
     try:
         text = await service.transcribe_file(file)

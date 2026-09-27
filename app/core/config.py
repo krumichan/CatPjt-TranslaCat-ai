@@ -188,21 +188,32 @@ class Settings(BaseSettings):
     UVICORN_LOG_LEVEL: str = "INFO"
 
     # OCR
-    OCR_LANGUAGE: str = "japan"
+    OCR_LANGUAGE: str = "en"
     OCR_VERSION: str = "PP-OCRv3"
-    OCR_WARM_UP: bool = True
-    OCR_MAX_IMAGE_WIDTH: int = 900
-    OCR_MAX_IMAGE_HEIGHT: int = 1400
-    OCR_MAX_IMAGE_PIXELS: int = 2_000_000
+    # OCR remains available on demand, but receipt Vision startup must not load
+    # Paddle models before an explicit OCR request.
+    OCR_WARM_UP: bool = False
+    RECEIPT_VISION_DISABLE_OCR_WARMUP: bool = True
+    OCR_MAX_IMAGE_WIDTH: int = 2400
+    OCR_MAX_IMAGE_HEIGHT: int = 2400
+    OCR_MAX_IMAGE_PIXELS: int = 5_760_000
     OCR_IMAGE_QUALITY: int = 85
     OCR_MAX_FILE_SIZE: int = 5 * 1024 * 1024
     OCR_ENABLE_MKLDNN: bool = True
     OCR_CPU_THREADS: int = 2
     OCR_TEXT_RECOGNITION_BATCH_SIZE: int = 6
-    OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 960
+    OCR_TEXT_DET_LIMIT_SIDE_LEN: int = 2400
     OCR_TEXT_DET_LIMIT_TYPE: str = "max"
-    RECEIPT_ANALYSIS_MODE: str = "OCR_WITH_AI"
-    GEMINI_VISION_CONFIDENCE_THRESHOLD: float = 0.75
+    RECEIPT_ANALYSIS_MODE: str = "VISION_ONLY"
+    # Vision receives camera originals so it can crop small receipts without
+    # first discarding pixels. Keep a separate, bounded decode ceiling from OCR.
+    RECEIPT_VISION_MAX_IMAGE_PIXELS: int = Field(default=24_000_000, ge=1_000_000, le=48_000_000)
+    RECEIPT_VISION_RECOVERY_MAX_CROPS: int = Field(default=4, ge=0, le=6)
+    RECEIPT_VISION_MAX_IN_FLIGHT: int = Field(default=3, ge=1, le=16)
+    RECEIPT_VISION_MAX_RECOVERY_IN_FLIGHT: int = Field(default=2, ge=1, le=16)
+    RECEIPT_VISION_MAX_PENDING: int = Field(default=12, ge=3, le=128)
+    RECEIPT_ANALYSIS_TOTAL_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)
+    RECEIPT_VISION_RECOVERY_MIN_REMAINING_SECONDS: float = Field(default=3.0, ge=0, le=30)
 
     OCR_ALLOWED_CONTENT_TYPES: set[str] = {
         "image/jpeg",
@@ -228,9 +239,22 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_voice_frame_range(self) -> "Settings":
         if self.AI_VOICE_MIN_FRAME_DURATION_MS > self.AI_VOICE_MAX_FRAME_DURATION_MS:
+            raise ValueError("AI_VOICE_MIN_FRAME_DURATION_MS must not exceed the maximum")
+        return self
+
+    @model_validator(mode="after")
+    def validate_receipt_vision_limits(self) -> "Settings":
+        if self.RECEIPT_VISION_MAX_RECOVERY_IN_FLIGHT > self.RECEIPT_VISION_MAX_IN_FLIGHT:
             raise ValueError(
-                "AI_VOICE_MIN_FRAME_DURATION_MS must not exceed the maximum"
+                "RECEIPT_VISION_MAX_RECOVERY_IN_FLIGHT must not exceed the total limit"
             )
+        if self.RECEIPT_VISION_MAX_PENDING < self.RECEIPT_VISION_MAX_IN_FLIGHT:
+            raise ValueError("RECEIPT_VISION_MAX_PENDING must cover the in-flight limit")
+        if (
+            self.RECEIPT_VISION_RECOVERY_MIN_REMAINING_SECONDS
+            > self.RECEIPT_ANALYSIS_TOTAL_TIMEOUT_SECONDS
+        ):
+            raise ValueError("Receipt recovery minimum time must not exceed the total deadline")
         return self
 
 

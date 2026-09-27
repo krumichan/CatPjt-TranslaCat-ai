@@ -101,10 +101,9 @@ def _assert_strict_objects(node: Any) -> None:
             _assert_strict_objects(child)
     elif isinstance(node, dict):
         if node.get("type") == "object":
-            if (
-                node.get("additionalProperties") is not False
-                or set(node.get("required", [])) != set(node.get("properties", {}))
-            ):
+            if node.get("additionalProperties") is not False or set(
+                node.get("required", [])
+            ) != set(node.get("properties", {})):
                 raise OpenAISchemaConfigurationError(
                     "Strict structured-output schemas require closed objects "
                     "and every property required"
@@ -135,7 +134,11 @@ def build_openai_text_config(
 
 
 def build_explicit_text_config(
-    *, schema: dict | None, schema_name_value: str | None, strict: bool, verbosity: str,
+    *,
+    schema: dict | None,
+    schema_name_value: str | None,
+    strict: bool,
+    verbosity: str,
 ) -> dict[str, Any]:
     """LL이 지정한 provider schema를 의미 변경 없이 전달한다."""
     config: dict[str, Any] = {"verbosity": verbosity}

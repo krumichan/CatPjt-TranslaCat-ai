@@ -45,7 +45,8 @@ def provider_failure(error: Exception) -> HTTPException:
         return HTTPException(504, detail={"code": "PROVIDER_TIMEOUT", "retryable": True, **origin})
     if status in {400, 401, 403} or isinstance(error, ValueError):
         return HTTPException(
-            400, detail={"code": "STT_EXECUTION_FAILED", "retryable": False, **origin},
+            400,
+            detail={"code": "STT_EXECUTION_FAILED", "retryable": False, **origin},
         )
     if any(marker in message for marker in ("safety", "blocked", "prohibited content", "unsafe")):
         return HTTPException(422, detail={"code": "PROVIDER_REFUSAL", "retryable": False, **origin})

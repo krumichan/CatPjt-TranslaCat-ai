@@ -24,11 +24,11 @@ from app.features.voice_translation.language import (
     normalize_confidence,
     normalize_voice_language,
 )
-from app.features.voice_translation.stable_prefix import StablePrefixAssembler
 from app.features.voice_translation.speech_detector import (
     PassThroughSpeechEvidenceGuard,
     VoiceSpeechEvidenceGuard,
 )
+from app.features.voice_translation.stable_prefix import StablePrefixAssembler
 from app.features.voice_translation.stt import VoiceSttProvider
 from app.features.voice_translation.translation import VoiceTranslationService
 from app.schemas.voice_translation import (
@@ -100,9 +100,7 @@ class VoiceChannelStreamContext:
             settings.AI_VOICE_MAX_BUFFERED_AUDIO_MS // frame_duration_ms,
         )
         self._input_capacity = input_capacity
-        self._input_queue: asyncio.Queue[_StreamCommand] = asyncio.Queue(
-            maxsize=input_capacity
-        )
+        self._input_queue: asyncio.Queue[_StreamCommand] = asyncio.Queue(maxsize=input_capacity)
         self._event_queue: asyncio.Queue[VoiceEventBase] = asyncio.Queue(maxsize=64)
         self._validator = AudioFrameValidator(
             stream_open.audio_format,
@@ -150,19 +148,14 @@ class VoiceChannelStreamContext:
 
     @property
     def buffered_audio_ms(self) -> int:
-        return (
-            self._input_queue.qsize() * self.stream_open.audio_format.frame_duration_ms
-        )
+        return self._input_queue.qsize() * self.stream_open.audio_format.frame_duration_ms
 
     async def start(self) -> None:
         if self._worker_task is not None:
             return
         self._worker_task = asyncio.create_task(
             self._run(),
-            name=(
-                "voice-stream-"
-                f"{self.stream_open.session_id}-{self.stream_open.channel.value}"
-            ),
+            name=(f"voice-stream-{self.stream_open.session_id}-{self.stream_open.channel.value}"),
         )
         await self._emit(
             VoiceStreamReadyEvent(
@@ -428,10 +421,7 @@ class VoiceChannelStreamContext:
             0,
             int((time.perf_counter() - started) * 1000),
         )
-        if (
-            identity.key in self._finalized_utterance_keys
-            or self._current_identity != identity
-        ):
+        if identity.key in self._finalized_utterance_keys or self._current_identity != identity:
             return
         self._last_partial_inference_ms = partial_inference_ms
         update = assembler.update(result.text)
@@ -478,9 +468,7 @@ class VoiceChannelStreamContext:
             update.revision,
             partial_inference_ms,
             (
-                partial.ended_at_offset_ms
-                - partial.started_at_offset_ms
-                + partial_inference_ms
+                partial.ended_at_offset_ms - partial.started_at_offset_ms + partial_inference_ms
                 if update.revision == 1
                 else None
             ),
@@ -516,7 +504,7 @@ class VoiceChannelStreamContext:
                 ),
                 timeout=settings.AI_VOICE_STT_FINAL_TIMEOUT_SECONDS,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             await self.emit_failure(
                 VoicePipelineException(
                     code=VoiceErrorCode.STT_TIMEOUT,
@@ -621,10 +609,7 @@ class VoiceChannelStreamContext:
             return
 
         total_after_speech_ms = (
-            utterance.endpointing_ms
-            + speech_evidence_ms
-            + stt_finalize_ms
-            + translation.latency_ms
+            utterance.endpointing_ms + speech_evidence_ms + stt_finalize_ms + translation.latency_ms
         )
         await self._emit(
             VoicePipelineCompletedEvent(
@@ -692,7 +677,7 @@ class VoiceChannelStreamContext:
                 self.speech_evidence_guard.has_speech(pcm_bytes),
                 timeout=settings.AI_VOICE_VAD_SILERO_TIMEOUT_SECONDS,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             error = VoicePipelineException(
                 code=VoiceErrorCode.INTERNAL_ERROR,
                 stage=VoiceStage.VAD,
@@ -812,9 +797,7 @@ class VoiceStreamApplicationService:
     ) -> None:
         self.stt_provider = stt_provider
         self.translation_service = translation_service
-        self.speech_evidence_guard = (
-            speech_evidence_guard or PassThroughSpeechEvidenceGuard()
-        )
+        self.speech_evidence_guard = speech_evidence_guard or PassThroughSpeechEvidenceGuard()
         self._streams: dict[str, VoiceChannelStreamContext] = {}
         self._accepting_streams = True
         self._lock = asyncio.Lock()
@@ -869,10 +852,7 @@ class VoiceStreamApplicationService:
                     message="동일 Session과 Channel의 Stream이 이미 열려 있습니다.",
                     retryable=False,
                 )
-            if (
-                existing is None
-                and len(self._streams) >= settings.AI_VOICE_MAX_ACTIVE_STREAMS
-            ):
+            if existing is None and len(self._streams) >= settings.AI_VOICE_MAX_ACTIVE_STREAMS:
                 raise VoicePipelineException(
                     code=VoiceErrorCode.BACKPRESSURE,
                     stage=VoiceStage.STREAM,

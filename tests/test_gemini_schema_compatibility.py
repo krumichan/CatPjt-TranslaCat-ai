@@ -1,4 +1,3 @@
-
 from app.ai.providers.gemini.configs import (
     sanitize_gemini_response_schema,
 )
@@ -117,17 +116,3 @@ def test_sanitize_gemini_response_schema_compacts_validation_constraints_recursi
         },
         "required": ["items"],
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

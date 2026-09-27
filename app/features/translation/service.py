@@ -53,11 +53,7 @@ class TranslationService:
 
         final_results = await asyncio.gather(*tasks)
 
-        return [
-            item
-            for sublist in final_results
-            for item in sublist
-        ]
+        return [item for sublist in final_results for item in sublist]
 
     async def _call_chunk(
         self,
@@ -91,10 +87,7 @@ class TranslationService:
                         f"Count mismatch: expected {expected_count}, got {len(results)}"
                     )
 
-                return [
-                    str(result).strip()
-                    for result in results
-                ]
+                return [str(result).strip() for result in results]
 
             raise ValueError("Response format error: response is not a list.")
 

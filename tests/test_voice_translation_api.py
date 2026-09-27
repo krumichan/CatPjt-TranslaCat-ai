@@ -115,9 +115,7 @@ class VoiceTranslationApiTest(unittest.TestCase):
 
         app = FastAPI()
         app.include_router(voice_api.router, prefix="/internal/v1")
-        app.dependency_overrides[voice_api.get_voice_stream_service] = (
-            lambda: cls.stream_service
-        )
+        app.dependency_overrides[voice_api.get_voice_stream_service] = lambda: cls.stream_service
         app.dependency_overrides[voice_api.get_voice_translation_service] = (
             lambda: cls.translation_service
         )

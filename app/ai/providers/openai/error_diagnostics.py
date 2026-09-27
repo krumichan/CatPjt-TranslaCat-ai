@@ -1,4 +1,5 @@
 """OpenAI 오류를 사용자 데이터 없이 진단하기 위한 안전한 메타데이터 추출기."""
+
 from __future__ import annotations
 
 import hashlib
@@ -58,9 +59,7 @@ def safe_openai_error_metadata(exc: Exception, *, schema: dict | None) -> dict[s
         or _header_value(response, "x-request-id")
         or _header_value(response, "request-id")
     )
-    message = _safe_message_hint(
-        error.get("message") if error else getattr(exc, "message", None)
-    )
+    message = _safe_message_hint(error.get("message") if error else getattr(exc, "message", None))
 
     return {
         "status_code": status_code,

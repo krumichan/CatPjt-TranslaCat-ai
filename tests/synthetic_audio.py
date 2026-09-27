@@ -1,4 +1,5 @@
 """공유 음성 경계 검사용 합성 WAV. 실제 녹음을 읽지 않는다."""
+
 import io
 import math
 import wave

@@ -6,6 +6,7 @@ containers only, with pinned cached images and loopback ports. Separate start-be
 and check-auth actions launch the isolated server and normal auth reproduction.
 No cleanup/delete, provider calls, or production config loading is included.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,27 +15,30 @@ import csv
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import socket
 import subprocess
 import tempfile
 import time
-from typing import Any
 import urllib.error
 import urllib.request
 import zipfile
-
+from pathlib import Path
+from typing import Any
 
 OWNER = "translacat-isolated-qa"
 DOCKER = Path("C:/Program Files/Docker/Docker/resources/bin/docker.exe")
 _QA_PORT_SHIFT = int(os.environ.get("TRANSLACAT_QA_PORT_SHIFT", "0"))
 if _QA_PORT_SHIFT not in {0, 2}:
     raise ValueError("Unsupported isolated QA port profile")
-PORTS = {"mysql": 13316 + _QA_PORT_SHIFT, "redis": 16389 + _QA_PORT_SHIFT,
-         "be": 18081 + _QA_PORT_SHIFT, "ai": 18082 + _QA_PORT_SHIFT,
-         "fe": 13010}
+PORTS = {
+    "mysql": 13316 + _QA_PORT_SHIFT,
+    "redis": 16389 + _QA_PORT_SHIFT,
+    "be": 18081 + _QA_PORT_SHIFT,
+    "ai": 18082 + _QA_PORT_SHIFT,
+    "fe": 13010,
+}
 IMAGE_REFS = {"mysql": "mysql:latest", "redis": "redis:7.4.10-alpine"}
 QA_LOGBACK = """<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
@@ -50,8 +54,12 @@ QA_LOGBACK = """<?xml version="1.0" encoding="UTF-8"?>
 
 def _docker(*args: str, environment: dict[str, str] | None = None) -> str:
     result = subprocess.run(
-        [str(DOCKER), *args], env=environment, capture_output=True,
-        text=True, timeout=45, check=False,
+        [str(DOCKER), *args],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
     )
     if result.returncode:
         # Do not echo Docker config, environment, command output, or secrets.
@@ -106,7 +114,10 @@ def _verify_local_docker() -> None:
         raise ValueError("DOCKER_HOST override is forbidden for isolated host QA")
     context = _docker("context", "show")
     endpoint = _docker("context", "inspect", context, "--format", "{{.Endpoints.docker.Host}}")
-    if endpoint not in {"npipe:////./pipe/docker_engine", "npipe:////./pipe/dockerDesktopLinuxEngine"}:
+    if endpoint not in {
+        "npipe:////./pipe/docker_engine",
+        "npipe:////./pipe/dockerDesktopLinuxEngine",
+    }:
         raise ValueError("Docker daemon is not a verified local Windows named pipe")
 
 
@@ -119,26 +130,38 @@ def preflight(campaign: str) -> dict[str, Any]:
         "networks": set(_docker("network", "ls", "--format", "{{.Name}}").splitlines()),
     }
     collisions = [
-        name for key, name in names.items()
+        name
+        for key, name in names.items()
         if key != "database" and name in set().union(*existing.values())
     ]
     images: dict[str, Any] = {}
     for name, reference in IMAGE_REFS.items():
-        identity = json.loads(_docker(
-            "image", "inspect", reference,
-            "--format", '{"id":{{json .Id}},"digests":{{json .RepoDigests}}}',
-        ))
+        identity = json.loads(
+            _docker(
+                "image",
+                "inspect",
+                reference,
+                "--format",
+                '{"id":{{json .Id}},"digests":{{json .RepoDigests}}}',
+            )
+        )
         images[name] = identity
     ports = _ports_free()
     return {
-        "owner": OWNER, "campaign": campaign, "names": names,
-        "ports": PORTS, "portsFree": ports,
-        "resourceCollisions": collisions, "images": images,
+        "owner": OWNER,
+        "campaign": campaign,
+        "names": names,
+        "ports": PORTS,
+        "portsFree": ports,
+        "resourceCollisions": collisions,
+        "images": images,
         "readyForFreshInfrastructure": all(ports.values()) and not collisions,
         "databaseBoundary": "NEW_CONTAINER_NEW_VOLUME_ONLY_NO_EXISTING_DB_CONNECTION",
         "feAuthentication": "Google OAuth only; no synthetic cookie/JWT bypass",
         "applicationLaunch": "NOT_STARTED",
-        "hostNetworkBoundary": "Container network is internal; host application egress needs separate control",
+        "hostNetworkBoundary": (
+            "Container network is internal; host application egress needs separate control"
+        ),
     }
 
 
@@ -190,7 +213,9 @@ def be_properties(directory: Path, names: dict[str, str]) -> str:
             f"http://127.0.0.1:{PORTS['fe']},http://localhost:{PORTS['fe']},"
             "http://127.0.0.1:3000,http://localhost:3000"
         ),
-        "spring.security.oauth2.client.registration.google.client-id": "${QA_GOOGLE_CLIENT_ID:qa-disabled}",
+        "spring.security.oauth2.client.registration.google.client-id": (
+            "${QA_GOOGLE_CLIENT_ID:qa-disabled}"
+        ),
         "spring.ai.google.genai.api-key": "qa-disabled-not-a-real-key",
         "external.google.proxy-url": "http://127.0.0.1:9/qa-disabled",
         "external.use-proxy": "true",
@@ -224,7 +249,9 @@ def prepare(directory: Path, campaign: str) -> dict[str, Any]:
         principal = f"{os.environ['USERDOMAIN']}\\{os.environ['USERNAME']}"
         secured = subprocess.run(
             ["icacls", str(directory), "/inheritance:r", "/grant:r", f"{principal}:(OI)(CI)F"],
-            capture_output=True, check=False, timeout=10,
+            capture_output=True,
+            check=False,
+            timeout=10,
         )
         if secured.returncode:
             raise RuntimeError("Private artifact ACL setup failed; no secrets written")
@@ -241,7 +268,8 @@ def prepare(directory: Path, campaign: str) -> dict[str, Any]:
     if os.name != "nt":
         secrets_file.chmod(0o600)
     (directory / "application-qa.properties").write_text(
-        be_properties(directory, report["names"]), encoding="utf-8",
+        be_properties(directory, report["names"]),
+        encoding="utf-8",
     )
     (directory / "logback-qa.xml").write_text(QA_LOGBACK, encoding="utf-8")
     report.update({"status": "PREPARED", "directory": str(directory), "createdResources": []})
@@ -274,25 +302,47 @@ def start_infrastructure(directory: Path) -> dict[str, Any]:
             _docker("volume", "create", *labels, names[resource])
             created.append({"type": "volume", "name": names[resource]})
             _write_json(directory / "manifest.json", manifest)
-        for kind, internal_port, mount in (("mysql", 3306, "/var/lib/mysql"), ("redis", 6379, "/data")):
+        for kind, internal_port, mount in (
+            ("mysql", 3306, "/var/lib/mysql"),
+            ("redis", 6379, "/data"),
+        ):
             environment = os.environ.copy()
-            environment.update({
-                "MYSQL_DATABASE": names["database"], "MYSQL_USER": "qa_app",
-                "MYSQL_PASSWORD": secret_values["QA_DB_PASSWORD"],
-                "MYSQL_ROOT_PASSWORD": secret_values["QA_DB_ROOT_PASSWORD"],
-            })
+            environment.update(
+                {
+                    "MYSQL_DATABASE": names["database"],
+                    "MYSQL_USER": "qa_app",
+                    "MYSQL_PASSWORD": secret_values["QA_DB_PASSWORD"],
+                    "MYSQL_ROOT_PASSWORD": secret_values["QA_DB_ROOT_PASSWORD"],
+                }
+            )
             args = [
-                "run", "--detach", "--pull=never", "--restart=no", *labels,
-                "--name", names[f"{kind}Container"], "--network", names["network"],
-                "--publish", f"127.0.0.1:{PORTS[kind]}:{internal_port}",
-                "--volume", f"{names[f'{kind}Volume']}:{mount}",
+                "run",
+                "--detach",
+                "--pull=never",
+                "--restart=no",
+                *labels,
+                "--name",
+                names[f"{kind}Container"],
+                "--network",
+                names["network"],
+                "--publish",
+                f"127.0.0.1:{PORTS[kind]}:{internal_port}",
+                "--volume",
+                f"{names[f'{kind}Volume']}:{mount}",
             ]
             if kind == "mysql":
-                for key in ("MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD"):
+                for key in (
+                    "MYSQL_DATABASE",
+                    "MYSQL_USER",
+                    "MYSQL_PASSWORD",
+                    "MYSQL_ROOT_PASSWORD",
+                ):
                     args.extend(("--env", key))
             args.append(manifest["images"][kind]["id"])
             container_id = _docker(*args, environment=environment)
-            created.append({"type": "container", "name": names[f"{kind}Container"], "id": container_id})
+            created.append(
+                {"type": "container", "name": names[f"{kind}Container"], "id": container_id}
+            )
             _write_json(directory / "manifest.json", manifest)
         manifest["status"] = "INFRASTRUCTURE_STARTED_NOT_APPLICATION_READY"
     except BaseException:
@@ -306,23 +356,32 @@ def start_infrastructure(directory: Path) -> dict[str, Any]:
 def _owned_manifest(directory: Path) -> dict[str, Any]:
     _verify_local_docker()
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("owner") != OWNER or manifest.get("names") != resource_names(manifest["campaign"]):
+    if manifest.get("owner") != OWNER or manifest.get("names") != resource_names(
+        manifest["campaign"]
+    ):
         raise ValueError("Not an owned QA manifest")
     if manifest.get("ports") != PORTS:
         raise ValueError("QA port manifest changed")
     for kind in ("mysql", "redis"):
         name = manifest["names"][f"{kind}Container"]
-        runtime = json.loads(_docker(
-            "inspect", name, "--format",
-            '{"id":{{json .Id}},"labels":{{json .Config.Labels}},"ports":{{json .HostConfig.PortBindings}}}',
-        ))
+        runtime = json.loads(
+            _docker(
+                "inspect",
+                name,
+                "--format",
+                '{"id":{{json .Id}},"labels":{{json .Config.Labels}},'
+                '"ports":{{json .HostConfig.PortBindings}}}',
+            )
+        )
         recorded = next(item for item in manifest["createdResources"] if item.get("name") == name)
         if runtime["id"] != recorded["id"] or runtime["labels"].get("qa.owner") != OWNER:
             raise ValueError("QA container identity/ownership mismatch")
         if runtime["labels"].get("qa.campaign") != manifest["campaign"]:
             raise ValueError("QA campaign ownership mismatch")
         internal_port = "3306/tcp" if kind == "mysql" else "6379/tcp"
-        if runtime["ports"].get(internal_port) != [{"HostIp": "127.0.0.1", "HostPort": str(PORTS[kind])}]:
+        if runtime["ports"].get(internal_port) != [
+            {"HostIp": "127.0.0.1", "HostPort": str(PORTS[kind])}
+        ]:
             raise ValueError("QA container binding mismatch")
     return manifest
 
@@ -335,9 +394,17 @@ def check_infrastructure(directory: Path) -> dict[str, Any]:
     environment["MYSQL_PWD"] = private["QA_DB_PASSWORD"]
     database = manifest["names"]["database"]
     result = _docker(
-        "exec", "--env", "MYSQL_PWD", manifest["names"]["mysqlContainer"],
-        "mysql", "--user=qa_app", "--batch", "--skip-column-names", database,
-        "--execute=SELECT DATABASE(), VERSION();", environment=environment,
+        "exec",
+        "--env",
+        "MYSQL_PWD",
+        manifest["names"]["mysqlContainer"],
+        "mysql",
+        "--user=qa_app",
+        "--batch",
+        "--skip-column-names",
+        database,
+        "--execute=SELECT DATABASE(), VERSION();",
+        environment=environment,
     )
     selected_database, version = result.split("\t")
     if selected_database != database:
@@ -346,14 +413,19 @@ def check_infrastructure(directory: Path) -> dict[str, Any]:
     if redis != "PONG":
         raise ValueError("QA Redis readiness failed")
     manifest["infraHealth"] = {
-        "mysqlDatabase": selected_database, "mysqlVersion": version,
-        "redis": redis, "hostPublishedPortsReady": _published_ports_ready(),
+        "mysqlDatabase": selected_database,
+        "mysqlVersion": version,
+        "redis": redis,
+        "hostPublishedPortsReady": _published_ports_ready(),
     }
     manifest["hostNetworkBoundary"] = (
-        "Dedicated labelled QA instances, schemas and loopback ports; outbound network isolation NOT guaranteed"
+        "Dedicated labelled QA instances, schemas and loopback ports; "
+        "outbound network isolation NOT guaranteed"
     )
     if manifest.get("hostNetwork"):
-        manifest["hostNetwork"]["hostPublishedPortsReady"] = manifest["infraHealth"]["hostPublishedPortsReady"]
+        manifest["hostNetwork"]["hostPublishedPortsReady"] = manifest["infraHealth"][
+            "hostPublishedPortsReady"
+        ]
     _write_json(directory / "manifest.json", manifest)
     return manifest
 
@@ -369,11 +441,24 @@ def attach_host_network(directory: Path) -> dict[str, Any]:
     if name in existing:
         raise ValueError("Host QA network name collision")
     identity = _docker(
-        "network", "create", "--driver", "bridge",
-        "--opt", "com.docker.network.bridge.enable_ip_masquerade=false",
-        "--label", f"qa.owner={OWNER}", "--label", f"qa.campaign={manifest['campaign']}", name,
+        "network",
+        "create",
+        "--driver",
+        "bridge",
+        "--opt",
+        "com.docker.network.bridge.enable_ip_masquerade=false",
+        "--label",
+        f"qa.owner={OWNER}",
+        "--label",
+        f"qa.campaign={manifest['campaign']}",
+        name,
     )
-    manifest["hostNetwork"] = {"name": name, "id": identity, "masquerade": False, "connectedContainers": []}
+    manifest["hostNetwork"] = {
+        "name": name,
+        "id": identity,
+        "masquerade": False,
+        "connectedContainers": [],
+    }
     _write_json(directory / "manifest.json", manifest)
     for kind in ("mysql", "redis"):
         container = manifest["names"][f"{kind}Container"]
@@ -393,7 +478,9 @@ def start_be(directory: Path, be_repository: Path, java: Path) -> dict[str, Any]
     directory = directory.resolve()
     manifest = check_infrastructure(directory)
     if not all(manifest["infraHealth"]["hostPublishedPortsReady"].values()):
-        raise ValueError("Container-internal readiness is not host-published readiness; BE launch refused")
+        raise ValueError(
+            "Container-internal readiness is not host-published readiness; BE launch refused"
+        )
     if not _ports_free()["be"]:
         raise ValueError("QA BE port occupied; refusing duplicate launch")
     previous = manifest.get("beProcess")
@@ -402,14 +489,26 @@ def start_be(directory: Path, be_repository: Path, java: Path) -> dict[str, Any]
             raise ValueError("Existing process record requires explicit host verification")
         result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {int(previous['pid'])}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=10, check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
         )
-        if any(len(row) > 1 and row[1] == str(previous["pid"]) for row in csv.reader(result.stdout.splitlines())):
+        if any(
+            len(row) > 1 and row[1] == str(previous["pid"])
+            for row in csv.reader(result.stdout.splitlines())
+        ):
             raise ValueError("Recorded BE process still exists; refusing duplicate launch")
         manifest.setdefault("bePreviousStarts", []).append(previous)
-    if (directory / "application-qa.properties").read_text(encoding="utf-8") != be_properties(directory, manifest["names"]):
+    if (directory / "application-qa.properties").read_text(encoding="utf-8") != be_properties(
+        directory, manifest["names"]
+    ):
         raise ValueError("QA properties changed; refusing unverified configuration")
-    jars = [path for path in (be_repository / "build" / "libs").glob("*.jar") if not path.name.endswith("-plain.jar")]
+    jars = [
+        path
+        for path in (be_repository / "build" / "libs").glob("*.jar")
+        if not path.name.endswith("-plain.jar")
+    ]
     if len(jars) != 1:
         raise ValueError("Expected exactly one current BE bootJar")
     private = json.loads((directory / "secrets.private.json").read_text(encoding="utf-8"))
@@ -417,25 +516,51 @@ def start_be(directory: Path, be_repository: Path, java: Path) -> dict[str, Any]
     # traffic to a developer DB. Preserve only platform/runtime paths, then add
     # fresh isolated credentials; never inherit application/provider settings.
     platform_keys = {
-        "SYSTEMROOT", "WINDIR", "PATH", "JAVA_HOME", "TEMP", "TMP",
-        "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
-        "COMSPEC", "PROGRAMDATA", "USERDOMAIN", "USERNAME",
+        "SYSTEMROOT",
+        "WINDIR",
+        "PATH",
+        "JAVA_HOME",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "COMSPEC",
+        "PROGRAMDATA",
+        "USERDOMAIN",
+        "USERNAME",
     }
     environment = {key: value for key, value in os.environ.items() if key.upper() in platform_keys}
     environment.update(private)
     # Explicit config/profile arguments override any developer-local active profile.
     command = [
-        str(java.resolve()), "-jar", str(jars[0].resolve()),
+        str(java.resolve()),
+        "-jar",
+        str(jars[0].resolve()),
         "--spring.profiles.active=qa",
-        f"--spring.config.location=classpath:/application.properties,file:{(directory / 'application-qa.properties').as_posix()}",
+        "--spring.config.location=classpath:/application.properties,"
+        f"file:{(directory / 'application-qa.properties').as_posix()}",
     ]
-    with (directory / "be.stdout.log").open("ab") as output, (directory / "be.stderr.log").open("ab") as error:
+    with (
+        (directory / "be.stdout.log").open("ab") as output,
+        (directory / "be.stderr.log").open("ab") as error,
+    ):
         process = subprocess.Popen(
-            command, cwd=be_repository, env=environment, stdin=subprocess.DEVNULL,
-            stdout=output, stderr=error,
+            command,
+            cwd=be_repository,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=error,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-    manifest["beProcess"] = {"pid": process.pid, "command": command, "cwd": str(be_repository.resolve())}
+    manifest["beProcess"] = {
+        "pid": process.pid,
+        "command": command,
+        "cwd": str(be_repository.resolve()),
+    }
     manifest["applicationLaunch"] = "BE_STARTED_HEALTH_NOT_YET_VERIFIED"
     _write_json(directory / "manifest.json", manifest)
     return manifest
@@ -447,7 +572,9 @@ def refresh_qa_config(directory: Path) -> dict[str, Any]:
     manifest = _owned_manifest(directory)
     if not _ports_free()["be"]:
         raise ValueError("Do not rewrite config of a running QA BE")
-    (directory / "application-qa.properties").write_text(be_properties(directory, manifest["names"]), encoding="utf-8")
+    (directory / "application-qa.properties").write_text(
+        be_properties(directory, manifest["names"]), encoding="utf-8"
+    )
     (directory / "logback-qa.xml").write_text(QA_LOGBACK, encoding="utf-8")
     return {"status": "OWNED_QA_CONFIG_REFRESHED", "campaign": manifest["campaign"]}
 
@@ -470,8 +597,12 @@ def configure_qa_google(directory: Path, fe_repository: Path, node: Path) -> dic
     )
     result = subprocess.run(
         [str(node), "-e", code, str(fe_repository.resolve())],
-        cwd=fe_repository, capture_output=True, text=True, timeout=20,
-        check=False, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        cwd=fe_repository,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     if result.returncode:
         raise ValueError("FE OAuth audience resolution failed; output suppressed")
@@ -479,7 +610,9 @@ def configure_qa_google(directory: Path, fe_repository: Path, node: Path) -> dic
         client_id = json.loads(result.stdout).get("clientId")
     except (ValueError, AttributeError):
         raise ValueError("Invalid FE OAuth audience resolution; output suppressed") from None
-    if not isinstance(client_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id):
+    if not isinstance(client_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client_id
+    ):
         raise ValueError("FE Google OAuth client ID absent or invalid; output suppressed")
     private_path = directory / "secrets.private.json"
     private = json.loads(private_path.read_text(encoding="utf-8"))
@@ -506,7 +639,8 @@ def _qa_request(path: str, payload: dict[str, str] | None = None) -> tuple[int, 
         raise ValueError("Bootstrap may not trigger learning generation or arbitrary API endpoints")
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(
-        f"http://127.0.0.1:{PORTS['be']}{path}", data=data,
+        f"http://127.0.0.1:{PORTS['be']}{path}",
+        data=data,
         headers={"Content-Type": "application/json"},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
@@ -539,13 +673,21 @@ def check_auth(directory: Path) -> dict[str, Any]:
     private["QA_APP_EMAIL"] = f"qa-{manifest['campaign']}@example.invalid"
     private["QA_APP_PASSWORD"] = secrets.token_urlsafe(24)
     _write_json(secret_file, private)
-    register_status, registered = _qa_request("/api/v1/auth/register", {
-        "email": private["QA_APP_EMAIL"], "password": private["QA_APP_PASSWORD"],
-        "username": "Isolated QA",
-    })
-    login_status, logged_in = _qa_request("/api/v1/auth/login", {
-        "email": private["QA_APP_EMAIL"], "password": private["QA_APP_PASSWORD"],
-    })
+    register_status, registered = _qa_request(
+        "/api/v1/auth/register",
+        {
+            "email": private["QA_APP_EMAIL"],
+            "password": private["QA_APP_PASSWORD"],
+            "username": "Isolated QA",
+        },
+    )
+    login_status, logged_in = _qa_request(
+        "/api/v1/auth/login",
+        {
+            "email": private["QA_APP_EMAIL"],
+            "password": private["QA_APP_PASSWORD"],
+        },
+    )
     login_body = logged_in.get("body") or {}
     token = login_body.get("accessToken") if isinstance(login_body, dict) else None
     if isinstance(token, str):
@@ -553,9 +695,13 @@ def check_auth(directory: Path) -> dict[str, Any]:
         _write_json(secret_file, private)
     registered_body = registered.get("body") or {}
     report = {
-        "campaign": manifest["campaign"], "healthStatus": health,
-        "registerHttpStatus": register_status, "loginHttpStatus": login_status,
-        "registeredUserId": registered_body.get("id") if isinstance(registered_body, dict) else None,
+        "campaign": manifest["campaign"],
+        "healthStatus": health,
+        "registerHttpStatus": register_status,
+        "loginHttpStatus": login_status,
+        "registeredUserId": registered_body.get("id")
+        if isinstance(registered_body, dict)
+        else None,
         "accessTokenReceived": isinstance(token, str),
         "providerCalls": 0,
         "boundary": "Only owned QA health/register/login; no authentication bypass",
@@ -569,9 +715,14 @@ def _bcrypt_fixture_hash(directory: Path, boot_jar: Path, java: Path, password: 
     fixture_dir = directory / "auth-fixture"
     fixture_dir.mkdir(exist_ok=False)
     with zipfile.ZipFile(boot_jar) as archive:
-        members = [name for name in archive.namelist() if re.fullmatch(
-            r"BOOT-INF/lib/spring-security-crypto-[^/]+\.jar", name,
-        )]
+        members = [
+            name
+            for name in archive.namelist()
+            if re.fullmatch(
+                r"BOOT-INF/lib/spring-security-crypto-[^/]+\.jar",
+                name,
+            )
+        ]
         if len(members) != 1:
             raise ValueError("Expected built app's single security crypto dependency")
         dependency = fixture_dir / "spring-security-crypto.jar"
@@ -580,16 +731,35 @@ def _bcrypt_fixture_hash(directory: Path, boot_jar: Path, java: Path, password: 
     source.write_text(
         "import org.springframework.security.crypto.bcrypt.BCrypt;\n"
         "class QaBcryptFixture { public static void main(String[] args) throws Exception {\n"
-        "String password = new String(System.in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);\n"
+        "String password = new String(System.in.readAllBytes(), "
+        "java.nio.charset.StandardCharsets.UTF_8);\n"
         "System.out.print(BCrypt.hashpw(password, BCrypt.gensalt(12)));\n"
-        "}}\n", encoding="utf-8",
+        "}}\n",
+        encoding="utf-8",
     )
-    environment = {key: value for key, value in os.environ.items() if key.upper() in {
-        "SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-    }}
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper()
+        in {
+            "SYSTEMROOT",
+            "WINDIR",
+            "PATH",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+        }
+    }
     result = subprocess.run(
-        [str(java), "--class-path", str(dependency), str(source)], input=password,
-        capture_output=True, text=True, timeout=30, check=False, env=environment,
+        [str(java), "--class-path", str(dependency), str(source)],
+        input=password,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env=environment,
     )
     encoded = result.stdout.strip()
     if result.returncode or not re.fullmatch(r"\$2[aby]\$12\$[./A-Za-z0-9]{53}", encoded):
@@ -600,11 +770,27 @@ def _bcrypt_fixture_hash(directory: Path, boot_jar: Path, java: Path, password: 
 def _qa_mysql_query(manifest: dict[str, Any], private: dict[str, str], sql: str) -> str:
     environment = os.environ.copy()
     environment["MYSQL_PWD"] = private["QA_DB_PASSWORD"]
-    result = subprocess.run([
-        str(DOCKER), "exec", "--interactive", "--env", "MYSQL_PWD",
-        manifest["names"]["mysqlContainer"], "mysql", "--user=qa_app",
-        "--batch", "--skip-column-names", manifest["names"]["database"],
-    ], input=sql, capture_output=True, text=True, timeout=20, check=False, env=environment)
+    result = subprocess.run(
+        [
+            str(DOCKER),
+            "exec",
+            "--interactive",
+            "--env",
+            "MYSQL_PWD",
+            manifest["names"]["mysqlContainer"],
+            "mysql",
+            "--user=qa_app",
+            "--batch",
+            "--skip-column-names",
+            manifest["names"]["database"],
+        ],
+        input=sql,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+        env=environment,
+    )
     if result.returncode:
         raise RuntimeError("Owned QA fixture SQL failed; secret output suppressed")
     return result.stdout.strip()
@@ -619,9 +805,13 @@ def seed_qa_auth_fixture(directory: Path, java: Path) -> dict[str, Any]:
     if artifact.exists():
         raise ValueError("Auth fixture seed is one-shot; preserve prior evidence")
     identity = original.get("registeredUserId")
-    if (original.get("campaign") != manifest["campaign"] or type(identity) is not int
-            or identity <= 0 or original.get("registerHttpStatus") != 200
-            or original.get("accessTokenReceived") is not False):
+    if (
+        original.get("campaign") != manifest["campaign"]
+        or type(identity) is not int
+        or identity <= 0
+        or original.get("registerHttpStatus") != 200
+        or original.get("accessTokenReceived") is not False
+    ):
         raise ValueError("No exact failed synthetic registration is eligible for fixture seed")
     private_path = directory / "secrets.private.json"
     private = json.loads(private_path.read_text(encoding="utf-8"))
@@ -639,40 +829,76 @@ def seed_qa_auth_fixture(directory: Path, java: Path) -> dict[str, Any]:
     boot_jar = Path(command[command.index("-jar") + 1])
     encoded = _bcrypt_fixture_hash(directory, boot_jar, java, private["QA_APP_PASSWORD"])
     report = {
-        "campaign": manifest["campaign"], "registeredUserId": identity,
-        "status": "FIXTURE_PREPARED", "encoding": "app BCrypt cost12",
-        "providerCalls": 0, "productionSourceChanged": False,
-        "boundary": "Only exact newly registered synthetic user; normal auth login remains required",
+        "campaign": manifest["campaign"],
+        "registeredUserId": identity,
+        "status": "FIXTURE_PREPARED",
+        "encoding": "app BCrypt cost12",
+        "providerCalls": 0,
+        "productionSourceChanged": False,
+        "boundary": (
+            "Only exact newly registered synthetic user; normal auth login remains required"
+        ),
     }
     _write_json(artifact, report)
     encoded_hex = encoded.encode("utf-8").hex()
-    updated = _qa_mysql_query(manifest, private, (
-        f"UPDATE user SET password=CONVERT(0x{encoded_hex} USING utf8mb4) WHERE {predicate}; SELECT ROW_COUNT();"
-    ))
+    updated = _qa_mysql_query(
+        manifest,
+        private,
+        (
+            f"UPDATE user SET password=CONVERT(0x{encoded_hex} USING utf8mb4) "
+            f"WHERE {predicate}; SELECT ROW_COUNT();"
+        ),
+    )
     if updated != "1":
         raise ValueError("QA fixture seed did not affect exactly one expected row")
     report["status"] = "FIXTURE_UPDATED_LOGIN_PENDING"
     _write_json(artifact, report)
-    login_status, body = _qa_request("/api/v1/auth/login", {
-        "email": private["QA_APP_EMAIL"], "password": private["QA_APP_PASSWORD"],
-    })
+    login_status, body = _qa_request(
+        "/api/v1/auth/login",
+        {
+            "email": private["QA_APP_EMAIL"],
+            "password": private["QA_APP_PASSWORD"],
+        },
+    )
     token = (body.get("body") or {}).get("accessToken")
     if isinstance(token, str) and token:
         private["QA_APP_ACCESS_TOKEN"] = token
         _write_json(private_path, private)
-    report.update({"status": "COMPLETED", "loginHttpStatus": login_status, "accessTokenReceived": bool(token)})
+    report.update(
+        {"status": "COMPLETED", "loginHttpStatus": login_status, "accessTokenReceived": bool(token)}
+    )
     _write_json(artifact, report)
     return report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("preflight", "prepare", "start-infra", "check-infra", "attach-host-network", "start-be", "check-auth", "refresh-config", "seed-qa-auth-fixture", "configure-qa-google"))
+    parser.add_argument(
+        "action",
+        choices=(
+            "preflight",
+            "prepare",
+            "start-infra",
+            "check-infra",
+            "attach-host-network",
+            "start-be",
+            "check-auth",
+            "refresh-config",
+            "seed-qa-auth-fixture",
+            "configure-qa-google",
+        ),
+    )
     parser.add_argument("--campaign", default="astra-20260919")
     parser.add_argument("--directory", type=Path)
-    parser.add_argument("--be-repository", type=Path, default=Path("C:/workspace/project-cat/CatPjt-TranslaCat-be"))
-    parser.add_argument("--java", type=Path, default=Path("C:/Users/lovel/.jdks/corretto-21.0.3/bin/java.exe"))
-    parser.add_argument("--fe-repository", type=Path, default=Path("C:/workspace/project-cat/CatPjt-TranslaCat-fe"))
+    parser.add_argument(
+        "--be-repository", type=Path, default=Path("C:/workspace/project-cat/CatPjt-TranslaCat-be")
+    )
+    parser.add_argument(
+        "--java", type=Path, default=Path("C:/Users/lovel/.jdks/corretto-21.0.3/bin/java.exe")
+    )
+    parser.add_argument(
+        "--fe-repository", type=Path, default=Path("C:/workspace/project-cat/CatPjt-TranslaCat-fe")
+    )
     parser.add_argument("--node", type=Path, default=Path("C:/nvm4w/nodejs/node.exe"))
     args = parser.parse_args()
     if args.action == "preflight":

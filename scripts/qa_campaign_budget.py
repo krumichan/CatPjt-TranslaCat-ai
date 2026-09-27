@@ -4,18 +4,19 @@ No production imports this module. Pending/unknown usage retains its entire
 reservation across restarts. Dollar accounting is a conservative estimate, not
 an account-level billing limit. Never put prompts, credentials or audio in it.
 """
+
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
 import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
@@ -57,9 +58,15 @@ class Reservation:
     usd: float = 0
 
 
-LIMITS = {"starts": 600, "input_tokens": 2_000_000, "output_tokens": 500_000,
-          "tts_characters": 60_000, "stt_seconds": 1800, "usd": 20.0,
-          "wall_seconds": 21600}
+LIMITS = {
+    "starts": 600,
+    "input_tokens": 2_000_000,
+    "output_tokens": 500_000,
+    "tts_characters": 60_000,
+    "stt_seconds": 1800,
+    "usd": 20.0,
+    "wall_seconds": 21600,
+}
 
 
 def _text_cost_reservation(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -77,9 +84,15 @@ def _text_cost_reservation(model: str, input_tokens: int, output_tokens: int) ->
 
 
 class CampaignLedger:
-    def __init__(self, path: Path, campaign_id: str, *, stop_on_caller_cancel: bool = True,
-                 limits: dict[str, float] | None = None,
-                 prior_ledger_sha256: str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        campaign_id: str,
+        *,
+        stop_on_caller_cancel: bool = True,
+        limits: dict[str, float] | None = None,
+        prior_ledger_sha256: str | None = None,
+    ) -> None:
         self.path = path.resolve()
         self.campaign_id = campaign_id
         self.limits = dict(LIMITS if limits is None else limits)
@@ -98,12 +111,21 @@ class CampaignLedger:
                 # process restart; never silently replace them with defaults.
                 self.limits = json.loads(self.path.read_text(encoding="utf-8"))["limits"]
             if not self.path.exists():
-                atomic_json(self.path, {
-                    "campaignId": campaign_id, "limits": self.limits,
-                    "priorLedgerSha256": prior_ledger_sha256,
-                    "firstLiveAt": None, "stoppedReason": None, "calls": [],
-                    "accountingBoundary": "Conservative reservations, not a billing hard cap; SDK physical attempts may be unobserved.",
-                })
+                atomic_json(
+                    self.path,
+                    {
+                        "campaignId": campaign_id,
+                        "limits": self.limits,
+                        "priorLedgerSha256": prior_ledger_sha256,
+                        "firstLiveAt": None,
+                        "stoppedReason": None,
+                        "calls": [],
+                        "accountingBoundary": (
+                            "Conservative reservations, not a billing hard cap; "
+                            "SDK physical attempts may be unobserved."
+                        ),
+                    },
+                )
             self._read()
             if prior_ledger_sha256 is not None:
                 state = self._read()
@@ -132,7 +154,9 @@ class CampaignLedger:
             value["totalsIncludingReserved"] = self.totals(value)
             return value
 
-    def reserve(self, task: str, model: str, amount: Reservation, *, metadata: dict[str, Any] | None = None) -> int:
+    def reserve(
+        self, task: str, model: str, amount: Reservation, *, metadata: dict[str, Any] | None = None
+    ) -> int:
         if self.run_stop_reason:
             raise CampaignBudgetExceeded(self.run_stop_reason)
         fields = vars(amount)
@@ -144,7 +168,11 @@ class CampaignLedger:
                 raise CampaignBudgetExceeded(state["stoppedReason"])
             now = datetime.now(UTC)
             first = state["firstLiveAt"]
-            if first and (now - datetime.fromisoformat(first)).total_seconds() >= self.limits["wall_seconds"]:
+            if (
+                first
+                and (now - datetime.fromisoformat(first)).total_seconds()
+                >= self.limits["wall_seconds"]
+            ):
                 state["stoppedReason"] = "CAMPAIGN_DEADLINE"
                 atomic_json(self.path, state)
                 raise CampaignBudgetExceeded("CAMPAIGN_DEADLINE")
@@ -168,10 +196,17 @@ class CampaignLedger:
                 state["stoppedReason"] = denied_reason
                 atomic_json(self.path, state)
                 raise CampaignBudgetExceeded(denied_reason)
-            entry = {"attempt": len(state["calls"]) + 1, "startedAt": now.isoformat(),
-                     "task": task, "model": model, "status": "STARTED",
-                     "reserved": fields, "accounted": None,
-                     "usageStatus": "UNKNOWN_RESERVED", "metadata": metadata or {}}
+            entry = {
+                "attempt": len(state["calls"]) + 1,
+                "startedAt": now.isoformat(),
+                "task": task,
+                "model": model,
+                "status": "STARTED",
+                "reserved": fields,
+                "accounted": None,
+                "usageStatus": "UNKNOWN_RESERVED",
+                "metadata": metadata or {},
+            }
             state["firstLiveAt"] = first or now.isoformat()
             state["calls"].append(entry)
             atomic_json(self.path, state)
@@ -180,9 +215,15 @@ class CampaignLedger:
     def remaining_seconds(self) -> float:
         state = self.snapshot()
         if not state["firstLiveAt"]:
-            return min(float(self.limits["wall_seconds"]), self._remaining_active_seconds(state, datetime.now(UTC)))
+            return min(
+                float(self.limits["wall_seconds"]),
+                self._remaining_active_seconds(state, datetime.now(UTC)),
+            )
         now = datetime.now(UTC)
-        approval = self.limits["wall_seconds"] - (now - datetime.fromisoformat(state["firstLiveAt"])).total_seconds()
+        approval = (
+            self.limits["wall_seconds"]
+            - (now - datetime.fromisoformat(state["firstLiveAt"])).total_seconds()
+        )
         return max(0.0, min(approval, self._remaining_active_seconds(state, now)))
 
     def _remaining_active_seconds(self, state: dict[str, Any], now: datetime) -> float:
@@ -191,8 +232,8 @@ class CampaignLedger:
             return float(self.limits["wall_seconds"])
         used = sum(
             max(0.0, float(call.get("latencyMs", 0))) / 1000
-            if call["status"] != "STARTED" else
-            max(0.0, (now - datetime.fromisoformat(call["startedAt"])).total_seconds())
+            if call["status"] != "STARTED"
+            else max(0.0, (now - datetime.fromisoformat(call["startedAt"])).total_seconds())
             for call in state["calls"]
         )
         return max(0.0, cap - used)
@@ -209,8 +250,15 @@ class CampaignLedger:
         if self.run_stop_reason is None:
             self.run_stop_reason = reason
 
-    def finish(self, attempt: int, *, status: str, elapsed: float,
-               accounted: Reservation | None = None, failure: str | None = None) -> None:
+    def finish(
+        self,
+        attempt: int,
+        *,
+        status: str,
+        elapsed: float,
+        accounted: Reservation | None = None,
+        failure: str | None = None,
+    ) -> None:
         with self.lock:
             state = self._read()
             entry = state["calls"][attempt - 1]
@@ -287,7 +335,10 @@ async def campaign_call_boundary(ledger: CampaignLedger, call_seconds: float):
 
 class BudgetedTextProvider:
     """Preserve the configured OpenAI pool, policies and SDK retry=0."""
-    def __init__(self, upstream: Any, ledger: CampaignLedger, *, phase: str, call_seconds: float = 90) -> None:
+
+    def __init__(
+        self, upstream: Any, ledger: CampaignLedger, *, phase: str, call_seconds: float = 90
+    ) -> None:
         if not 0 < call_seconds <= 90:
             raise ValueError("QA text call timeout must be within (0, 90] seconds")
         self.upstream, self.ledger = upstream, ledger
@@ -299,6 +350,7 @@ class BudgetedTextProvider:
 
     def model_name_for(self, task: str) -> str:
         from app.ai.model_policy import get_model_name_for_task
+
         return get_model_name_for_task(task)
 
     def provider_name_for(self, task: str) -> str:
@@ -307,10 +359,13 @@ class BudgetedTextProvider:
     async def call(self, type_name: str, data: str, schema: dict | None = None) -> Any:
         return (await self.call_with_metadata(type_name, data, schema)).data
 
-    async def call_with_metadata(self, type_name: str, data: str, schema: dict | None = None) -> Any:
+    async def call_with_metadata(
+        self, type_name: str, data: str, schema: dict | None = None
+    ) -> Any:
         from app.ai.model_policy import get_task_model_policy
         from app.ai.prompt_registry import get_prompt_rule
         from app.core.config import settings
+
         if settings.AI_TEXT_PROVIDER.strip() != "openai":
             raise CampaignBudgetExceeded("UNPRICED_PROVIDER_ROUTING")
         model = self.model_name_for(type_name)
@@ -323,23 +378,43 @@ class BudgetedTextProvider:
         out_cap = policy.max_output_tokens
         reserve = Reservation(in_cap, out_cap, usd=_text_cost_reservation(model, in_cap, out_cap))
         check_campaign_admission(self.ledger)
-        attempt = self.ledger.reserve(type_name, model, reserve, metadata={
-            "phase": self.phase, "reasoningEffort": policy.reasoning_effort,
-            "sdkMaxRetries": 0, "physicalAttemptsObservable": False,
-            "requestSha256": hashlib.sha256(text.encode()).hexdigest(),
-        })
+        attempt = self.ledger.reserve(
+            type_name,
+            model,
+            reserve,
+            metadata={
+                "phase": self.phase,
+                "reasoningEffort": policy.reasoning_effort,
+                "sdkMaxRetries": 0,
+                "physicalAttemptsObservable": False,
+                "requestSha256": hashlib.sha256(text.encode()).hexdigest(),
+            },
+        )
         started = time.monotonic()
         try:
             async with campaign_call_boundary(self.ledger, self.call_seconds):
-                result = await self.upstream.call_with_metadata(type_name=type_name, data=data, schema=schema)
+                result = await self.upstream.call_with_metadata(
+                    type_name=type_name, data=data, schema=schema
+                )
         except BaseException as exc:
-            self.ledger.finish(attempt, status="CANCELLED" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "FAILED", elapsed=time.monotonic() - started, failure=type(exc).__name__)
+            self.ledger.finish(
+                attempt,
+                status="CANCELLED"
+                if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt))
+                else "FAILED",
+                elapsed=time.monotonic() - started,
+                failure=type(exc).__name__,
+            )
             raise
         inp, out = int(result.input_tokens), int(result.output_tokens)
-        charge = None if inp <= 0 or out <= 0 else Reservation(
-            inp, out, usd=_text_cost_reservation(model, inp, out)
+        charge = (
+            None
+            if inp <= 0 or out <= 0
+            else Reservation(inp, out, usd=_text_cost_reservation(model, inp, out))
         )
-        self.ledger.finish(attempt, status="COMPLETED", elapsed=time.monotonic() - started, accounted=charge)
+        self.ledger.finish(
+            attempt, status="COMPLETED", elapsed=time.monotonic() - started, accounted=charge
+        )
         return result
 
     async def warm_up(self) -> None:

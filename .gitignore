@@ -7,5 +7,6 @@ __pycache__/
 .deploy-env.*
 .deploy.lock
 
+test-results/
 .qa_tmp
 .docs

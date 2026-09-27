@@ -44,8 +44,7 @@ class VoiceTranslationService:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
         max_concurrency: int | None = None,
-        idempotency_store: InMemoryIdempotencyStore[VoiceTranslationRetryResponse]
-        | None = None,
+        idempotency_store: InMemoryIdempotencyStore[VoiceTranslationRetryResponse] | None = None,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = (
@@ -54,9 +53,7 @@ class VoiceTranslationService:
             else timeout_seconds
         )
         self.max_retries = (
-            settings.AI_VOICE_TRANSLATION_MAX_RETRIES
-            if max_retries is None
-            else max_retries
+            settings.AI_VOICE_TRANSLATION_MAX_RETRIES if max_retries is None else max_retries
         )
         self.max_concurrency = (
             settings.AI_VOICE_TRANSLATION_MAX_CONCURRENCY

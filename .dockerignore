@@ -1,4 +1,4 @@
-.env
+.env*
 .git
 .github
 .venv
@@ -9,3 +9,6 @@ __pycache__
 tests
 .deploy-env.*
 .deploy.lock
+quality-evidence
+receipt-traces
+*.log

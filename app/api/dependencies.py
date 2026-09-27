@@ -25,6 +25,7 @@ _speech_provider = create_speech_synthesis_provider()
 def get_speech_execution_provider():
     return _speech_provider
 
+
 _speech_runtime = FasterWhisperRuntime()
 _speaking_speech_runtime = speaking_runtime(_speech_runtime, settings)
 _stt_service = STTService(runtime=_speech_runtime)
@@ -41,7 +42,6 @@ _chat_translation_service = ChatTranslationService(
 _chat_ai_reply_service = ChatAiReplyService(
     provider=_ai_provider,
 )
-
 
 
 _receipt_analysis_service = ReceiptAnalysisService(
@@ -79,8 +79,6 @@ def get_speaking_speech_runtime() -> FasterWhisperRuntime:
     return _speaking_speech_runtime
 
 
-
-
 def get_translation_service() -> TranslationService:
     return _translation_service
 
@@ -93,48 +91,12 @@ def get_chat_ai_reply_service() -> ChatAiReplyService:
     return _chat_ai_reply_service
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def get_stt_service() -> STTService:
     return _stt_service
 
 
 def get_ocr_service() -> OCRService:
     return _ocr_service
-
-
 
 
 def get_receipt_analysis_service() -> ReceiptAnalysisService:

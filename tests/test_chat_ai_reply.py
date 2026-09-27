@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -30,7 +30,7 @@ class FakeProvider:
 
 
 def build_request(trigger_type: str = "MENTION", **overrides) -> ChatAiReplyRequest:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     data = {
         "requestId": "req-1",
         "triggerType": trigger_type,

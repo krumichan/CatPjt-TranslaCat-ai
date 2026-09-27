@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 
 class AiProviderPoolUnavailableError(RuntimeError):
@@ -159,6 +160,23 @@ class AiProviderPool:
             schema=schema,
         )
 
+    async def call_with_image_with_metadata(
+        self,
+        type_name: str,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        schema: dict | None = None,
+    ) -> Any:
+        return await self._invoke(
+            "call_with_image_with_metadata",
+            type_name=type_name,
+            prompt=prompt,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            schema=schema,
+        )
+
     async def translate_chat_message(
         self,
         text: str,
@@ -198,9 +216,7 @@ class AiProviderPool:
                 candidates = self._candidate_slots(method_name)
 
         if not candidates:
-            raise AiProviderPoolUnavailableError(
-                f"No ready AI provider supports {method_name}"
-            )
+            raise AiProviderPoolUnavailableError(f"No ready AI provider supports {method_name}")
 
         last_transient_error: Exception | None = None
         for slot in candidates:

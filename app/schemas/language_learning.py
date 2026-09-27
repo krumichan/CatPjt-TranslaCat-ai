@@ -26,14 +26,6 @@ class KeywordType(str, Enum):
     VOCABULARY = "VOCABULARY"
 
 
-
-
-
-
-
-
-
-
 class WritingMetric(str, Enum):
     MEANING = "MEANING"
     GRAMMAR = "GRAMMAR"

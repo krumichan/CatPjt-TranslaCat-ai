@@ -25,49 +25,65 @@ async def synthesize(
     async for chunk in request.stream():
         if len(raw) + len(chunk) > 128_000:
             raise HTTPException(
-                413, detail={"code": "SPEECH_REQUEST_TOO_LARGE", "retryable": False},
+                413,
+                detail={"code": "SPEECH_REQUEST_TOO_LARGE", "retryable": False},
             )
         raw.extend(chunk)
     try:
         command = SpeechSynthesisCommand.model_validate(json.loads(raw))
     except (ValidationError, ValueError, TypeError, UnicodeDecodeError, RecursionError):
         raise HTTPException(
-            422, detail={"code": "SPEECH_REQUEST_INVALID", "retryable": False},
+            422,
+            detail={"code": "SPEECH_REQUEST_INVALID", "retryable": False},
         ) from None
 
     # 학습 프롬프트나 합격 판정 없이 명시된 발화를 한 번만 실행한다.
     try:
         async with asyncio.timeout(command.remaining_milliseconds / 1000.0):
             result = await provider.synthesize_speech(
-                text=command.text, voice=command.voice,
-                language=command.language, speed=command.speed,
+                text=command.text,
+                voice=command.voice,
+                language=command.language,
+                speed=command.speed,
             )
     except TimeoutError as error:
-        raise HTTPException(504, detail={
-            "code": "PROVIDER_TIMEOUT", "retryable": True, **provider_failure_origin(error),
-        }) from None
+        raise HTTPException(
+            504,
+            detail={
+                "code": "PROVIDER_TIMEOUT",
+                "retryable": True,
+                **provider_failure_origin(error),
+            },
+        ) from None
     except ValueError as error:
         raise HTTPException(
-            422, detail={
-                "code": "SPEECH_REQUEST_INVALID", "retryable": False,
+            422,
+            detail={
+                "code": "SPEECH_REQUEST_INVALID",
+                "retryable": False,
                 **provider_failure_origin(error),
             },
         ) from None
     except Exception as error:
         status = getattr(error, "status_code", None)
         retryable = status == 429 or isinstance(status, int) and status >= 500
-        raise HTTPException(503 if retryable else 502, detail={
-            "code": "PROVIDER_UNAVAILABLE" if retryable else "PROVIDER_EXECUTION_FAILED",
-            "retryable": retryable,
-            **retry_after_details(error),
-            **provider_failure_origin(error),
-        }) from None
+        raise HTTPException(
+            503 if retryable else 502,
+            detail={
+                "code": "PROVIDER_UNAVAILABLE" if retryable else "PROVIDER_EXECUTION_FAILED",
+                "retryable": retryable,
+                **retry_after_details(error),
+                **provider_failure_origin(error),
+            },
+        ) from None
 
     # 오디오 저장·접근권한은 호출자가 소유한다. 실행 계층은 URL을 내려받지 않는다.
     if not result.audio_bytes or len(result.audio_bytes) > 20_000_000:
         raise HTTPException(502, detail={"code": "SPEECH_RESPONSE_INVALID", "retryable": False})
     return SpeechSynthesisResponse(
         audioBase64=base64.b64encode(result.audio_bytes).decode("ascii"),
-        contentType=result.content_type, durationSeconds=result.duration_seconds,
-        provider=result.provider, model=result.model,
+        contentType=result.content_type,
+        durationSeconds=result.duration_seconds,
+        provider=result.provider,
+        model=result.model,
     )

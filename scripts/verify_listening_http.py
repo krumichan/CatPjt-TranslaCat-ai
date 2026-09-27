@@ -249,10 +249,7 @@ def main(via_be: bool = False) -> None:
                     )
                     dashboard_response.raise_for_status()
                     dashboard = dashboard_response.json()["body"]
-                    assert (
-                        dashboard["activityPerformance"]["listening"]["today"]["completed"]
-                        == 1
-                    )
+                    assert dashboard["activityPerformance"]["listening"]["today"]["completed"] == 1
                     assert dashboard["trends"]["listeningTasks"]
                     checks += 3
                 print(

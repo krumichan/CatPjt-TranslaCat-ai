@@ -79,9 +79,7 @@ class FasterWhisperVoiceSttProvider:
             result = await self.runtime.transcribe(
                 audio,
                 options=options,
-                priority=(
-                    InferencePriority.FINAL if is_final else InferencePriority.PARTIAL
-                ),
+                priority=(InferencePriority.FINAL if is_final else InferencePriority.PARTIAL),
             )
         except SpeechRuntimeQueueFull as exc:
             raise VoicePipelineException(
@@ -111,8 +109,7 @@ class FasterWhisperVoiceSttProvider:
         text = result.text.strip()
         if (
             no_speech_probability is not None
-            and no_speech_probability
-            >= settings.AI_VOICE_STT_NO_SPEECH_PROBABILITY_THRESHOLD
+            and no_speech_probability >= settings.AI_VOICE_STT_NO_SPEECH_PROBABILITY_THRESHOLD
         ):
             text = ""
 

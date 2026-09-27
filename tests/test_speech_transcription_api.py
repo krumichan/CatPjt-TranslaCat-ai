@@ -88,8 +88,9 @@ def test_decoder_preserves_existing_pcm_conversion_and_measurements():
     from pathlib import Path
 
     expected = json.loads(
-        (Path(__file__).parent / "fixtures/speech-normalization-speaking-original.json")
-        .read_text(encoding="utf-8")
+        (Path(__file__).parent / "fixtures/speech-normalization-speaking-original.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     # 실행
@@ -106,6 +107,7 @@ def test_decoder_preserves_existing_pcm_conversion_and_measurements():
 def test_normalizer_preserves_raw_precision_before_learning_thresholds():
     # 준비: 소수 여섯째 자리 반올림 전에는 기존 무음 경계보다 작은 PCM이다.
     import struct
+
     output = io.BytesIO()
     sample = int(0.0029996 * 2147483648)
     with wave.open(output, "wb") as writer:

@@ -73,8 +73,10 @@ jobs:
             exec 9>.deploy.lock
             flock -n 9 || { echo "Another release is running" >&2; exit 1; }
             [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
-            git diff --quiet
-            git diff --cached --quiet
+            test -z "$(git status --porcelain --untracked-files=all)" || {
+              echo "Release checkout contains tracked or untracked changes" >&2
+              exit 1
+            }
             git fetch --no-tags origin "$DEPLOY_SHA"
             git checkout --detach "$DEPLOY_SHA"
             bash scripts/deploy-release.sh "$DEPLOY_SHA"

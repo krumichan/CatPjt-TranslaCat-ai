@@ -3,12 +3,13 @@
 This does not claim that the 20-question Level Test ran. It changes no auth
 policy and refuses databases or accounts outside this isolated campaign.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -41,7 +42,12 @@ def prepare(directory: Path, user_id: int) -> dict[str, object]:
         f"WHERE u.id={user_id};"
     ).split("\t")
     if before[:2] != [str(user_id), "GOOGLE"] or before[3:] != [
-        "LEVEL_TEST_REQUIRED", "-1", "ko", "ja", "0", "0"
+        "LEVEL_TEST_REQUIRED",
+        "-1",
+        "ko",
+        "ja",
+        "0",
+        "0",
     ]:
         raise ValueError("Exact new Google QA account/prerequisites do not match")
     # The profile belongs to the just-authenticated user, not to the synthetic

@@ -40,8 +40,10 @@ class ModelExecutionRequest(BaseModel):
     @model_validator(mode="after")
     def validate_profile(self) -> ModelExecutionRequest:
         expected = {
-            ModelTier.NANO: "low", ModelTier.LUNA: "none",
-            ModelTier.MINI: "low", ModelTier.SOL: "high",
+            ModelTier.NANO: "low",
+            ModelTier.LUNA: "none",
+            ModelTier.MINI: "low",
+            ModelTier.SOL: "high",
         }
         if self.reasoning_effort != expected[self.tier]:
             raise ValueError("Unsupported execution profile")

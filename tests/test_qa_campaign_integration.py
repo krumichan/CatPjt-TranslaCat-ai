@@ -42,12 +42,16 @@ def test_atomic_qa_snapshot_does_not_mask_permanent_permission_error(tmp_path, m
 
 def _report(directory: Path) -> dict:
     return {
-        "owner": qa.OWNER, "campaign": "test-isolated",
-        "names": qa.resource_names("test-isolated"), "ports": qa.PORTS,
+        "owner": qa.OWNER,
+        "campaign": "test-isolated",
+        "names": qa.resource_names("test-isolated"),
+        "ports": qa.PORTS,
         "images": {kind: {"id": f"sha256:{kind}", "digests": []} for kind in ("mysql", "redis")},
-        "readyForFreshInfrastructure": True, "status": "PREPARED",
+        "readyForFreshInfrastructure": True,
+        "status": "PREPARED",
         "infraHealth": {"hostPublishedPortsReady": {"mysql": True, "redis": True}},
-        "directory": str(directory), "createdResources": [],
+        "directory": str(directory),
+        "createdResources": [],
     }
 
 
@@ -86,7 +90,11 @@ def test_remote_docker_host_is_refused_before_any_command(monkeypatch):
 
 def test_nonlocal_docker_context_refused(monkeypatch):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    monkeypatch.setattr(qa, "_docker", lambda *args, **kwargs: "remote" if args[1] == "show" else "ssh://remote.invalid")
+    monkeypatch.setattr(
+        qa,
+        "_docker",
+        lambda *args, **kwargs: "remote" if args[1] == "show" else "ssh://remote.invalid",
+    )
     with pytest.raises(ValueError, match="local Windows"):
         qa.preflight("test-isolated")
 
@@ -99,10 +107,15 @@ def test_start_infra_rejects_existing_resources_without_writes(tmp_path, monkeyp
         qa.start_infrastructure(tmp_path)
 
 
-def test_start_infra_uses_fresh_labels_pinned_images_loopback_and_secret_env_only(tmp_path, monkeypatch):
+def test_start_infra_uses_fresh_labels_pinned_images_loopback_and_secret_env_only(
+    tmp_path, monkeypatch
+):
     report = _report(tmp_path)
     qa._write_json(tmp_path / "manifest.json", report)
-    qa._write_json(tmp_path / "secrets.private.json", {"QA_DB_PASSWORD": "not-a-real-db-secret", "QA_DB_ROOT_PASSWORD": "not-a-real-root-secret"})
+    qa._write_json(
+        tmp_path / "secrets.private.json",
+        {"QA_DB_PASSWORD": "not-a-real-db-secret", "QA_DB_ROOT_PASSWORD": "not-a-real-root-secret"},
+    )
     monkeypatch.setattr(qa, "preflight", lambda campaign: report.copy())
     calls = []
 
@@ -133,7 +146,9 @@ def test_start_infra_uses_fresh_labels_pinned_images_loopback_and_secret_env_onl
 def test_partial_start_failure_preserves_owned_manifest_without_deleting(tmp_path, monkeypatch):
     report = _report(tmp_path)
     qa._write_json(tmp_path / "manifest.json", report)
-    qa._write_json(tmp_path / "secrets.private.json", {"QA_DB_PASSWORD": "fake", "QA_DB_ROOT_PASSWORD": "fake"})
+    qa._write_json(
+        tmp_path / "secrets.private.json", {"QA_DB_PASSWORD": "fake", "QA_DB_ROOT_PASSWORD": "fake"}
+    )
     monkeypatch.setattr(qa, "preflight", lambda campaign: report.copy())
     calls = []
 
@@ -167,7 +182,9 @@ def test_be_launch_does_not_inherit_developer_db_or_jvm_overrides(tmp_path, monk
     monkeypatch.setenv("JAVA_TOOL_OPTIONS", "-Dspring.datasource.url=forbidden")
     monkeypatch.setenv("OPENAI_API_KEY", "fake-must-not-enter-be")
     qa._write_json(tmp_path / "secrets.private.json", {"QA_DB_PASSWORD": "qa-fake"})
-    (tmp_path / "application-qa.properties").write_text(qa.be_properties(tmp_path, report["names"]), encoding="utf-8")
+    (tmp_path / "application-qa.properties").write_text(
+        qa.be_properties(tmp_path, report["names"]), encoding="utf-8"
+    )
     repository = tmp_path / "be"
     libs = repository / "build" / "libs"
     libs.mkdir(parents=True)
@@ -187,7 +204,12 @@ def test_be_launch_does_not_inherit_developer_db_or_jvm_overrides(tmp_path, monk
     command, kwargs = invocations[0]
     assert "--spring.profiles.active=qa" in command
     assert kwargs["env"]["QA_DB_PASSWORD"] == "qa-fake"
-    assert not {"SPRING_DATASOURCE_URL", "SPRING_APPLICATION_JSON", "JAVA_TOOL_OPTIONS", "OPENAI_API_KEY"} & set(kwargs["env"])
+    assert not {
+        "SPRING_DATASOURCE_URL",
+        "SPRING_APPLICATION_JSON",
+        "JAVA_TOOL_OPTIONS",
+        "OPENAI_API_KEY",
+    } & set(kwargs["env"])
     assert "qa-fake" not in str(command)
 
 
@@ -195,18 +217,30 @@ def _auth_fixture(tmp_path, monkeypatch):
     manifest = _report(tmp_path)
     manifest["beProcess"] = {"command": ["java", "-jar", "synthetic-qa.jar"]}
     monkeypatch.setattr(qa, "_owned_manifest", lambda directory: manifest)
-    qa._write_json(tmp_path / "auth-reproduction.json", {
-        "campaign": "test-isolated", "registeredUserId": 1,
-        "registerHttpStatus": 200, "loginHttpStatus": 500, "accessTokenReceived": False,
-    })
-    qa._write_json(tmp_path / "secrets.private.json", {
-        "QA_DB_PASSWORD": "synthetic", "QA_APP_EMAIL": "qa-test-isolated@example.invalid",
-        "QA_APP_PASSWORD": "synthetic-password",
-    })
+    qa._write_json(
+        tmp_path / "auth-reproduction.json",
+        {
+            "campaign": "test-isolated",
+            "registeredUserId": 1,
+            "registerHttpStatus": 200,
+            "loginHttpStatus": 500,
+            "accessTokenReceived": False,
+        },
+    )
+    qa._write_json(
+        tmp_path / "secrets.private.json",
+        {
+            "QA_DB_PASSWORD": "synthetic",
+            "QA_APP_EMAIL": "qa-test-isolated@example.invalid",
+            "QA_APP_PASSWORD": "synthetic-password",
+        },
+    )
     return manifest
 
 
-def test_auth_fixture_only_mutates_exact_new_synthetic_identity_and_uses_normal_login(tmp_path, monkeypatch):
+def test_auth_fixture_only_mutates_exact_new_synthetic_identity_and_uses_normal_login(
+    tmp_path, monkeypatch
+):
     _auth_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(qa, "_bcrypt_fixture_hash", lambda *args: "$2a$12$synthetic-only")
     queries = []
@@ -241,7 +275,9 @@ def test_auth_fixture_only_mutates_exact_new_synthetic_identity_and_uses_normal_
 def test_auth_fixture_identity_mismatch_prevents_write(tmp_path, monkeypatch):
     _auth_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(qa, "_qa_mysql_query", lambda *args: "0")
-    monkeypatch.setattr(qa, "_bcrypt_fixture_hash", lambda *args: pytest.fail("no hash or mutation"))
+    monkeypatch.setattr(
+        qa, "_bcrypt_fixture_hash", lambda *args: pytest.fail("no hash or mutation")
+    )
     with pytest.raises(ValueError, match="no write"):
         qa.seed_qa_auth_fixture(tmp_path, Path("java"))
     assert not (tmp_path / "auth-fixture-result.json").exists()
@@ -285,7 +321,9 @@ def test_google_qa_audience_uses_next_env_and_never_exposes_value(tmp_path, monk
     assert private == {"QA_DB_PASSWORD": "preserved-synthetic", "QA_GOOGLE_CLIENT_ID": client_id}
     assert "loadEnvConfig(root,true" in calls[0][2]
     assert client_id not in json.dumps(result)
-    assert client_id not in (tmp_path / "google-audience-configuration.json").read_text(encoding="utf-8")
+    assert client_id not in (tmp_path / "google-audience-configuration.json").read_text(
+        encoding="utf-8"
+    )
     assert result["productionConfigurationChanged"] is False
 
 
@@ -295,9 +333,14 @@ def test_invalid_google_audience_does_not_write_private_config(tmp_path, monkeyp
     (fe / "node_modules" / "@next" / "env").mkdir(parents=True)
     private = tmp_path / "secrets.private.json"
     private.write_text('{"preserved": true}', encoding="utf-8")
-    monkeypatch.setattr(qa.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
-        returncode=0, stdout=json.dumps({"clientId": "invalid-sensitive-output"}),
-    ))
+    monkeypatch.setattr(
+        qa.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"clientId": "invalid-sensitive-output"}),
+        ),
+    )
     with pytest.raises(ValueError, match="output suppressed") as caught:
         qa.configure_qa_google(tmp_path, fe, Path("node"))
     assert "invalid-sensitive-output" not in str(caught.value)

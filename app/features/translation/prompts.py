@@ -57,7 +57,8 @@ Translate the provided Japanese input into Korean.
 
 # Strict Constraints
 1. 1:1 Mapping: If the input is an array, the output MUST have the exact same number of elements.
-2. Zero-Creativity Policy: Do NOT add any dramatic effects, screams, or repeated characters not present in the source.
+2. Zero-Creativity Policy: Do NOT add any dramatic effects, screams, \
+or repeated characters not present in the source.
 3. Character Repetition Limit: Vowels and symbols count should match the source as much as possible.
 4. No Hallucination: Translate only what is written.
 5. Format Integrity:
@@ -78,7 +79,8 @@ Translate the provided Japanese spoken text into natural, polite Korean.
 The input may contain phonetic errors, repeated words, or fillers caused by poor speech recognition.
 
 # Key Rules
-1. Error Correction: If a word is phonetically similar to a meaningful word but out of context, correct it based on natural Japanese flow.
+1. Error Correction: If a word is phonetically similar to a meaningful word but out of context, \
+correct it based on natural Japanese flow.
 2. Clean Output: Remove stuttering, repeated fragments, and unnecessary fillers.
 3. Conversational Style: Use a polite and natural tone suitable for daily conversation.
 

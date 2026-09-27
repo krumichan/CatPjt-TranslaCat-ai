@@ -67,7 +67,7 @@ def verify_internal_service_api_key(
 @router.websocket("/streams")
 async def stream_voice_translation(
     websocket: WebSocket,
-    service: VoiceStreamApplicationService = Depends(get_voice_stream_service),
+    service: Annotated[VoiceStreamApplicationService, Depends(get_voice_stream_service)],
 ) -> None:
     if not _is_authorized(websocket.headers.get("X-API-KEY")):
         await websocket.close(
@@ -129,7 +129,7 @@ async def stream_voice_translation(
 )
 async def retry_voice_translation(
     request: VoiceTranslationRetryRequest,
-    service: VoiceTranslationService = Depends(get_voice_translation_service),
+    service: Annotated[VoiceTranslationService, Depends(get_voice_translation_service)],
 ) -> VoiceTranslationRetryResponse:
     try:
         return await service.retry(request)
@@ -153,7 +153,7 @@ async def retry_voice_translation(
     dependencies=[Depends(verify_internal_service_api_key)],
 )
 async def voice_readiness(
-    service: VoiceStreamApplicationService = Depends(get_voice_stream_service),
+    service: Annotated[VoiceStreamApplicationService, Depends(get_voice_stream_service)],
 ):
     payload = VoiceReadinessResponse(
         ready=service.ready,
@@ -179,7 +179,7 @@ async def _receive_stream_open(
             websocket.receive(),
             timeout=settings.AI_VOICE_STREAM_OPEN_TIMEOUT_SECONDS,
         )
-    except (TimeoutError, asyncio.TimeoutError) as exc:
+    except TimeoutError as exc:
         raise _StreamOpenTimeout from exc
 
     if first_message.get("type") == "websocket.disconnect":
@@ -312,7 +312,7 @@ async def _wait_for_sender(sender_task: asyncio.Task[None]) -> None:
             asyncio.shield(sender_task),
             timeout=settings.AI_VOICE_SHUTDOWN_GRACE_SECONDS,
         )
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         sender_task.cancel()
         await asyncio.gather(sender_task, return_exceptions=True)
 
@@ -341,9 +341,7 @@ async def _send_pre_open_failure(
         target_language=target_language,
         error=error.as_error(),
     )
-    await websocket.send_json(
-        event.model_dump(by_alias=True, mode="json", exclude_none=True)
-    )
+    await websocket.send_json(event.model_dump(by_alias=True, mode="json", exclude_none=True))
 
 
 def _is_authorized(provided_api_key: str | None) -> bool:

@@ -1,4 +1,5 @@
 """Speaking 원본 대조 HTTP 검사에서 모델 출력만 고정하는 합성 Provider."""
+
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -19,7 +20,8 @@ def _cases():
 
 def execute_speaking_conversation_fixture(kwargs):
     if kwargs.get("schema_name_value") not in {
-        "LANGUAGE_LEARNING_SPEAKING_CONVERSATION", "LANGUAGE_LEARNING_SPEAKING_ASSISTANCE",
+        "LANGUAGE_LEARNING_SPEAKING_CONVERSATION",
+        "LANGUAGE_LEARNING_SPEAKING_ASSISTANCE",
     }:
         return None
     payload = json.loads(kwargs["messages"][0]["content"].rsplit("\n", 1)[-1])
@@ -31,16 +33,21 @@ def execute_speaking_conversation_fixture(kwargs):
     # 오류 객체도 실제 SDK 형태로 전달하되 외부 Provider 호출과 본문 로그는 만들지 않는다.
     failure = case["providerFailure"]
     if failure == "REFUSAL":
-        raise OpenAIProviderResponseError("OpenAI declined the request", reason_code="REFUSAL",
-                                         retryable=False)
+        raise OpenAIProviderResponseError(
+            "OpenAI declined the request", reason_code="REFUSAL", retryable=False
+        )
     if failure == "TIMEOUT":
         raise TimeoutError()
     if failure == "SDK_TIMEOUT":
         raise APITimeoutError(request=httpx.Request("POST", "https://synthetic.invalid"))
     if failure == "SDK_CONNECTION":
         raise APIConnectionError(request=httpx.Request("POST", "https://synthetic.invalid"))
-    markers = {"RATE_SIGNAL": "rate limit", "DEADLINE_SIGNAL": "deadline exceeded",
-               "SAFETY_SIGNAL": "safety blocked", "VALUE_ERROR": "Synthetic value failure"}
+    markers = {
+        "RATE_SIGNAL": "rate limit",
+        "DEADLINE_SIGNAL": "deadline exceeded",
+        "SAFETY_SIGNAL": "safety blocked",
+        "VALUE_ERROR": "Synthetic value failure",
+    }
     if failure in markers:
         error_type = ValueError if failure == "VALUE_ERROR" else RuntimeError
         raise error_type(markers[failure])

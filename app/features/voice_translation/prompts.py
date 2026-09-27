@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-
 VOICE_TRANSLATION_SYSTEM_PROMPT = """
 # Role
 You are the low-latency translation stage of a live voice translation system.

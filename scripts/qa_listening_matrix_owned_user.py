@@ -5,13 +5,14 @@ validation, five answer/evaluation submissions, and DB/API reconciliation.
 This wrapper only selects an isolated QA identity with no set in that mode
 today. It never changes the production daily-set reuse policy.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,10 +23,13 @@ from scripts.qa_campaign_be_workflows import listening, listening_case
 
 USER_CASES = {
     "local-user2": {
-        ("DICTATION", "EASY"), ("COMPREHENSION", "EASY"), ("SUMMARY", "MY_LEVEL"),
+        ("DICTATION", "EASY"),
+        ("COMPREHENSION", "EASY"),
+        ("SUMMARY", "MY_LEVEL"),
     },
     "google-user3": {
-        ("DICTATION", "EASY"), ("DICTATION", "CHALLENGE"),
+        ("DICTATION", "EASY"),
+        ("DICTATION", "CHALLENGE"),
         ("SUMMARY", "CHALLENGE"),
     },
 }
@@ -64,14 +68,21 @@ def main() -> None:
     if args.qa_user == "local-user2":
         if args.browser_session is not None:
             parser.error("Local QA account does not use a Google browser session")
-        email = bootstrap._qa_mysql_query(manifest, private,
+        email = bootstrap._qa_mysql_query(
+            manifest,
+            private,
             "SELECT email FROM user WHERE id=2 AND social_type='LOCAL' "
-            "AND email LIKE 'qa-%@example.invalid';")
+            "AND email LIKE 'qa-%@example.invalid';",
+        )
         if not email or "\n" in email:
             raise ValueError("Exact synthetic user2 ownership not proven")
-        status, response = bootstrap._qa_request("/api/v1/auth/login", {
-            "email": email, "password": private["QA_APP_PASSWORD"],
-        })
+        status, response = bootstrap._qa_request(
+            "/api/v1/auth/login",
+            {
+                "email": email,
+                "password": private["QA_APP_PASSWORD"],
+            },
+        )
         token = (response.get("body") or {}).get("accessToken")
         if status != 200 or not isinstance(token, str) or not token:
             raise ValueError("Normal synthetic QA login failed")
@@ -83,19 +94,37 @@ def main() -> None:
     else:
         if args.browser_session is None:
             parser.error("Exact normal Google browser session descriptor required")
-        client = Client(directory, browser_session=args.browser_session.resolve(), output_directory=output)
+        client = Client(
+            directory, browser_session=args.browser_session.resolve(), output_directory=output
+        )
         if client.user_id != 3 or client.browser_public_id != "TC-GA5T-4LRB":
             raise ValueError("Expected isolated QA Google user3")
 
-    existing = bootstrap._qa_mysql_query(manifest, private,
+    existing = bootstrap._qa_mysql_query(
+        manifest,
+        private,
         "SELECT COUNT(*) FROM language_learning_listening_daily_set "
-        f"WHERE user_id={client.user_id} AND learning_mode='{args.mode}' AND learning_date=CURRENT_DATE();")
+        f"WHERE user_id={client.user_id} AND learning_mode='{args.mode}' "
+        "AND learning_date=CURRENT_DATE();",
+    )
     if existing != "0":
-        raise ValueError("This owned QA user already has today's mode; never reuse it as a new case")
+        raise ValueError(
+            "This owned QA user already has today's mode; never reuse it as a new case"
+        )
     report = listening(client, args.mode, difficulty=args.difficulty, case_id=args.case_id)
-    print(json.dumps({"qaUserId": client.user_id, "mode": args.mode, "difficulty": args.difficulty,
-                      "status": report["status"], "setId": report.get("dailySetId"),
-                      "items": len(report.get("items", []))}, ensure_ascii=True))
+    print(
+        json.dumps(
+            {
+                "qaUserId": client.user_id,
+                "mode": args.mode,
+                "difficulty": args.difficulty,
+                "status": report["status"],
+                "setId": report.get("dailySetId"),
+                "items": len(report.get("items", [])),
+            },
+            ensure_ascii=True,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -4,14 +4,15 @@ The original registration/auth failure record is immutable. Shortening this
 new synthetic user's email is a QA fixture adjustment, not an auth bypass or
 a production schema/policy change. Login and settings still use normal HTTP.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,10 +34,16 @@ def main() -> None:
     if manifest["campaign"] != "openai-speech-campaign-20260920":
         raise ValueError("Wrong QA campaign")
     output = directory / "be-api-runs" / "lu4dc1"
-    original = json.loads((output / "one-shot-account-and-listening.json").read_text(encoding="utf-8"))
-    if (original.get("campaign") != manifest["campaign"] or original.get("userId") != 4
-            or original.get("registerHttpStatus") != 200 or original.get("loginHttpStatus") != 500
-            or original.get("status") != "AUTH_FIXTURE_UPDATED"):
+    original = json.loads(
+        (output / "one-shot-account-and-listening.json").read_text(encoding="utf-8")
+    )
+    if (
+        original.get("campaign") != manifest["campaign"]
+        or original.get("userId") != 4
+        or original.get("registerHttpStatus") != 200
+        or original.get("loginHttpStatus") != 500
+        or original.get("status") != "AUTH_FIXTURE_UPDATED"
+    ):
         raise ValueError("Exact first-attempt login failure evidence is required")
     artifact = output / "resume-after-email-length.json"
     if artifact.exists():
@@ -49,9 +56,13 @@ def main() -> None:
     def query(sql: str) -> str:
         return bootstrap._qa_mysql_query(manifest, private, sql)
 
-    report: dict = {"status": "STARTED", "userId": 4, "syntheticUser": True,
-                    "preservedOriginalFailure": str(output / "one-shot-account-and-listening.json"),
-                    "emailChange": "exact new QA row only; no original user or schema change"}
+    report: dict = {
+        "status": "STARTED",
+        "userId": 4,
+        "syntheticUser": True,
+        "preservedOriginalFailure": str(output / "one-shot-account-and-listening.json"),
+        "emailChange": "exact new QA row only; no original user or schema change",
+    }
     bootstrap._write_json(artifact, report)
     predicate = f"id=4 AND social_type='LOCAL' AND email=CONVERT(0x{old_hex} USING utf8mb4)"
     if query(f"SELECT COUNT(*) FROM user WHERE {predicate};") != "1":
@@ -60,15 +71,25 @@ def main() -> None:
         raise ValueError("Short QA identity already belongs to another user")
     if query("SELECT COUNT(*) FROM language_learning_listening_daily_set WHERE user_id=4;") != "0":
         raise ValueError("New QA user has unexpectedly created a Listening set")
-    if query("UPDATE user SET email=CONVERT(0x" + new_hex
-             + f" USING utf8mb4) WHERE {predicate}; SELECT ROW_COUNT();") != "1":
+    if (
+        query(
+            "UPDATE user SET email=CONVERT(0x"
+            + new_hex
+            + f" USING utf8mb4) WHERE {predicate}; SELECT ROW_COUNT();"
+        )
+        != "1"
+    ):
         raise ValueError("Exact QA email fixture update failed")
     report["status"] = "EXACT_QA_EMAIL_SHORTENED"
     bootstrap._write_json(artifact, report)
 
-    login_status, login = bootstrap._qa_request("/api/v1/auth/login", {
-        "email": new_email, "password": private["QA_APP_PASSWORD"],
-    })
+    login_status, login = bootstrap._qa_request(
+        "/api/v1/auth/login",
+        {
+            "email": new_email,
+            "password": private["QA_APP_PASSWORD"],
+        },
+    )
     token = (login.get("body") or {}).get("accessToken")
     report.update({"loginHttpStatus": login_status, "normalLoginSucceeded": bool(token)})
     bootstrap._write_json(artifact, report)
@@ -81,13 +102,21 @@ def main() -> None:
     report["profileFixture"] = client.seed_profile()["status"]
     bootstrap._write_json(artifact, report)
 
-    settings = {"originLanguage": "ko", "learningLanguage": "ja", "timezone": "Asia/Tokyo",
-                "dailySentenceCount": 5, "dailySpeakingGoalMinutes": 5,
-                "speakingVoiceId": "marin", "speakingPlaybackSpeed": "NORMAL",
-                "dailyListeningGoalCount": 5, "defaultListeningTaskTypes": ["SUMMARY"]}
+    settings = {
+        "originLanguage": "ko",
+        "learningLanguage": "ja",
+        "timezone": "Asia/Tokyo",
+        "dailySentenceCount": 5,
+        "dailySpeakingGoalMinutes": 5,
+        "speakingVoiceId": "marin",
+        "speakingPlaybackSpeed": "NORMAL",
+        "dailyListeningGoalCount": 5,
+        "defaultListeningTaskTypes": ["SUMMARY"],
+    }
     request = urllib.request.Request(
         f"http://127.0.0.1:{manifest['ports']['be']}/api/v1/language-learning/settings",
-        data=json.dumps(settings).encode("utf-8"), method="PATCH",
+        data=json.dumps(settings).encode("utf-8"),
+        method="PATCH",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), bootstrap._NoRedirect())
@@ -102,16 +131,35 @@ def main() -> None:
     bootstrap._write_json(artifact, report)
     if setting_status != 200:
         raise ValueError("Normal QA settings PATCH failed; no generation")
-    if query("SELECT COUNT(*) FROM language_learning_listening_daily_set "
-             "WHERE user_id=4 AND learning_mode='DICTATION';") != "0":
+    if (
+        query(
+            "SELECT COUNT(*) FROM language_learning_listening_daily_set "
+            "WHERE user_id=4 AND learning_mode='DICTATION';"
+        )
+        != "0"
+    ):
         raise ValueError("New QA user unexpectedly has a DICTATION set")
     result = listening(client, "DICTATION", difficulty="CHALLENGE", case_id="u4dc1")
-    report.update({"status": result["status"], "dailySetId": result.get("dailySetId"),
-                   "itemCount": len(result.get("items", []))})
+    report.update(
+        {
+            "status": result["status"],
+            "dailySetId": result.get("dailySetId"),
+            "itemCount": len(result.get("items", [])),
+        }
+    )
     bootstrap._write_json(artifact, report)
-    print(json.dumps({"qaUserId": 4, "mode": "DICTATION", "difficulty": "CHALLENGE",
-                      "status": result["status"], "setId": result.get("dailySetId"),
-                      "items": len(result.get("items", []))}))
+    print(
+        json.dumps(
+            {
+                "qaUserId": 4,
+                "mode": "DICTATION",
+                "difficulty": "CHALLENGE",
+                "status": result["status"],
+                "setId": result.get("dailySetId"),
+                "items": len(result.get("items", [])),
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

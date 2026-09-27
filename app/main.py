@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
         await get_voice_speech_evidence_guard().warm_up()
         await get_speech_runtime().warm_up()
 
-    if settings.OCR_WARM_UP:
+    if settings.OCR_WARM_UP and not settings.RECEIPT_VISION_DISABLE_OCR_WARMUP:
         await get_ocr_service().warm_up()
 
     try:
@@ -54,9 +54,7 @@ async def lifespan(app: FastAPI):
         if shutdown_provider is not None:
             await shutdown_provider()
         await get_model_execution_provider().shutdown()
-        shutdown_speech_provider = getattr(
-            get_speech_synthesis_provider(), "shutdown", None
-        )
+        shutdown_speech_provider = getattr(get_speech_synthesis_provider(), "shutdown", None)
         if shutdown_speech_provider is not None:
             await shutdown_speech_provider()
 

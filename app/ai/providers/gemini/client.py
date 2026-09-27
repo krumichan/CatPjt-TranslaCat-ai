@@ -89,7 +89,9 @@ class GeminiService:
 
             return response.parsed if schema else response.text
         except Exception as exc:
-            logger.error("Gemini API call failed. type=%s errorType=%s", type_name, type(exc).__name__)
+            logger.error(
+                "Gemini API call failed. type=%s errorType=%s", type_name, type(exc).__name__
+            )
             raise
 
     async def call_with_metadata(
@@ -117,7 +119,11 @@ class GeminiService:
                 model=self.model_name,
             )
         except Exception as exc:
-            logger.error("Gemini API metadata call failed. type=%s errorType=%s", type_name, type(exc).__name__)
+            logger.error(
+                "Gemini API metadata call failed. type=%s errorType=%s",
+                type_name,
+                type(exc).__name__,
+            )
             raise
 
     async def synthesize_speech(
@@ -167,7 +173,8 @@ class GeminiService:
                     raise
                 delay_seconds = 0.35 * attempt
                 logger.warning(
-                    "Gemini TTS returned no usable audio; retrying. attempt=%d/%d delay=%.2fs reason=%s",
+                    "Gemini TTS returned no usable audio; retrying. "
+                    "attempt=%d/%d delay=%.2fs reason=%s",
                     attempt,
                     max_attempts,
                     delay_seconds,
@@ -179,7 +186,8 @@ class GeminiService:
                 if retry_delay is not None:
                     self._activate_tts_quota_cooldown(retry_delay)
                     logger.warning(
-                        "Gemini TTS daily quota exhausted; provider cooldown activated. retryAfterSeconds=%.3f",
+                        "Gemini TTS daily quota exhausted; provider cooldown activated. "
+                        "retryAfterSeconds=%.3f",
                         retry_delay,
                     )
                 else:
@@ -339,7 +347,9 @@ class GeminiService:
 
             return response.parsed if schema else response.text
         except Exception as exc:
-            logger.error("Gemini Vision API Call Error: %s", exc)
+            logger.error(
+                "Gemini Vision call failed. type=%s errorType=%s", type_name, type(exc).__name__
+            )
             raise
 
     async def translate_chat_message(

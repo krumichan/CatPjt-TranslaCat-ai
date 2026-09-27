@@ -4,6 +4,7 @@ Root owns live execution. Missing receipts keep the full reservation, including
 possible hidden Gemini network resends. Audio output tokens are dollar-accounted
 separately from the campaign's text-output-token allowance.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,8 +34,15 @@ class BudgetedOpenAISpeechProvider:
     never settled to zero or inferred from a Gemini token multiplier.
     """
 
-    def __init__(self, upstream: Any, ledger: CampaignLedger, *, phase: str,
-                 call_seconds: float = 90, receipt_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        upstream: Any,
+        ledger: CampaignLedger,
+        *,
+        phase: str,
+        call_seconds: float = 90,
+        receipt_dir: Path | None = None,
+    ) -> None:
         if getattr(upstream, "provider_name", None) != "openai":
             raise CampaignBudgetExceeded("GEMINI_GENERATION_DISABLED")
         self.upstream, self.ledger, self.phase = upstream, ledger, phase
@@ -63,37 +71,62 @@ class BudgetedOpenAISpeechProvider:
         # receipt. This deliberately over-reserves short learning utterances;
         # unknown/cancelled calls retain the full amount across restarts.
         input_cap = len((text + OPENAI_SPEECH_INSTRUCTIONS).encode("utf-8")) + 512
-        reserve = Reservation(input_tokens=input_cap, tts_characters=len(text),
-                              usd=max(0.50, len(text) * 0.01))
+        reserve = Reservation(
+            input_tokens=input_cap, tts_characters=len(text), usd=max(0.50, len(text) * 0.01)
+        )
         check_campaign_admission(self.ledger)
-        attempt = self.ledger.reserve("OPENAI_TTS", settings.OPENAI_SPEECH_MODEL, reserve,
-                                      metadata={
-            "phase": self.phase, "voice": voice, "language": language,
-            "speed": speed, "sdkMaxRetries": 0,
-            "responseUsageReceipt": "not available on binary speech response",
-            "pricing": "input $0.60/M text tokens; output $12/M audio tokens",
-            "requestSha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        })
+        attempt = self.ledger.reserve(
+            "OPENAI_TTS",
+            settings.OPENAI_SPEECH_MODEL,
+            reserve,
+            metadata={
+                "phase": self.phase,
+                "voice": voice,
+                "language": language,
+                "speed": speed,
+                "sdkMaxRetries": 0,
+                "responseUsageReceipt": "not available on binary speech response",
+                "pricing": "input $0.60/M text tokens; output $12/M audio tokens",
+                "requestSha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            },
+        )
         receipt_path = self.receipt_dir / f"tts-{attempt:04d}.json"
-        report = {"attempt": attempt, "status": "STARTED", "sentOrUnknown": True,
-                  "requestSha256": hashlib.sha256(text.encode()).hexdigest()}
+        report = {
+            "attempt": attempt,
+            "status": "STARTED",
+            "sentOrUnknown": True,
+            "requestSha256": hashlib.sha256(text.encode()).hexdigest(),
+        }
         atomic_json(receipt_path, report)
         started = time.monotonic()
         try:
             async with campaign_call_boundary(self.ledger, self.call_seconds):
                 response = await self.upstream.synthesize_speech(
-                    text=text, voice=voice, language=language, speed=speed)
+                    text=text, voice=voice, language=language, speed=speed
+                )
         except BaseException as exc:
-            status = "CANCELLED" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "FAILED"
-            self.ledger.finish(attempt, status=status, elapsed=time.monotonic() - started,
-                               failure=type(exc).__name__)
+            status = (
+                "CANCELLED"
+                if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt))
+                else "FAILED"
+            )
+            self.ledger.finish(
+                attempt,
+                status=status,
+                elapsed=time.monotonic() - started,
+                failure=type(exc).__name__,
+            )
             report.update(status=status, partial=True, errorType=type(exc).__name__)
             atomic_json(receipt_path, report)
             raise
         self.ledger.finish(attempt, status="COMPLETED", elapsed=time.monotonic() - started)
-        report.update(status="COMPLETED", partial=False, usageStatus="UNKNOWN_RESERVED",
-                      durationSeconds=response.duration_seconds,
-                      audioSha256=hashlib.sha256(response.audio_bytes).hexdigest())
+        report.update(
+            status="COMPLETED",
+            partial=False,
+            usageStatus="UNKNOWN_RESERVED",
+            durationSeconds=response.duration_seconds,
+            audioSha256=hashlib.sha256(response.audio_bytes).hexdigest(),
+        )
         atomic_json(receipt_path, report)
         return response
 
@@ -123,28 +156,49 @@ def _receipt(response: Any) -> dict[str, Any]:
     candidates = _positive_int(getattr(usage, "candidates_token_count", None))
     total = _positive_int(getattr(usage, "total_token_count", None))
     thoughts = getattr(usage, "thoughts_token_count", 0) or 0
-    valid = (prompt is not None and candidates is not None and
-             isinstance(thoughts, int) and not isinstance(thoughts, bool) and thoughts >= 0)
+    valid = (
+        prompt is not None
+        and candidates is not None
+        and isinstance(thoughts, int)
+        and not isinstance(thoughts, bool)
+        and thoughts >= 0
+    )
     audio = None
     if valid and prompt is not None and candidates is not None:
         audio = max(candidates + thoughts, (total - prompt) if total is not None else 0)
-    return {"inputTokens": prompt, "audioOutputTokens": audio,
-            "totalTokens": total, "usageComplete": valid}
+    return {
+        "inputTokens": prompt,
+        "audioOutputTokens": audio,
+        "totalTokens": total,
+        "usageComplete": valid,
+    }
 
 
 def _tts_amount(input_tokens: int, audio_output_tokens: int, characters: int) -> Reservation:
     return Reservation(
-        input_tokens=input_tokens, output_tokens=0, tts_characters=characters,
-        usd=(input_tokens * GEMINI_INPUT_USD_PER_MILLION
-             + audio_output_tokens * GEMINI_AUDIO_USD_PER_MILLION) / 1_000_000,
+        input_tokens=input_tokens,
+        output_tokens=0,
+        tts_characters=characters,
+        usd=(
+            input_tokens * GEMINI_INPUT_USD_PER_MILLION
+            + audio_output_tokens * GEMINI_AUDIO_USD_PER_MILLION
+        )
+        / 1_000_000,
     )
 
 
 class BudgetedSpeechProvider:
     """Wrap the existing GeminiService; preserve its model/SDK/empty-audio retries."""
 
-    def __init__(self, upstream: Any, ledger: CampaignLedger, *, phase: str,
-                 call_seconds: float = 90, receipt_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        upstream: Any,
+        ledger: CampaignLedger,
+        *,
+        phase: str,
+        call_seconds: float = 90,
+        receipt_dir: Path | None = None,
+    ) -> None:
         self.upstream, self.ledger, self.phase = upstream, ledger, phase
         self.call_seconds = _call_seconds(call_seconds)
         self.receipt_dir = receipt_dir or ledger.path.parent / "audio-budget-receipts"
@@ -166,8 +220,11 @@ class BudgetedSpeechProvider:
         if settings.GEMINI_MODEL_TTS != GEMINI_TTS_MODEL:
             raise CampaignBudgetExceeded("UNPRICED_TTS_MODEL")
         multiplier = GEMINI_SERVICE_ATTEMPTS * GEMINI_NETWORK_ATTEMPTS
-        reservation = _tts_amount(GEMINI_INPUT_CAP * multiplier,
-                                  GEMINI_AUDIO_OUTPUT_CAP * multiplier, len(text) * multiplier)
+        reservation = _tts_amount(
+            GEMINI_INPUT_CAP * multiplier,
+            GEMINI_AUDIO_OUTPUT_CAP * multiplier,
+            len(text) * multiplier,
+        )
         check_campaign_admission(self.ledger)
         async with self._lock:
             check_campaign_admission(self.ledger)
@@ -180,14 +237,20 @@ class BudgetedSpeechProvider:
             if http_options.retry_options is not None:
                 raise CampaignBudgetExceeded("UNPRICED_GEMINI_RETRY_POLICY")
             original = models.generate_content
-            attempt = self.ledger.reserve("GEMINI_TTS", GEMINI_TTS_MODEL, reservation, metadata={
-                "phase": self.phase, "serviceAttemptCap": GEMINI_SERVICE_ATTEMPTS,
-                "networkAttemptMultiplier": GEMINI_NETWORK_ATTEMPTS,
-                "audioOutputTokenReservation": GEMINI_AUDIO_OUTPUT_CAP * multiplier,
-                "audioOutputExcludedFromTextOutputCap": True,
-                "ttsCharacterAccounting": "physical-attempt conservative multiplier",
-                "requestSha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            })
+            attempt = self.ledger.reserve(
+                "GEMINI_TTS",
+                GEMINI_TTS_MODEL,
+                reservation,
+                metadata={
+                    "phase": self.phase,
+                    "serviceAttemptCap": GEMINI_SERVICE_ATTEMPTS,
+                    "networkAttemptMultiplier": GEMINI_NETWORK_ATTEMPTS,
+                    "audioOutputTokenReservation": GEMINI_AUDIO_OUTPUT_CAP * multiplier,
+                    "audioOutputExcludedFromTextOutputCap": True,
+                    "ttsCharacterAccounting": "physical-attempt conservative multiplier",
+                    "requestSha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                },
+            )
             receipt_path = self.receipt_dir / f"tts-{attempt:04d}.json"
             report: dict[str, Any] = {"attempt": attempt, "status": "STARTED", "receipts": []}
             atomic_json(receipt_path, report)
@@ -195,7 +258,10 @@ class BudgetedSpeechProvider:
             async def capture(*args, **kwargs):
                 if len(report["receipts"]) >= GEMINI_SERVICE_ATTEMPTS:
                     raise CampaignBudgetExceeded("GEMINI_SERVICE_ATTEMPT_BOUND_CHANGED")
-                entry: dict[str, Any] = {"sequence": len(report["receipts"]) + 1, "status": "STARTED"}
+                entry: dict[str, Any] = {
+                    "sequence": len(report["receipts"]) + 1,
+                    "status": "STARTED",
+                }
                 report["receipts"].append(entry)
                 atomic_json(receipt_path, report)
                 try:
@@ -203,8 +269,12 @@ class BudgetedSpeechProvider:
                     entry.update(status="COMPLETED", **_receipt(response))
                     return response
                 except BaseException as exc:
-                    entry.update(status="INTERRUPTED" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "FAILED",
-                                 errorType=type(exc).__name__)
+                    entry.update(
+                        status="INTERRUPTED"
+                        if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt))
+                        else "FAILED",
+                        errorType=type(exc).__name__,
+                    )
                     raise
                 finally:
                     atomic_json(receipt_path, report)
@@ -214,11 +284,20 @@ class BudgetedSpeechProvider:
                 with patch.object(models, "generate_content", new=capture):
                     async with campaign_call_boundary(self.ledger, self.call_seconds):
                         response = await self.upstream.synthesize_speech(
-                            text=text, voice=voice, language=language, speed=speed)
+                            text=text, voice=voice, language=language, speed=speed
+                        )
             except BaseException as exc:
-                status = "CANCELLED" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "FAILED"
-                self.ledger.finish(attempt, status=status, elapsed=time.monotonic() - started,
-                                   failure=type(exc).__name__)
+                status = (
+                    "CANCELLED"
+                    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt))
+                    else "FAILED"
+                )
+                self.ledger.finish(
+                    attempt,
+                    status=status,
+                    elapsed=time.monotonic() - started,
+                    failure=type(exc).__name__,
+                )
                 report.update(status=status, partial=True, errorType=type(exc).__name__)
                 atomic_json(receipt_path, report)
                 raise
@@ -230,10 +309,15 @@ class BudgetedSpeechProvider:
                     sum(item["audioOutputTokens"] for item in receipts) * GEMINI_NETWORK_ATTEMPTS,
                     len(text) * len(receipts) * GEMINI_NETWORK_ATTEMPTS,
                 )
-            self.ledger.finish(attempt, status="COMPLETED", elapsed=time.monotonic() - started, accounted=charge)
-            report.update(status="COMPLETED", partial=False,
-                          usageStatus="OBSERVED_CONSERVATIVE" if charge else "UNKNOWN_RESERVED",
-                          networkMultiplier=GEMINI_NETWORK_ATTEMPTS)
+            self.ledger.finish(
+                attempt, status="COMPLETED", elapsed=time.monotonic() - started, accounted=charge
+            )
+            report.update(
+                status="COMPLETED",
+                partial=False,
+                usageStatus="OBSERVED_CONSERVATIVE" if charge else "UNKNOWN_RESERVED",
+                networkMultiplier=GEMINI_NETWORK_ATTEMPTS,
+            )
             atomic_json(receipt_path, report)
             return response
 
@@ -248,9 +332,16 @@ def _wav_seconds(audio: bytes) -> float:
 class BudgetedSttProvider:
     """Local STT uses no dollar charge; reserve the existing possible VAD fallback."""
 
-    def __init__(self, upstream: Any, ledger: CampaignLedger, *, phase: str,
-                 model: str = "base", call_seconds: float = 90,
-                 inference_multiplier: int = 2) -> None:
+    def __init__(
+        self,
+        upstream: Any,
+        ledger: CampaignLedger,
+        *,
+        phase: str,
+        model: str = "base",
+        call_seconds: float = 90,
+        inference_multiplier: int = 2,
+    ) -> None:
         self.upstream, self.ledger, self.phase, self.model = upstream, ledger, phase, model
         self.call_seconds = _call_seconds(call_seconds)
         if inference_multiplier not in {1, 2}:
@@ -261,21 +352,40 @@ class BudgetedSttProvider:
         duration = _wav_seconds(wav_bytes)
         reserve = Reservation(stt_seconds=duration * self.inference_multiplier)
         check_campaign_admission(self.ledger)
-        attempt = self.ledger.reserve("LOCAL_STT", self.model, reserve, metadata={
-            "phase": self.phase, "audioSeconds": duration,
-            "vadFallbackMultiplier": self.inference_multiplier,
-            "audioSha256": hashlib.sha256(wav_bytes).hexdigest(), "paidApi": False,
-            "nativeThreadCancellation": "Coroutine timeout does not preempt an already running native inference.",
-        })
+        attempt = self.ledger.reserve(
+            "LOCAL_STT",
+            self.model,
+            reserve,
+            metadata={
+                "phase": self.phase,
+                "audioSeconds": duration,
+                "vadFallbackMultiplier": self.inference_multiplier,
+                "audioSha256": hashlib.sha256(wav_bytes).hexdigest(),
+                "paidApi": False,
+                "nativeThreadCancellation": (
+                    "Coroutine timeout does not preempt an already running native inference."
+                ),
+            },
+        )
         started = time.monotonic()
         try:
             async with campaign_call_boundary(self.ledger, self.call_seconds):
-                response = await self.upstream.transcribe(wav_bytes, language=language, phrase_hints=phrase_hints)
+                response = await self.upstream.transcribe(
+                    wav_bytes, language=language, phrase_hints=phrase_hints
+                )
         except BaseException as exc:
-            self.ledger.finish(attempt, status="CANCELLED" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "FAILED",
-                               elapsed=time.monotonic() - started, failure=type(exc).__name__)
+            self.ledger.finish(
+                attempt,
+                status="CANCELLED"
+                if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt))
+                else "FAILED",
+                elapsed=time.monotonic() - started,
+                failure=type(exc).__name__,
+            )
             raise
-        self.ledger.finish(attempt, status="COMPLETED", elapsed=time.monotonic() - started, accounted=reserve)
+        self.ledger.finish(
+            attempt, status="COMPLETED", elapsed=time.monotonic() - started, accounted=reserve
+        )
         return response
 
 
@@ -290,30 +400,45 @@ def inspect_local_stt_cache() -> dict[str, Any]:
         "configuredModel": runtime.model_name,
         "modelRevision": runtime.model_revision,
         "modelVersion": runtime.model_version,
-        "device": runtime.device, "computeType": runtime.compute_type,
-        "cpuThreads": runtime.cpu_threads, "numWorkers": runtime.num_workers,
-        "maxConcurrency": runtime.max_concurrency, "queueCapacity": runtime.queue_capacity,
+        "device": runtime.device,
+        "computeType": runtime.compute_type,
+        "cpuThreads": runtime.cpu_threads,
+        "numWorkers": runtime.num_workers,
+        "maxConcurrency": runtime.max_concurrency,
+        "queueCapacity": runtime.queue_capacity,
         "warmUpInference": runtime.run_warm_up_inference,
-        "ready": False, "downloadRequired": False,
+        "ready": False,
+        "downloadRequired": False,
     }
     try:
         from faster_whisper.utils import download_model
 
         configured = Path(runtime.model_name)
-        model_path = configured if configured.is_dir() else Path(download_model(
-            runtime.model_name, revision=runtime.model_revision, local_files_only=True,
-        ))
+        model_path = (
+            configured
+            if configured.is_dir()
+            else Path(
+                download_model(
+                    runtime.model_name,
+                    revision=runtime.model_revision,
+                    local_files_only=True,
+                )
+            )
+        )
         required = ["model.bin", "config.json", "tokenizer.json"]
         missing = [name for name in required if not (model_path / name).is_file()]
         if not list(model_path.glob("vocabulary.*")):
             missing.append("vocabulary.*")
-        report.update(modelPath=str(model_path.resolve()), missingFiles=missing,
-                      cacheAvailable=not missing, downloadRequired=bool(missing))
+        report.update(
+            modelPath=str(model_path.resolve()),
+            missingFiles=missing,
+            cacheAvailable=not missing,
+            downloadRequired=bool(missing),
+        )
     except Exception as exc:
-        report.update(cacheAvailable=False, errorType=type(exc).__name__,
-                      downloadRequired=type(exc).__name__ in {"LocalEntryNotFoundError", "FileNotFoundError"})
+        report.update(
+            cacheAvailable=False,
+            errorType=type(exc).__name__,
+            downloadRequired=type(exc).__name__ in {"LocalEntryNotFoundError", "FileNotFoundError"},
+        )
     return report
-
-
-
-

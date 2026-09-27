@@ -45,7 +45,11 @@ async def test_one_mode_termination_does_not_cancel_peers_or_close_shared_pool(t
             tasks["VOCABULARY"].cancel()
         elif termination == "failure":
             releases["VOCABULARY"].set()
-        expected = {"cancel": asyncio.CancelledError, "timeout": TimeoutError, "failure": ValueError}
+        expected = {
+            "cancel": asyncio.CancelledError,
+            "timeout": TimeoutError,
+            "failure": ValueError,
+        }
         with pytest.raises(expected[termination]):
             await tasks["VOCABULARY"]
         assert not provider.closed

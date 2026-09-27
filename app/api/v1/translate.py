@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import get_translation_service
@@ -16,7 +18,7 @@ router = APIRouter(
 @router.post("/single")
 async def translate_single(
     request: SingleTranslationRequest,
-    service: TranslationService = Depends(get_translation_service),
+    service: Annotated[TranslationService, Depends(get_translation_service)],
 ):
     translated_text = await service.translate_single(
         text=request.text,
@@ -31,7 +33,7 @@ async def translate_single(
 @router.post("/batch")
 async def translate_batch(
     request: BatchTranslationRequest,
-    service: TranslationService = Depends(get_translation_service),
+    service: Annotated[TranslationService, Depends(get_translation_service)],
 ):
     results = await service.translate_batch(
         texts=request.texts,

@@ -105,14 +105,12 @@ class ChatAiReplyRequest(CamelCaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_trigger_and_context(self) -> "ChatAiReplyRequest":
+    def validate_trigger_and_context(self) -> ChatAiReplyRequest:
         if self.trigger_type == ChatAiTriggerType.REVIVAL:
             if self.trigger_message is not None:
                 raise ValueError("REVIVAL 요청의 triggerMessage는 null이어야 합니다.")
         elif self.trigger_message is None:
-            raise ValueError(
-                f"{self.trigger_type.value} 요청에는 triggerMessage가 필요합니다."
-            )
+            raise ValueError(f"{self.trigger_type.value} 요청에는 triggerMessage가 필요합니다.")
 
         if len(self.context_messages) > self.context_max_messages:
             raise ValueError(
@@ -120,10 +118,7 @@ class ChatAiReplyRequest(CamelCaseModel):
                 f"({self.context_max_messages})를 초과할 수 없습니다."
             )
 
-        total_characters = sum(
-            len(message.content)
-            for message in self.context_messages
-        )
+        total_characters = sum(len(message.content) for message in self.context_messages)
         if total_characters > self.context_max_characters:
             raise ValueError(
                 "contextMessages의 전체 content 길이는 현재 요청의 "

@@ -23,9 +23,7 @@ def _empty_response():
 def _audio_response():
     inline = SimpleNamespace(data=b"\x01\x00" * 2400)
     part = SimpleNamespace(inline_data=inline)
-    return SimpleNamespace(
-        candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))]
-    )
+    return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))])
 
 
 class GeminiTtsRetryTest(IsolatedAsyncioTestCase):

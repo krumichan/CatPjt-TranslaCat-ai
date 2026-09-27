@@ -36,8 +36,8 @@ class LanguageStateManager:
         self.switch_consecutive_count = switch_consecutive_count
         self.manual_language = normalize_voice_language(manual_language)
         self.minimum_detection_confidence = minimum_detection_confidence
-        self._locked_language: str | None = (
-            self.manual_language or normalize_voice_language(initial_locked_language)
+        self._locked_language: str | None = self.manual_language or normalize_voice_language(
+            initial_locked_language
         )
         self._switch_candidate: str | None = None
         self._switch_count = 0

@@ -3,13 +3,14 @@
 No provider call. Keeps learner-visible text in the owned private QA directory.
 Reviewers must not treat generator/verifier PASS or QA oracle score as gold.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 if __package__ in {None, ""}:
@@ -55,37 +56,74 @@ def review(output: Path) -> dict[str, Any]:
         if source["caseId"] != case_id or source["arm"] != arm:
             raise ValueError("A/B report identity mismatch")
         attempts = source["providerAttempts"]
-        row = {"caseId": case_id, "arm": arm, "status": source["status"],
-               "failureType": source.get("failureType"), "responseBundles": len(source["responses"]),
-               "questions": sum(len(response["questions"]) for response in source["responses"]),
-               "latencySeconds": source.get("latencySeconds"), "applicationStarts": len(attempts),
-               "inputTokens": sum(int(a.get("inputTokens") or 0) for a in attempts),
-               "outputTokens": sum(int(a.get("outputTokens") or 0) for a in attempts),
-               "qaReservationRateUsdObservedTokenEstimate": _estimate(attempts),
-               "unknownOrFailedUsage": any(a["status"] != "SUCCEEDED" for a in attempts),
-               "actualProviderModels": source.get("modelCounts")}
+        row = {
+            "caseId": case_id,
+            "arm": arm,
+            "status": source["status"],
+            "failureType": source.get("failureType"),
+            "responseBundles": len(source["responses"]),
+            "questions": sum(len(response["questions"]) for response in source["responses"]),
+            "latencySeconds": source.get("latencySeconds"),
+            "applicationStarts": len(attempts),
+            "inputTokens": sum(int(a.get("inputTokens") or 0) for a in attempts),
+            "outputTokens": sum(int(a.get("outputTokens") or 0) for a in attempts),
+            "qaReservationRateUsdObservedTokenEstimate": _estimate(attempts),
+            "unknownOrFailedUsage": any(a["status"] != "SUCCEEDED" for a in attempts),
+            "actualProviderModels": source.get("modelCounts"),
+        }
         rows.append(row)
-        label = "X" if (int(hashlib.sha256(case_id.encode()).hexdigest(), 16) % 2 == 0) == (arm == "A") else "Y"
-        key.append({"caseId": case_id, "blindLabel": label, "arm": arm,
-                    "requestedBand": next(case["band"] for case in manifest["cases"] if case["id"] == case_id),
-                    "answerKeys": [[q["correctAnswer"] for q in response["questions"]]
-                                  for response in source["responses"]]})
+        label = (
+            "X"
+            if (int(hashlib.sha256(case_id.encode()).hexdigest(), 16) % 2 == 0) == (arm == "A")
+            else "Y"
+        )
+        key.append(
+            {
+                "caseId": case_id,
+                "blindLabel": label,
+                "arm": arm,
+                "requestedBand": next(
+                    case["band"] for case in manifest["cases"] if case["id"] == case_id
+                ),
+                "answerKeys": [
+                    [q["correctAnswer"] for q in response["questions"]]
+                    for response in source["responses"]
+                ],
+            }
+        )
         for response in source["responses"]:
             questions = response["questions"]
             if not questions:
                 continue
-            blinded.append({"caseId": case_id, "blindLabel": label,
-                            "mode": response["mode"], "passageId": questions[0]["passageId"],
-                            "passageText": questions[0]["passageText"],
-                            "questions": [{"localOrder": q["order"], "skillTag": q["skillTag"],
-                                           "stem": q["prompt"], "options": q["options"]}
-                                          for q in questions]})
-    result = {"status": "REVIEW_PACKET_PREPARED", "rows": rows,
-              "actualGoldLabelAvailable": False,
-              "qualityJudgment": "PENDING_INDEPENDENT_REVIEW",
-              "costBoundary": "Known usage QA reservation-rate estimate; failed/unknown usage retained in ledger",
-              "blindedPacket": "reading-review-blinded.json",
-              "separateAnswerAndArmKey": "reading-review-key-private.json"}
+            blinded.append(
+                {
+                    "caseId": case_id,
+                    "blindLabel": label,
+                    "mode": response["mode"],
+                    "passageId": questions[0]["passageId"],
+                    "passageText": questions[0]["passageText"],
+                    "questions": [
+                        {
+                            "localOrder": q["order"],
+                            "skillTag": q["skillTag"],
+                            "stem": q["prompt"],
+                            "options": q["options"],
+                        }
+                        for q in questions
+                    ],
+                }
+            )
+    result = {
+        "status": "REVIEW_PACKET_PREPARED",
+        "rows": rows,
+        "actualGoldLabelAvailable": False,
+        "qualityJudgment": "PENDING_INDEPENDENT_REVIEW",
+        "costBoundary": (
+            "Known usage QA reservation-rate estimate; failed/unknown usage retained in ledger"
+        ),
+        "blindedPacket": "reading-review-blinded.json",
+        "separateAnswerAndArmKey": "reading-review-key-private.json",
+    }
     atomic_json(output / "reading-comparison-summary.json", result)
     atomic_json(output / "reading-review-blinded.json", blinded)
     atomic_json(output / "reading-review-key-private.json", key)
@@ -98,9 +136,16 @@ def main() -> None:
     args = parser.parse_args()
     result = review(args.output.resolve())
     from collections import Counter
-    print(json.dumps({"rows": len(result["rows"]),
-                      "byStatus": dict(Counter(row["status"] for row in result["rows"])),
-                      "providerStarts": sum(row.get("applicationStarts", 0) for row in result["rows"])}))
+
+    print(
+        json.dumps(
+            {
+                "rows": len(result["rows"]),
+                "byStatus": dict(Counter(row["status"] for row in result["rows"])),
+                "providerStarts": sum(row.get("applicationStarts", 0) for row in result["rows"]),
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

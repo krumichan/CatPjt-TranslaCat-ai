@@ -1,4 +1,5 @@
 """업무 정책을 담지 않는 인증된 범용 모델 실행 HTTP 경계."""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,14 +34,16 @@ async def execute_model(
     async for chunk in request.stream():
         if len(raw) + len(chunk) > _MAX_REQUEST_BYTES:
             raise HTTPException(
-                413, detail={"code": "EXECUTION_REQUEST_TOO_LARGE", "retryable": False},
+                413,
+                detail={"code": "EXECUTION_REQUEST_TOO_LARGE", "retryable": False},
             )
         raw.extend(chunk)
     try:
         command = ModelExecutionRequest.model_validate(json.loads(raw))
     except (ValidationError, ValueError, TypeError, UnicodeDecodeError, RecursionError):
         raise HTTPException(
-            422, detail={"code": "EXECUTION_REQUEST_INVALID", "retryable": False},
+            422,
+            detail={"code": "EXECUTION_REQUEST_INVALID", "retryable": False},
         ) from None
 
     try:
@@ -59,49 +62,71 @@ async def execute_model(
             )
     except OpenAISchemaConfigurationError:
         raise HTTPException(
-            422, detail={"code": "EXECUTION_SCHEMA_INVALID", "retryable": False},
+            422,
+            detail={"code": "EXECUTION_SCHEMA_INVALID", "retryable": False},
         ) from None
     except OpenAIProviderResponseError as error:
         # 응답 래퍼의 ValueError 상속은 Provider 값 오류가 아니다. 원래 reason code를 유지한다.
-        signal = {key: value for key, value in provider_failure_origin(error).items()
-                  if key == "failureSignal"}
+        signal = {
+            key: value
+            for key, value in provider_failure_origin(error).items()
+            if key == "failureSignal"
+        }
         raise HTTPException(
-            502, detail={"code": error.reason_code, "retryable": error.retryable,
-                         **signal},
+            502,
+            detail={"code": error.reason_code, "retryable": error.retryable, **signal},
         ) from None
     except (TimeoutError, APITimeoutError, httpx.TimeoutException) as error:
         raise HTTPException(
-            504, detail={"code": "PROVIDER_TIMEOUT", "retryable": True,
-                         **provider_failure_origin(error)},
+            504,
+            detail={
+                "code": "PROVIDER_TIMEOUT",
+                "retryable": True,
+                **provider_failure_origin(error),
+            },
         ) from None
     except (ConnectionError, APIConnectionError, httpx.TransportError) as error:
         raise HTTPException(
-            503, detail={"code": "PROVIDER_UNAVAILABLE", "retryable": True,
-                         **provider_failure_origin(error)},
+            503,
+            detail={
+                "code": "PROVIDER_UNAVAILABLE",
+                "retryable": True,
+                **provider_failure_origin(error),
+            },
         ) from None
     except Exception as error:
         # SDK 상태는 기술 분류로 전달한다. 업무 단계의 재시도·거부 판정은 LL에서 수행한다.
         status = getattr(error, "status_code", None)
         if status in {408, 409, 429} or isinstance(status, int) and status >= 500:
             raise HTTPException(
-                503, detail={
-                    "code": "PROVIDER_UNAVAILABLE", "retryable": True,
-                    "failureKind": "HTTP_STATUS", "providerStatus": status,
+                503,
+                detail={
+                    "code": "PROVIDER_UNAVAILABLE",
+                    "retryable": True,
+                    "failureKind": "HTTP_STATUS",
+                    "providerStatus": status,
                     **provider_failure_origin(error),
                     **retry_after_details(error),
                 },
             ) from None
         if isinstance(status, int) and 400 <= status < 500:
             raise HTTPException(
-                502, detail={
-                    "code": "PROVIDER_CONFIGURATION_ERROR", "retryable": False,
-                    "failureKind": "HTTP_STATUS", "providerStatus": status,
+                502,
+                detail={
+                    "code": "PROVIDER_CONFIGURATION_ERROR",
+                    "retryable": False,
+                    "failureKind": "HTTP_STATUS",
+                    "providerStatus": status,
                     **provider_failure_origin(error),
                 },
             ) from None
         raise HTTPException(
-            502, detail={"code": "PROVIDER_EXECUTION_FAILED", "retryable": False,
-                         **provider_failure_origin(error)},
+            502,
+            detail={
+                "code": "PROVIDER_EXECUTION_FAILED",
+                "retryable": False,
+                **provider_failure_origin(error),
+            },
         ) from None
 
     return ModelExecutionResponse(

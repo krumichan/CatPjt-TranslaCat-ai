@@ -9,4 +9,4 @@ def chunk_list(items: list[T], size: int) -> Iterable[list[T]]:
         raise ValueError("size must be greater than 0")
 
     for index in range(0, len(items), size):
-        yield items[index:index + size]
+        yield items[index : index + size]

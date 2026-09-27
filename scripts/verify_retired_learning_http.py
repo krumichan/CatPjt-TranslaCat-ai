@@ -357,9 +357,7 @@ def main(browser: bool) -> None:
             current = existing.json()["body"]
             assert current["dailySetId"] == -int(current_id) != old_writing
             unanswered = [
-                item
-                for item in current["items"]
-                if item["canSubmit"] and not item["attempts"]
+                item for item in current["items"] if item["canSubmit"] and not item["attempts"]
             ]
             assert unanswered, "현재 세트에 아직 답변하지 않은 제출 가능 문항이 없습니다."
             env = os.environ | {

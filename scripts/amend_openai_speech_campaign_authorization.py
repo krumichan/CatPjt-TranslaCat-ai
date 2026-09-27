@@ -7,15 +7,14 @@ existing call or a non-dollar guard, and refuses an unfamiliar campaign.
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from filelock import FileLock
 
 from scripts.qa_campaign_budget import CampaignLedger, atomic_json
-
 
 CAMPAIGN_ID = "openai-speech-campaign-20260920"
 NEW_NORMAL_ADMISSION_USD = 190.0
@@ -69,9 +68,15 @@ def main() -> None:
     parser.add_argument("--revision-dir", type=Path, required=True)
     args = parser.parse_args()
     event = amend(args.ledger, args.revision_dir)
-    print(json.dumps({"campaignId": event["campaignId"],
-                      "newNormalAdmissionUsd": event["newNormalAdmissionUsd"],
-                      "exposureAtAmendmentUsd": event["exposureAtAmendmentUsd"]}))
+    print(
+        json.dumps(
+            {
+                "campaignId": event["campaignId"],
+                "newNormalAdmissionUsd": event["newNormalAdmissionUsd"],
+                "exposureAtAmendmentUsd": event["exposureAtAmendmentUsd"],
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

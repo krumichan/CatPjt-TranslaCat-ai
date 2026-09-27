@@ -2,7 +2,7 @@ import importlib
 import sys
 import types
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -34,9 +34,7 @@ class ChatAiReplyApiTest(unittest.TestCase):
         cls.original_chat_module = sys.modules.pop("app.api.v1.chat", None)
 
         fake_v1_package = types.ModuleType("app.api.v1")
-        fake_v1_package.__path__ = [
-            str(Path(__file__).resolve().parents[1] / "app" / "api" / "v1")
-        ]
+        fake_v1_package.__path__ = [str(Path(__file__).resolve().parents[1] / "app" / "api" / "v1")]
 
         sys.modules["app.api.dependencies"] = fake_dependencies
         sys.modules["app.api.v1"] = fake_v1_package
@@ -66,7 +64,7 @@ class ChatAiReplyApiTest(unittest.TestCase):
             sys.modules["app.api.dependencies"] = cls.original_dependencies
 
     def _payload(self):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         return {
             "requestId": "req-api-1",
             "triggerType": "MENTION",
