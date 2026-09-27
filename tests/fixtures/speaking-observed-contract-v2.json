@@ -1,0 +1,14 @@
+{
+  "evidencePolicyVersion": "speaking-transcript-evidence-v2",
+  "evidenceSource": "TRANSCRIPT_OBSERVATION",
+  "metricWeights": {
+    "GRAMMAR": 0.1,
+    "VOCABULARY": 0.1,
+    "NATURALNESS": 0.1,
+    "MEANING": 0.1,
+    "EXPRESSIVENESS": 0.1,
+    "FLUENCY": 0.2,
+    "PRONUNCIATION": 0.15,
+    "INTERACTION": 0.15
+  }
+}

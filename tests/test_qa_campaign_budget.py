@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.qa_campaign_budget import (
-    LIMITS, BudgetedTextProvider, CampaignBudgetExceeded, CampaignLedger, Reservation,
+    LIMITS,
+    BudgetedTextProvider,
+    CampaignBudgetExceeded,
+    CampaignLedger,
+    Reservation,
     _text_cost_reservation,
 )
 
@@ -108,7 +112,7 @@ async def test_tts_reservation_denial_blocks_otherwise_affordable_text_provider(
     from unittest.mock import AsyncMock
 
     from app.core.config import settings
-    from scripts.qa_campaign_audio_budget import BudgetedSpeechProvider, GEMINI_TTS_MODEL
+    from scripts.qa_campaign_audio_budget import GEMINI_TTS_MODEL, BudgetedSpeechProvider
 
     monkeypatch.setattr(settings, "AI_TEXT_PROVIDER", "openai")
     monkeypatch.setattr(settings, "GEMINI_MODEL_TTS", GEMINI_TTS_MODEL)
@@ -285,48 +289,6 @@ async def test_intrinsic_provider_timeout_does_not_change_existing_retry_policy(
     assert call.call_count == 2
 
 
-@pytest.mark.asyncio
-async def test_request_scoped_cancellation_preserves_real_service_timeout_retry(tmp_path, monkeypatch):
-    from app.core.config import settings
-    from app.features.language_learning.speaking.assistance_service import SpeakingAssistanceService
-    from app.schemas.language_learning_speaking import AssistanceRequest
-    from scripts.run_contextual_choice_stabilization_qa import QaCaps, RecordingProvider
-
-    monkeypatch.setattr(settings, "AI_TEXT_PROVIDER", "openai")
-    starts = []
-
-    async def call_with_metadata(**kwargs):
-        starts.append(kwargs)
-        if len(starts) == 1:
-            await asyncio.Event().wait()
-        return SimpleNamespace(data={"type": "HINT", "content": "Synthetic hint"},
-                               input_tokens=1, output_tokens=1, provider="openai", model="gpt-5-mini")
-
-    ledger = CampaignLedger(tmp_path / "ledger.json", "fixed", stop_on_caller_cancel=False)
-    budgeted = BudgetedTextProvider(SimpleNamespace(call_with_metadata=call_with_metadata), ledger, phase="test")
-    recorder = RecordingProvider(budgeted, QaCaps(12, 120000, 40000, 90, 600),
-                                 stop_on_caller_cancel=False)
-    # Use the production wait_for + retry implementation, accelerating only its
-    # timeout. Both QA deadlines remain 90s and must not claim they expired.
-    service = SpeakingAssistanceService(recorder, timeout_seconds=.1, automatic_retries=1)
-    request = AssistanceRequest.model_validate({
-        "requestId": "offline", "idempotencyKey": "offline-idem", "sessionId": "offline-session",
-        "turnIndex": 2, "assistanceType": "HINT", "originLanguage": "ko", "learningLanguage": "ja",
-        "topic": "Synthetic test", "targetLevel": "A2", "assistantText": "Synthetic question",
-        "conversationHistory": [], "selectedKeywords": [],
-    })
-    response = await service.generate(request)
-    assert response.content == "Synthetic hint"
-    assert len(starts) == 2
-    assert ledger.run_stop_reason is None
-    assert recorder.budget_exhausted_reason is None
-    calls = ledger.snapshot()["calls"]
-    assert [call["status"] for call in calls] == ["CANCELLED", "COMPLETED"]
-    assert calls[0]["failureType"] == "CancelledError"
-    assert calls[0]["usageStatus"] == "UNKNOWN_RESERVED"
-    assert calls[0]["accounted"] is None
-    assert [call["status"] for call in recorder.calls] == ["CANCELLED", "SUCCEEDED"]
-    assert recorder.calls[0]["failure"]["source"] == "EXTERNAL_OR_UPSTREAM_UNDETERMINED"
 
 
 @pytest.mark.asyncio

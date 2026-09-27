@@ -1,49 +1,33 @@
-"""Public entry policy; legacy generation fixtures remain usable offline."""
-from unittest.mock import AsyncMock
+"""Practice의 공개 업무 경로는 LL Gateway 전환 뒤 Python에서 제거된다."""
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_language_learning_reading_vocabulary_service
-from app.api.v1.language_learning_practice import generate_practice, router
-from app.schemas.language_learning_practice import PracticeGenerationRequest
+from app.ai.prompt_registry import get_prompt_rule
+from app.api.v1 import api_router
 
 
-def _request(domain: str, *, plan_only: bool = False) -> PracticeGenerationRequest:
-    return PracticeGenerationRequest.model_validate({
-        "requestId": "product-contract", "domain": domain,
-        "mode": "CONTEXTUAL_CHOICE" if domain == "VOCABULARY" else "COMPREHENSION",
-        "originLanguage": "ko", "learningLanguage": "ja",
-        "questionCount": 10 if domain == "VOCABULARY" else 5,
-        "complexityBand": 3, "easierCount": 2 if domain == "VOCABULARY" else 1,
-        "currentCount": 6 if domain == "VOCABULARY" else 3,
-        "challengeCount": 2 if domain == "VOCABULARY" else 1,
-        "generationDate": "2026-09-19", "vocabularyPlanOnly": plan_only,
-    })
-
-
-@pytest.mark.parametrize("plan_only", [False, True])
-def test_retired_vocabulary_api_never_enters_generation(plan_only):
-    service = AsyncMock()
+def test_replaced_practice_endpoint_is_not_registered():
+    # 준비: 실제 공개 router를 사용하되 모델 실행이나 서비스 lifespan은 시작하지 않는다.
     app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_language_learning_reading_vocabulary_service] = lambda: service
+    app.include_router(api_router)
+
+    # 실행
     with TestClient(app) as client:
-        response = client.post("/language-learning/practice/generate", json=_request(
-            "VOCABULARY", plan_only=plan_only,
-        ).model_dump(mode="json", by_alias=True))
-    assert response.status_code == 410
-    assert response.json()["detail"] == {
-        "code": "DAILY_VOCABULARY_RETIRED", "policyVersion": "reading-first-v1",
-    }
-    service.generate.assert_not_awaited()
+        response = client.post("/language-learning/practice/generate", json={})
+
+    # 검증: 신규·기존 Vocabulary 구분도 LL이 소유하며 Python 업무 경로는 없다.
+    assert response.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_reading_entry_delegates_unchanged_request():
-    request = _request("READING")
-    service = AsyncMock()
-    result = await generate_practice(request, service)
-    assert result is service.generate.return_value
-    service.generate.assert_awaited_once_with(request)
+def test_practice_business_prompts_are_not_registered_in_python():
+    # 준비
+    tasks = (
+        "LANGUAGE_LEARNING_READING_VOCABULARY_GENERATION",
+        "LANGUAGE_LEARNING_READING_PASSAGE_GENERATION",
+        "LANGUAGE_LEARNING_READING_VOCABULARY_VERIFICATION",
+        "LANGUAGE_LEARNING_READING_VOCABULARY_ORIGIN_EXPLANATION",
+    )
+
+    # 실행 및 검증: Kotlin이 prompt/schema를 명시한 범용 실행만 사용한다.
+    assert all(get_prompt_rule(task) is None for task in tasks)

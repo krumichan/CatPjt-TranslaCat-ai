@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime
 import io
 import json
 import math
-from pathlib import Path
 import re
 import sys
 import time
 import wave
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 if __package__ in {None, ""}:
@@ -321,18 +321,18 @@ def _audio(record: dict[str, Any], *, verify_bytes: bool = False) -> dict[str, A
 
 def speaking_evidence_v2(evaluation: dict[str, Any], mode: str, *, metrics_required: bool) -> dict[str, Any]:
     """Observe actual BE fields; never synthesize a missing policy or axis pass."""
-    from app.features.language_learning.speaking.evidence_policy import (
-        SPEAKING_EVIDENCE_POLICY_VERSION,
-        TRANSCRIPT_EVIDENCE_SOURCE,
-    )
-    from app.features.language_learning.speaking.policy import SPEAKING_METRIC_WEIGHTS
+    # 고정된 외부 응답 계약만 관찰하며 Python 업무 정책이나 점수 생성기를 실행하지 않는다.
+    contract = json.loads((Path(__file__).resolve().parents[1] /
+                           "tests/fixtures/speaking-observed-contract-v2.json").read_text(encoding="utf-8"))
+    SPEAKING_EVIDENCE_POLICY_VERSION = contract["evidencePolicyVersion"]
+    TRANSCRIPT_EVIDENCE_SOURCE = contract["evidenceSource"]
 
     if mode not in {"READ_ALOUD", "GUIDED", "FREE"}:
         raise ValueError("SPEAKING_EVIDENCE_MODE_INVALID")
     if (evaluation.get("evidencePolicyVersion") != SPEAKING_EVIDENCE_POLICY_VERSION
             or evaluation.get("evidenceSource") != TRANSCRIPT_EVIDENCE_SOURCE):
         raise ValueError("SPEAKING_EVIDENCE_POLICY_MISSING_OR_MISMATCHED")
-    weights = {metric.value: weight for metric, weight in SPEAKING_METRIC_WEIGHTS.items()}
+    weights = contract["metricWeights"]
     axes = evaluation.get("evaluatedAxes")
     coverage = evaluation.get("evaluationCoverage")
     if (not isinstance(axes, list) or any(not isinstance(axis, str) or axis not in weights for axis in axes)

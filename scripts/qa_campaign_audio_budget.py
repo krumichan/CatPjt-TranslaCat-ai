@@ -16,8 +16,12 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.qa_campaign_budget import (
-    CampaignBudgetExceeded, CampaignLedger, Reservation, atomic_json,
-    campaign_call_boundary, check_campaign_admission,
+    CampaignBudgetExceeded,
+    CampaignLedger,
+    Reservation,
+    atomic_json,
+    campaign_call_boundary,
+    check_campaign_admission,
 )
 
 
@@ -311,82 +315,5 @@ def inspect_local_stt_cache() -> dict[str, Any]:
     return report
 
 
-def make_budgeted_stt_provider(runtime: Any, ledger: CampaignLedger, *, phase: str,
-                               mode: str = "speaking", call_seconds: float = 90) -> BudgetedSttProvider:
-    """Reuse one prepared shared runtime with each mode's existing provider behavior."""
-    from app.features.language_learning.speaking.stt_service import FasterWhisperSpeakingSttProvider
-    from app.features.language_learning.listening.stt_provider import FasterWhisperListeningSttProvider
-
-    if mode == "speaking":
-        upstream = FasterWhisperSpeakingSttProvider(runtime)
-        multiplier = 2
-    elif mode == "listening":
-        upstream = FasterWhisperListeningSttProvider(runtime)
-        multiplier = 1
-    else:
-        raise ValueError("Unknown STT campaign mode")
-    return BudgetedSttProvider(upstream, ledger, phase=phase, model=runtime.model_name,
-                              call_seconds=call_seconds, inference_multiplier=multiplier)
 
 
-async def prepare_local_stt(ledger: CampaignLedger, *, phase: str,
-                            report_path: Path, call_seconds: float = 90,
-                            mode: str = "speaking"):
-    """Return (wrapper or None, runtime or None, safe report). Caller must shutdown.
-
-    Uses identical configured weights/device/compute policy via an existing local
-    snapshot. It cannot preempt an already running native model-load thread.
-    """
-    from app.features.speech_to_text import FasterWhisperRuntime
-
-    timeout = _call_seconds(call_seconds)
-    if mode not in {"speaking", "listening"}:
-        raise ValueError("Unknown STT campaign mode")
-    report = inspect_local_stt_cache()
-    atomic_json(report_path, report)
-    if not report.get("cacheAvailable"):
-        return None, None, report
-
-    class CachedOnlyRuntime(FasterWhisperRuntime):
-        def _load_and_warm_model(self):
-            from faster_whisper import WhisperModel
-
-            model = WhisperModel(report["modelPath"], local_files_only=True,
-                                 device=self.device, compute_type=self.compute_type,
-                                 cpu_threads=self.cpu_threads, num_workers=self.num_workers,
-                                 revision=self.model_revision)
-            if self.run_warm_up_inference:
-                import numpy as np
-
-                segments, _ = model.transcribe(np.zeros(4000, dtype=np.float32), language="en",
-                                              beam_size=1, vad_filter=False, condition_on_previous_text=False)
-                list(segments)
-            return model
-
-    runtime = CachedOnlyRuntime()
-    warmup_amount = Reservation(stt_seconds=0.25 if runtime.run_warm_up_inference else 0)
-    check_campaign_admission(ledger)
-    warmup_attempt = ledger.reserve("LOCAL_STT_PREPARE", runtime.model_name, warmup_amount,
-                                    metadata={"phase": phase, "paidApi": False,
-                                              "downloadAllowed": False})
-    started = time.monotonic()
-    try:
-        async with campaign_call_boundary(ledger, timeout):
-            await runtime.warm_up()
-    except BaseException as exc:
-        ledger.finish(warmup_attempt,
-                      status="CANCELLED" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "FAILED",
-                      elapsed=time.monotonic() - started, failure=type(exc).__name__)
-        report.update(ready=False, errorType=type(exc).__name__,
-                      nativeLoadMayFinishAfterCancellation=True)
-        atomic_json(report_path, report)
-        await runtime.shutdown(grace_seconds=0.1)
-        if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)):
-            raise
-        return None, None, report
-    ledger.finish(warmup_attempt, status="COMPLETED", elapsed=time.monotonic() - started,
-                  accounted=warmup_amount)
-    report.update(ready=runtime.ready, modelVersion=runtime.model_version)
-    atomic_json(report_path, report)
-    return make_budgeted_stt_provider(runtime, ledger, phase=phase,
-                                      mode=mode, call_seconds=timeout), runtime, report

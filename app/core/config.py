@@ -1,12 +1,17 @@
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     # Server
     SERVER_API_KEY: str = ""
+
+    # CHAT 전용 수신 인증. 기본 legacy는 기존 BE/LL 실행 경로를 보존한다.
+    CHAT_AUTH_MODE: str = "legacy"
+    CHAT_AUTH_ENVIRONMENT: str = ""
+    CHAT_SERVER_API_KEY: SecretStr = Field(default_factory=lambda: SecretStr(""), repr=False)
 
     # AI Provider
     AI_TEXT_PROVIDER: str = "openai"
@@ -51,7 +56,6 @@ class Settings(BaseSettings):
     AI_LANGUAGE_LEARNING_HARD_MAX_SELECTED_KEYWORDS: int = 20
     AI_LANGUAGE_LEARNING_GENERATION_TIMEOUT_SECONDS: float = 30.0
     AI_LANGUAGE_LEARNING_EVALUATION_TIMEOUT_SECONDS: float = 30.0
-    AI_LANGUAGE_LEARNING_LEVEL_TEST_TIMEOUT_SECONDS: float = 30.0
     AI_LANGUAGE_LEARNING_GENERATION_MAX_RETRIES: int = 3
     AI_LANGUAGE_LEARNING_EVALUATION_MAX_RETRIES: int = 1
 
@@ -95,19 +99,6 @@ class Settings(BaseSettings):
     AI_SPEAKING_STT_DEVICE: str = "cpu"
     AI_SPEAKING_STT_COMPUTE_TYPE: str = "int8"
     AI_SPEAKING_STT_CPU_THREADS: int = Field(default=4, ge=1, le=64)
-    AI_SPEAKING_STT_BEAM_SIZE: int = Field(default=5, ge=1, le=5)
-    AI_SPEAKING_STT_TIMEOUT_SECONDS: float = 30.0
-    AI_SPEAKING_CONVERSATION_TIMEOUT_SECONDS: float = 30.0
-    AI_SPEAKING_TTS_TIMEOUT_SECONDS: float = 30.0
-    AI_SPEAKING_EVALUATION_TIMEOUT_SECONDS: float = 60.0
-    AI_SPEAKING_AUTOMATIC_RETRY_LIMIT: int = 2
-    AI_SPEAKING_MANUAL_RETRY_LIMIT: int = 1
-    AI_SPEAKING_MIN_VALID_AUDIO_SECONDS: float = 1.0
-    AI_SPEAKING_MAX_TURN_AUDIO_SECONDS: float = 60.0
-    AI_SPEAKING_MAX_AUDIO_FILE_BYTES: int = 10 * 1024 * 1024
-    AI_SPEAKING_STT_LOW_CONFIDENCE_THRESHOLD: float = 0.55
-    AI_SPEAKING_EVALUATION_CONFIDENCE_THRESHOLD: float = 0.70
-    AI_SPEAKING_TTS_AUDIO_TTL_SECONDS: int = 3600
 
     # Language Learning / AI Listening
     AI_LISTENING_STT_MODEL_NAME: str = "tiny"

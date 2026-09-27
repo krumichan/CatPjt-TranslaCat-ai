@@ -3,20 +3,31 @@ Run: python scripts/check_deploy_release.py
 No server connections, images, containers or credentials are used.
 """
 from __future__ import annotations
+
 import base64
 import json
 import os
 import re
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "deploy-release.sh"
 NAME = re.search(r'^CONTAINER="([^"]+)"', SCRIPT.read_text(encoding="utf-8"), re.MULTILINE).group(1)
 SHA = "1" * 40
+
+
+def _bash_path(path: Path) -> str:
+    # Git Bash의 PATH는 드라이브 콜론을 구분자로 해석하므로 POSIX 경로로 전달한다.
+    absolute = path.resolve()
+    if os.name == "nt":
+        return "/" + absolute.drive[0].lower() + absolute.as_posix()[2:]
+    return str(absolute)
+
+
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -73,41 +84,67 @@ end(99, "unsupported probe call: " + repr(args))
 '''
 
 def main() -> None:
-    if shutil.which("bash") is None:
-        raise SystemExit("Bash is required (Linux/macOS or Git Bash/WSL). No live deployment is performed.")
+    bash = shutil.which("bash")
+    if bash is None:
+        raise SystemExit(
+            "Bash is required (Linux/macOS or Git Bash/WSL). No live deployment is performed.",
+        )
     results = []
-    cases = [(name, True, True) for name in ("checkout", "environment", "network", "build", "stop", "rename", "run", "revision", "health", "success")]
-    cases += [("health", True, False), ("success", False, False), ("health", False, False), ("rollback_start", True, True)]
+    cases = [(name, True, True) for name in (
+        "checkout", "environment", "network", "build", "stop", "rename", "run", "revision",
+        "health", "success",
+    )]
+    cases += [
+        ("health", True, False), ("success", False, False), ("health", False, False),
+        ("rollback_start", True, True),
+    ]
     for fault, exists, running in cases:
         with tempfile.TemporaryDirectory(prefix="translacat-release-probe-") as directory:
             root = Path(directory)
             bins = root / "bin"
             bins.mkdir()
-            original = {NAME: {"running": running, "sha": "old-sha", "env": "old-env"}} if exists else {}
+            # 준비: 실제 명령 대신 격리된 실행 파일과 컨테이너 상태 자료를 만든다.
+            original = ({NAME: {"running": running, "sha": "old-sha", "env": "old-env"}}
+                        if exists else {})
             (root / "state.json").write_text(json.dumps(original))
             (root / "calls.jsonl").write_text("")
             for command in ("git", "docker", "curl", "sleep"):
                 executable = bins / command
-                executable.write_text(FAKE.replace("#!/usr/bin/env python3", "#!" + sys.executable + " -S"))
+                executable.write_text(
+                    FAKE.replace(
+                        "#!/usr/bin/env python3", "#!" + _bash_path(Path(sys.executable)) + " -S",
+                    ),
+                    newline="\n",
+                )
                 executable.chmod(0o755)
             environment = os.environ | {
                 "PATH": str(bins) + os.pathsep + os.environ["PATH"],
                 "PROBE_STATE": str(root / "state.json"), "PROBE_CALLS": str(root / "calls.jsonl"),
                 "PROBE_FAULT": fault, "PROBE_CONTAINER": NAME, "PROBE_SHA": SHA,
-                "DEPLOY_ENV_B64": "%%%bad-base64" if fault == "environment" else base64.b64encode(b"FAKE=probe\n").decode(),
+                "DEPLOY_ENV_B64": ("%%%bad-base64" if fault == "environment"
+                                   else base64.b64encode(b"FAKE=probe\n").decode()),
                 "DEPLOY_HEALTH_ATTEMPTS": "2", "DEPLOY_HEALTH_DELAY_SECONDS": "0",
             }
-            process = subprocess.run(["bash", str(SCRIPT), SHA], cwd=root, env=environment,
-                                     capture_output=True, text=True, timeout=20)
+            # 실행: Windows의 System32 WSL shim 대신 확인한 Bash 실행 파일을 사용한다.
+            process = subprocess.run(
+                [bash, "-c",
+                 'export PATH="$1:$PATH"; probe_script="$2"; shift 2; source "$probe_script"',
+                 "release-probe", _bash_path(bins), _bash_path(SCRIPT), SHA],
+                cwd=root, env=environment, capture_output=True, text=True, timeout=20,
+            )
+
+            # 검증: 모든 외부 호출이 합성이며 실패 시 이전 상태와 비밀 파일 정리가 보존된다.
             after = json.loads((root / "state.json").read_text())
             calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+            assert calls, (fault, "fake commands were not reached", process.stderr)
             assert not list(root.glob(".deploy-env.*")), (fault, "temporary environment leaked")
             if fault == "success":
                 assert process.returncode == 0, process.stderr
                 assert after[NAME]["sha"] == SHA and after[NAME]["running"]
                 if exists:
                     backups = [item for key, item in after.items() if key != NAME]
-                    assert len(backups) == 1 and backups[0]["env"] == "old-env" and not backups[0]["running"]
+                    assert (len(backups) == 1 and backups[0]["env"] == "old-env"
+                            and not backups[0]["running"])
             else:
                 assert process.returncode != 0, (fault, "failure reported success")
                 if fault == "rollback_start":
@@ -119,7 +156,8 @@ def main() -> None:
             results.append({"fault": fault, "previous_exists": exists, "previous_running": running,
                             "exit": process.returncode, "assertions": "PASS"})
             print(f"PASS {fault}: previous={exists}/{running}, exit={process.returncode}")
-    print(f"{len(results)}/{len(results)} failure-injection scenarios passed. All external commands were fake.")
+    print(f"{len(results)}/{len(results)} failure-injection scenarios passed. "
+          "All external commands were fake.")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,1335 @@
+[
+  {
+    "number": 1,
+    "candidate": {
+      "domain": "VOCABULARY",
+      "itemType": "VOCAB_CONTEXT_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Choose the expression that best fits the context.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "During orientation, the librarian marked the ____ shelf with a yellow card.",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": "A",
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q1",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 1",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 2,
+    "candidate": {
+      "domain": "VOCABULARY",
+      "itemType": "VOCAB_CONTEXT_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Choose the expression that best fits the context.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "Before departure, the captain secured the ____ rope beside the silver anchor.",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": "A",
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q2",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 2",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 3,
+    "candidate": {
+      "domain": "VOCABULARY",
+      "itemType": "VOCAB_PARAPHRASE_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Choose the expression closest in meaning to the given expression.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "At dusk, the artist chose a quiet corner to sketch a bridge.",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": "quiet corner",
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q3",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 3",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 4,
+    "candidate": {
+      "domain": "GRAMMAR",
+      "itemType": "GRAMMAR_FORM_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Choose the expression that best completes the blank.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "Every spring, the orchard keeper ____ branches after breakfast.",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q4",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 4",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 5,
+    "candidate": {
+      "domain": "GRAMMAR",
+      "itemType": "GRAMMAR_FORM_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Choose the expression that best completes the blank.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "Last Tuesday, a curious visitor ____ across the frozen courtyard.",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q5",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 5",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 6,
+    "candidate": {
+      "domain": "GRAMMAR",
+      "itemType": "GRAMMAR_SENTENCE_ORDER",
+      "complexityBand": 3,
+      "instruction": "Arrange the given elements in the correct order.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "Arrange the tokens to describe a musician practicing after dinner.",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": [
+          "B",
+          "A",
+          "C",
+          "D"
+        ]
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q6",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 6",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 7,
+    "candidate": {
+      "domain": "READING",
+      "itemType": "READING_GIST",
+      "complexityBand": 3,
+      "instruction": "Read the passage and choose the best answer.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "A bakery opened near the river in March. Its owner sells warm bread before sunrise.\n\nWhat is the passage mainly about?",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": "A bakery opened near the river in March. Its owner sells warm bread before sunrise.",
+        "readingQuestion": "What is the passage mainly about?",
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q7",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 7",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 8,
+    "candidate": {
+      "domain": "READING",
+      "itemType": "READING_DETAIL",
+      "complexityBand": 3,
+      "instruction": "Read the passage and choose the best answer.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "The museum closes at six on weekdays. On Saturdays, visitors can stay until eight.\n\nWhen does the museum close on Saturdays?",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": "The museum closes at six on weekdays. On Saturdays, visitors can stay until eight.",
+        "readingQuestion": "When does the museum close on Saturdays?",
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q8",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 8",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 9,
+    "candidate": {
+      "domain": "READING",
+      "itemType": "READING_DISCOURSE_FUNCTION",
+      "complexityBand": 3,
+      "instruction": "Read the passage and choose the best answer.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "The old bus broke down. As a result, commuters walked to the nearest train station.\n\nWhat does the emphasized phrase express?",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": "As a result",
+        "readingPassage": "The old bus broke down. As a result, commuters walked to the nearest train station.",
+        "readingQuestion": "What does the emphasized phrase express?",
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q9",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 9",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 10,
+    "candidate": {
+      "domain": "READING",
+      "itemType": "READING_TEXT_INFERENCE",
+      "complexityBand": 3,
+      "instruction": "Read the passage and choose the best answer.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "Mina packed an umbrella although the morning sky was clear. By noon, dark clouds covered the city.\n\nWhat can be inferred about Mina?",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": "Mina packed an umbrella although the morning sky was clear. By noon, dark clouds covered the city.",
+        "readingQuestion": "What can be inferred about Mina?",
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q10",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 10",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 11,
+    "candidate": {
+      "domain": "LISTENING",
+      "itemType": "LISTENING_GIST_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Listen to the audio and choose the best answer.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "What did Nora order?",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": "Nora ordered tomato soup at a small cafe.",
+        "referenceMeanings": [
+          "합성 의미 하나",
+          "합성 의미 둘"
+        ],
+        "keyMeaningUnits": [
+          "합성 요소 하나",
+          "합성 요소 둘"
+        ],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": "What did Nora order?",
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q11",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 11",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 12,
+    "candidate": {
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DETAIL_CHOICE",
+      "complexityBand": 3,
+      "instruction": "Listen to the audio and choose the best answer.",
+      "instructionLanguage": "en",
+      "answerMode": "CHOICE",
+      "answerLanguage": null,
+      "promptText": "Where will the club meet?",
+      "options": [
+        {
+          "key": "A",
+          "text": "first"
+        },
+        {
+          "key": "B",
+          "text": "second"
+        },
+        {
+          "key": "C",
+          "text": "third"
+        },
+        {
+          "key": "D",
+          "text": "fourth"
+        }
+      ],
+      "internalAnswerKey": {
+        "correctOptionKey": "A",
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": "The science club will meet in room forty-two after lunch.",
+        "referenceMeanings": [
+          "합성 의미 하나",
+          "합성 의미 둘"
+        ],
+        "keyMeaningUnits": [
+          "합성 요소 하나",
+          "합성 요소 둘"
+        ],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": "Where will the club meet?",
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q12",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 12",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 13,
+    "candidate": {
+      "domain": "LISTENING",
+      "itemType": "LISTENING_DICTATION",
+      "complexityBand": 3,
+      "instruction": "Listen to the audio and write down exactly what you hear.",
+      "instructionLanguage": "en",
+      "answerMode": "TEXT",
+      "answerLanguage": "en",
+      "promptText": "Write the sentence you hear.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": "A friendly gardener planted purple flowers beside the wooden gate.",
+        "referenceMeanings": [
+          "합성 의미 하나",
+          "합성 의미 둘"
+        ],
+        "keyMeaningUnits": [
+          "합성 요소 하나",
+          "합성 요소 둘"
+        ],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": "Write the sentence you hear.",
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q13",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 13",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 14,
+    "candidate": {
+      "domain": "LISTENING",
+      "itemType": "LISTENING_INTERPRETATION",
+      "complexityBand": 3,
+      "instruction": "Listen to the audio and explain its meaning.",
+      "instructionLanguage": "en",
+      "answerMode": "TEXT",
+      "answerLanguage": "ko",
+      "promptText": "Explain the announcement in Korean.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": "Tomorrow the ferry leaves early because a strong storm is expected.",
+        "referenceMeanings": [
+          "합성 의미 하나",
+          "합성 의미 둘"
+        ],
+        "keyMeaningUnits": [
+          "합성 요소 하나",
+          "합성 요소 둘"
+        ],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": "Explain the announcement in Korean.",
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q14",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 14",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 15,
+    "candidate": {
+      "domain": "WRITING",
+      "itemType": "WRITING_TRANSLATION",
+      "complexityBand": 3,
+      "instruction": "Translate the following content into the learning language.",
+      "instructionLanguage": "en",
+      "answerMode": "TEXT",
+      "answerLanguage": "en",
+      "promptText": "주말에 동생과 도서관에서 역사책을 빌렸습니다.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": "주말에 동생과 도서관에서 역사책을 빌렸습니다.",
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q15",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 15",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 16,
+    "candidate": {
+      "domain": "WRITING",
+      "itemType": "WRITING_TRANSLATION",
+      "complexityBand": 3,
+      "instruction": "Translate the following content into the learning language.",
+      "instructionLanguage": "en",
+      "answerMode": "TEXT",
+      "answerLanguage": "en",
+      "promptText": "다음 달부터 사무실 창가에 작은 식물을 키우려고 합니다.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": "다음 달부터 사무실 창가에 작은 식물을 키우려고 합니다.",
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q16",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 16",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 17,
+    "candidate": {
+      "domain": "WRITING",
+      "itemType": "WRITING_SHORT_PARAGRAPH",
+      "complexityBand": 3,
+      "instruction": "Write a short paragraph in the learning language about the given topic.",
+      "instructionLanguage": "en",
+      "answerMode": "TEXT",
+      "answerLanguage": "en",
+      "promptText": "Tell a neighbour about a lost bicycle using the provided facts.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q17",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 17",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": null
+    }
+  },
+  {
+    "number": 18,
+    "candidate": {
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "complexityBand": 3,
+      "instruction": "Listen to the audio and repeat it exactly.",
+      "instructionLanguage": "en",
+      "answerMode": "AUDIO",
+      "answerLanguage": "en",
+      "promptText": "Listen and repeat the sentence about stars.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": "Bright stars sparkle above the sleeping valley.",
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q18",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 18",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": 20
+    }
+  },
+  {
+    "number": 19,
+    "candidate": {
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_REPEAT",
+      "complexityBand": 3,
+      "instruction": "Listen to the audio and repeat it exactly.",
+      "instructionLanguage": "en",
+      "answerMode": "AUDIO",
+      "answerLanguage": "en",
+      "promptText": "Repeat the sentence about a folder after listening.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": "Please bring the green folder before lunch.",
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q19",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 19",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": 20
+    }
+  },
+  {
+    "number": 20,
+    "candidate": {
+      "domain": "SPEAKING",
+      "itemType": "SPEAKING_GUIDED_RESPONSE",
+      "complexityBand": 3,
+      "instruction": "Speak in the learning language using the given conditions.",
+      "instructionLanguage": "en",
+      "answerMode": "AUDIO",
+      "answerLanguage": "en",
+      "promptText": "Explain the pottery workshop schedule to a friend.",
+      "options": [],
+      "internalAnswerKey": {
+        "correctOptionKey": null,
+        "correctOrder": []
+      },
+      "choiceQualityAudit": null,
+      "generationPlanId": null,
+      "referencePayload": {
+        "sourceText": null,
+        "referenceMeanings": [],
+        "keyMeaningUnits": [],
+        "referenceText": null,
+        "translationSourceText": null,
+        "emphasisText": null,
+        "readingPassage": null,
+        "readingQuestion": null,
+        "listeningQuestion": null,
+        "providedFacts": [
+          "Synthetic fact one",
+          "Synthetic fact two"
+        ],
+        "requiredIntents": [
+          "Ask politely",
+          "Give a reason"
+        ],
+        "responseConstraints": [
+          "Use two sentences"
+        ]
+      },
+      "diversityMetadata": {
+        "scenarioCategory": "WORK",
+        "communicativeIntent": "DESCRIBE",
+        "taskArchetype": "synthetic-runtime-q20",
+        "grammarFocusCodes": [],
+        "lexicalFocusCodes": [],
+        "semanticSummary": "Synthetic runtime question 20",
+        "requiresBackgroundKnowledge": false,
+        "contentHash": null,
+        "similarityKey": null
+      },
+      "maxAnswerLength": null,
+      "maxAudioSeconds": 20
+    }
+  }
+]

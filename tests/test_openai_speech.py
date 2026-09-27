@@ -12,7 +12,6 @@ from app.ai.providers.openai.speech import (
     OpenAISpeechService, normalize_complete_speech_wav, validate_speech_wav,
 )
 from app.core.config import settings
-from app.schemas.language_learning_level_test import LevelTestReferenceAudioUpload
 
 
 def _wav(seconds: float = 1.0) -> bytes:
@@ -82,10 +81,3 @@ def test_complete_streaming_wav_with_unknown_header_lengths_uses_actual_frames()
     assert normalized[44:] == audio[44:]
 
 
-def test_new_level_test_audio_defaults_to_resolved_openai_voice() -> None:
-    upload = LevelTestReferenceAudioUpload(
-        upload_url="https://example.invalid/qa-object",
-        object_key="qa-reference-audio",
-    )
-    assert upload.voice == "marin"
-    assert upload.content_type == "audio/wav"

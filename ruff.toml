@@ -1,0 +1,29 @@
+line-length = 100
+indent-width = 4
+target-version = "py312"
+
+exclude = [
+    ".git",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "dist",
+    ".qa_tmp",
+    ".tmp_ktor_m0",
+    ".uv-local-cache",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "I",   # import 정렬
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
