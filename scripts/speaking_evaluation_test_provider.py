@@ -14,8 +14,17 @@ from app.ai.providers.openai.response import OpenAIProviderResponseError
 
 @lru_cache(maxsize=1)
 def _cases():
-    root = Path(__file__).resolve().parents[2] / "CatPjt-TranslaCat-ll"
-    fixture = root / "src/test/resources/contracts/speaking-evaluation-python-golden.json"
+    # LL이 옆에 있는 결합 테스트에서는 원본 fixture를 사용한다. AI 단독 CI는 최소 snapshot을 사용한다.
+    sibling = (
+        Path(__file__).resolve().parents[2]
+        / "CatPjt-TranslaCat-ll/src/test/resources/contracts/speaking-evaluation-python-golden.json"
+    )
+    fixture = (
+        sibling
+        if sibling.is_file()
+        else Path(__file__).resolve().parents[1]
+        / "tests/fixtures/ll_contract_snapshots/speaking-evaluation-python-golden.json"
+    )
     return {row["name"]: row for row in json.loads(fixture.read_text(encoding="utf-8"))}
 
 

@@ -1,0 +1,71 @@
+[
+  {
+    "name": "guided_supported",
+    "providerFailure": null,
+    "output": {
+      "evaluationConfidence": 0.8,
+      "taskResponseStatus": "FULFILLED",
+      "metrics": [
+        {
+          "type": "pronunciation",
+          "state": "EVALUABLE",
+          "score": 80,
+          "confidence": 0.8,
+          "summary": "합성 발음",
+          "evidence": []
+        },
+        {
+          "type": "fluency",
+          "state": "EVALUABLE",
+          "score": 75,
+          "confidence": 0.8,
+          "summary": "합성 유창성",
+          "evidence": []
+        },
+        {
+          "type": "grammar",
+          "state": "EVALUABLE",
+          "score": 70,
+          "confidence": 0.8,
+          "summary": "합성 문법",
+          "evidence": []
+        },
+        {
+          "type": "vocabulary",
+          "state": "EVALUABLE",
+          "score": 70,
+          "confidence": 0.8,
+          "summary": "합성 어휘",
+          "evidence": []
+        },
+        {
+          "type": "taskfulfillment",
+          "state": "EVALUABLE",
+          "score": 85,
+          "confidence": 0.8,
+          "summary": "합성 수행",
+          "evidence": []
+        },
+        {
+          "type": "naturalness",
+          "state": "EVALUABLE",
+          "score": 75,
+          "confidence": 0.8,
+          "summary": "합성 자연스러움",
+          "evidence": []
+        }
+      ],
+      "strengths": [
+        "합성 강점"
+      ],
+      "improvements": [
+        {
+          "message": "합성 개선"
+        }
+      ],
+      "recommendedAnswers": [
+        "Synthetic improved answer"
+      ]
+    }
+  }
+]

@@ -15,8 +15,24 @@ from scripts.leveltest_runtime_provider import execute_leveltest_runtime
 
 @lru_cache(maxsize=4)
 def _fixtures(name: str) -> list[dict[str, Any]]:
-    root = Path(__file__).resolve().parents[2] / "CatPjt-TranslaCat-ll/src/test/resources/contracts"
-    return json.loads((root / f"leveltest-{name}-python-golden.json").read_text(encoding="utf-8"))
+    # 결합 테스트에서는 LL 원본 contract fixture를 우선 사용한다.
+    # AI 단독 CI에서는 저장소 안의 최소 synthetic snapshot으로 독립 실행한다.
+    sibling = (
+        Path(__file__).resolve().parents[2]
+        / "CatPjt-TranslaCat-ll/src/test/resources/contracts"
+        / f"leveltest-{name}-python-golden.json"
+    )
+    if sibling.is_file():
+        return json.loads(sibling.read_text(encoding="utf-8"))
+
+    local = (
+        Path(__file__).resolve().parents[1]
+        / "tests/fixtures/ll_contract_snapshots"
+        / f"leveltest-{name}-python-golden.json"
+    )
+    if local.is_file():
+        return json.loads(local.read_text(encoding="utf-8"))
+    return []
 
 
 def execute_leveltest_fixture(kwargs: dict[str, Any]) -> StructuredGenerationResult | None:

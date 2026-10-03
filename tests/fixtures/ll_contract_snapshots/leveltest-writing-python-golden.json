@@ -1,0 +1,35 @@
+[
+  {
+    "itemType": "WRITING_TRANSLATION",
+    "prompt": "Synthetic recorded writing prompt",
+    "providerOutput": {
+      "scores": {
+        "meaning": 80,
+        "grammar": 70,
+        "vocabulary": 60,
+        "naturalness": 75,
+        "expression": 65
+      },
+      "strengths": [],
+      "weaknesses": [],
+      "corrections": [],
+      "recommendedAnswers": [
+        "Synthetic answer"
+      ],
+      "explanation": {
+        "originText": "합성 설명",
+        "learningText": "Synthetic explanation"
+      },
+      "profileSignals": {
+        "strengthTags": [],
+        "weaknessTags": [],
+        "grammarPatterns": [],
+        "vocabularyPatterns": [],
+        "naturalnessPatterns": [],
+        "expressionPatterns": [],
+        "meaningPatterns": [],
+        "recommendedFocus": []
+      }
+    }
+  }
+]
