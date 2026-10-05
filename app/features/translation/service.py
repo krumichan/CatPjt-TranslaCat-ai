@@ -1,12 +1,9 @@
 import asyncio
 import json
-import logging
 from typing import Any
 
 from app.ai.ports import TextGenerationProvider
 from app.common.collection_utils import chunk_list
-
-logger = logging.getLogger(__name__)
 
 
 class TranslationService:
@@ -20,179 +17,52 @@ class TranslationService:
         self.batch_size = batch_size
         self.semaphore = asyncio.Semaphore(concurrency)
 
-    async def translate_single(
-        self,
-        text: str,
-        type_name: str,
-    ) -> str:
-        result = await self.provider.call(
-            type_name=type_name,
-            data=text,
-            schema=None,
-        )
+    async def translate_single(self, text: str, type_name: str) -> str:
+        # 단일 문장도 배치와 같은 동시성 제한을 사용한다. 실패는 호출자에게 전달한다.
+        async with self.semaphore:
+            result = await self.provider.call(type_name=type_name, data=text, schema=None)
+        return self._validate_single_result(result)
 
-        return self._normalize_single_result(result)
-
-    async def translate_batch(
-        self,
-        texts: list[str],
-        type_name: str,
-    ) -> list[str]:
+    async def translate_batch(self, texts: list[str], type_name: str) -> list[str]:
         if not texts:
             return []
 
-        initial_chunks = list(chunk_list(texts, self.batch_size))
-
+        # 최초 조각만 호출한다. 거절·잘못된 출력에 대한 분할/보정 호출은 만들지 않는다.
         tasks = [
-            self._recursive_translate(
-                chunk=chunk,
-                type_name=type_name,
-            )
-            for chunk in initial_chunks
+            asyncio.create_task(self._translate_chunk(type_name, chunk))
+            for chunk in chunk_list(texts, self.batch_size)
         ]
-
-        final_results = await asyncio.gather(*tasks)
-
-        return [item for sublist in final_results for item in sublist]
-
-    async def _call_chunk(
-        self,
-        type_name: str,
-        chunk: list[str],
-    ) -> list[str]:
-        expected_count = len(chunk)
-
-        list_schema = {
-            "type": "ARRAY",
-            "items": {
-                "type": "STRING",
-            },
-        }
-
-        payload = json.dumps(
-            chunk,
-            ensure_ascii=False,
-        )
-
         try:
-            results = await self.provider.call(
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            # 한 조각이 실패하면 대기 중인 호출을 취소하고 부분 성공을 반환하지 않는다.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return [item for chunk in results for item in chunk]
+
+    async def _translate_chunk(self, type_name: str, chunk: list[str]) -> list[str]:
+        # 기존 단일 항목 Provider 입력 형식은 보존한다.
+        if len(chunk) == 1:
+            return [await self.translate_single(chunk[0], type_name)]
+
+        schema = {"type": "ARRAY", "items": {"type": "STRING"}}
+        async with self.semaphore:
+            result = await self.provider.call(
                 type_name=type_name,
-                data=payload,
-                schema=list_schema,
+                data=json.dumps(chunk, ensure_ascii=False),
+                schema=schema,
             )
 
-            if isinstance(results, list):
-                if len(results) != expected_count:
-                    raise ValueError(
-                        f"Count mismatch: expected {expected_count}, got {len(results)}"
-                    )
+        # 모델 출력의 개수·타입·공백 여부는 코드에서 확인한다. 원문/응답은 로그에 남기지 않는다.
+        if not isinstance(result, list) or len(result) != len(chunk):
+            raise ValueError("TRANSLATION_RESPONSE_INVALID: expected one string per input")
+        return [self._validate_single_result(item) for item in result]
 
-                return [str(result).strip() for result in results]
-
-            raise ValueError("Response format error: response is not a list.")
-
-        except Exception as exc:
-            logger.debug("Chunk translation failed: %s", exc)
-            raise
-
-    async def _single_unit_retry_task(
-        self,
-        text: str,
-        type_name: str,
-        max_retries: int = 2,
-    ) -> str:
-        for attempt in range(max_retries + 1):
-            try:
-                result = await self.provider.call(
-                    type_name=type_name,
-                    data=text,
-                    schema=None,
-                )
-
-                translated = self._normalize_single_result(result)
-
-                if translated:
-                    return translated
-
-            except Exception as exc:
-                logger.error("Single translation failed: %s", exc)
-
-            if attempt < max_retries:
-                await asyncio.sleep(0.3)
-
-        return ""
-
-    async def _recursive_translate(
-        self,
-        chunk: list[str],
-        type_name: str,
-    ) -> list[str]:
-        chunk_size = len(chunk)
-
-        if chunk_size <= 1:
-            return [
-                await self._single_unit_retry_task(
-                    text=chunk[0],
-                    type_name=type_name,
-                )
-            ]
-
-        async with self.semaphore:
-            try:
-                results = await self._call_chunk(
-                    type_name=type_name,
-                    chunk=chunk,
-                )
-
-                if len(results) == chunk_size:
-                    return results
-
-                logger.warning(
-                    "Translation count mismatch. expected=%s, actual=%s. Splitting...",
-                    chunk_size,
-                    len(results),
-                )
-
-            except Exception:
-                logger.warning(
-                    "Chunk translation failed. chunk_size=%s. Splitting...",
-                    chunk_size,
-                )
-
-        mid = (chunk_size // 2) + 1
-
-        if mid >= chunk_size:
-            mid = chunk_size // 2
-
-        left_chunk = chunk[:mid]
-        right_chunk = chunk[mid:]
-
-        left_result, right_result = await asyncio.gather(
-            self._recursive_translate(
-                chunk=left_chunk,
-                type_name=type_name,
-            ),
-            self._recursive_translate(
-                chunk=right_chunk,
-                type_name=type_name,
-            ),
-        )
-
-        return left_result + right_result
-
-    def _normalize_single_result(
-        self,
-        result: Any,
-    ) -> str:
-        if result is None:
-            return ""
-
-        if isinstance(result, str):
-            return result.strip().strip("[]'\"")
-
-        logger.warning(
-            "Unexpected translation response type: %s",
-            type(result),
-        )
-
-        return str(result).strip()
+    @staticmethod
+    def _validate_single_result(result: Any) -> str:
+        if not isinstance(result, str) or not result.strip():
+            raise ValueError("TRANSLATION_RESPONSE_INVALID: expected a nonblank string")
+        # 따옴표와 대괄호는 실제 대사/본문일 수 있으므로 응답을 임의로 복구하지 않는다.
+        return result

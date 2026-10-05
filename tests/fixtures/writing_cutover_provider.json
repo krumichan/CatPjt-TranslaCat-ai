@@ -148,6 +148,15 @@
           "semanticSummary": "합성 GUIDED 상황 1",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "minimumRequiredMeaning": "가족에게 이번 주말에 만들 음식을 소개하고 의견을 확인한다.",
+        "necessaryRelations": "음식 소개와 상대방 의견 요청을 같은 상황에 연결한다.",
+        "evidenceSegmentIds": [
+          "O1",
+          "F1",
+          "I1"
+        ]
       }
     },
     {
@@ -178,6 +187,15 @@
           "semanticSummary": "합성 GUIDED 상황 2",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "minimumRequiredMeaning": "수리점 직원에게 자전거의 고장 상태를 설명하고 맡길 시간을 정한다.",
+        "necessaryRelations": "고장 상태 설명 뒤 수리 접수 시간 협의를 연결한다.",
+        "evidenceSegmentIds": [
+          "O1",
+          "F1",
+          "I1"
+        ]
       }
     },
     {
@@ -208,6 +226,15 @@
           "semanticSummary": "합성 GUIDED 상황 3",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "minimumRequiredMeaning": "친구에게 박물관 예약을 제안하고 가능한 날짜를 물어본다.",
+        "necessaryRelations": "방문 제안과 상대방 일정 확인을 연결한다.",
+        "evidenceSegmentIds": [
+          "O1",
+          "F1",
+          "I1"
+        ]
       }
     },
     {
@@ -238,6 +265,15 @@
           "semanticSummary": "합성 GUIDED 상황 4",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "minimumRequiredMeaning": "동료에게 파일 공유 방법을 알려주고 불편 사항에 대한 의견을 요청한다.",
+        "necessaryRelations": "공유 방법 안내 뒤 불편할 경우 의견 요청을 연결한다.",
+        "evidenceSegmentIds": [
+          "O1",
+          "F1",
+          "I1"
+        ]
       }
     },
     {
@@ -268,6 +304,15 @@
           "semanticSummary": "합성 GUIDED 상황 5",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "minimumRequiredMeaning": "줄어든 모임 예산에 맞춰 장소의 장단점을 비교하며 참석자 부담을 단정하지 않는다.",
+        "necessaryRelations": "예산 제약, 장소 비교, 부담에 대한 유보적 의견을 연결한다.",
+        "evidenceSegmentIds": [
+          "O1",
+          "F1",
+          "I1"
+        ]
       }
     },
     {
@@ -292,6 +337,13 @@
           "semanticSummary": "합성 FREE 상황 1",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "status": "SUBSTANTIVE_CHOICE",
+        "choiceDescription": "학습자가 실제 아침 행동과 그것을 좋아하는 이유를 선택한다.",
+        "evidenceSegmentIds": [
+          "O1"
+        ]
       }
     },
     {
@@ -316,6 +368,13 @@
           "semanticSummary": "합성 FREE 상황 2",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "status": "SUBSTANTIVE_CHOICE",
+        "choiceDescription": "학습자가 구매한 물건, 문제와 요청할 해결 방법을 선택한다.",
+        "evidenceSegmentIds": [
+          "O1"
+        ]
       }
     },
     {
@@ -340,6 +399,13 @@
           "semanticSummary": "합성 FREE 상황 3",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "status": "SUBSTANTIVE_CHOICE",
+        "choiceDescription": "학습자가 여행을 미룰 사정과 동행자에게 제안할 대안을 선택한다.",
+        "evidenceSegmentIds": [
+          "O1"
+        ]
       }
     },
     {
@@ -364,6 +430,13 @@
           "semanticSummary": "합성 FREE 상황 4",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "status": "SUBSTANTIVE_CHOICE",
+        "choiceDescription": "학습자가 발표 준비의 현재 상황과 후속 확인 사항을 선택한다.",
+        "evidenceSegmentIds": [
+          "O1"
+        ]
       }
     },
     {
@@ -388,6 +461,13 @@
           "semanticSummary": "합성 FREE 상황 5",
           "requiresBackgroundKnowledge": false
         }
+      },
+      "reviewObservation": {
+        "status": "SUBSTANTIVE_CHOICE",
+        "choiceDescription": "학습자가 불확실한 일정의 상황에서 관심과 약속의 범위를 정한다.",
+        "evidenceSegmentIds": [
+          "O1"
+        ]
       }
     }
   ],

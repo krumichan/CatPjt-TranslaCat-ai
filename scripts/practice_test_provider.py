@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from app.ai.ports import StructuredGenerationResult
+from scripts.synthetic_paths import synthetic_runtime_directory
 
 # 로컬 검증 제어 파일은 저장소 밖 공통 Codex 작업 공간에서 읽는다.
-_TEST_ROOT = Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
+_TEST_ROOT = synthetic_runtime_directory()
 
 
 async def execute_practice_fixture(kwargs: dict[str, Any]) -> StructuredGenerationResult | None:

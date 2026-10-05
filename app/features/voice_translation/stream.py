@@ -805,8 +805,7 @@ class VoiceStreamApplicationService:
     @property
     def ready(self) -> bool:
         return (
-            settings.AI_VOICE_ENABLED
-            and self._accepting_streams
+            self._accepting_streams
             and self.stt_provider.ready
             and self.translation_service.ready
             and self.speech_evidence_guard.ready
@@ -815,8 +814,7 @@ class VoiceStreamApplicationService:
     @property
     def accepting_streams(self) -> bool:
         return (
-            settings.AI_VOICE_ENABLED
-            and self._accepting_streams
+            self._accepting_streams
             and len(self._streams) < settings.AI_VOICE_MAX_ACTIVE_STREAMS
         )
 

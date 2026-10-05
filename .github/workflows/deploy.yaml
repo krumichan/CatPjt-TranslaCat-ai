@@ -33,8 +33,10 @@ jobs:
         run: python3 scripts/check_deploy_release.py
       - name: Run regression tests (no production secrets or model warm-up)
         env:
-          AI_VOICE_ENABLED: 'false'
+          AI_VOICE_WARM_UP: 'false'
           OCR_WARM_UP: 'false'
+          NOVEL_AUTH_ENVIRONMENT: Development
+          NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
         run: python -m pytest -q --junitxml=test-results/pytest.xml
       - uses: actions/upload-artifact@v4
         if: always()

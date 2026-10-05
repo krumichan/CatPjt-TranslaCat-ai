@@ -3,12 +3,12 @@
 import asyncio
 import json
 import os
-from pathlib import Path
 
 from app.ai.ports import StructuredGenerationResult
+from scripts.synthetic_paths import synthetic_runtime_directory
 
 # 제어 파일과 실행 흔적은 저장소 밖 공통 검증 디렉터리에 둔다.
-ROOT = Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
+ROOT = synthetic_runtime_directory()
 TASKS = {
     "LANGUAGE_LEARNING_SPEAKING_CONVERSATION": "CONVERSATION",
     "LANGUAGE_LEARNING_SPEAKING_ASSISTANCE": "ASSISTANCE",

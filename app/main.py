@@ -21,6 +21,7 @@ from app.api.v1 import api_router
 from app.core.chat_auth import authorize_chat_api_key, validate_chat_auth_configuration
 from app.core.config import settings
 from app.core.config_logger import setup_logging
+from app.core.novel_auth import authorize_novel_api_key, validate_novel_auth_configuration
 from app.core.openapi import set_custom_openapi
 from app.schemas.voice_translation import VoiceErrorCode, VoiceStage
 
@@ -31,8 +32,9 @@ setup_logging()
 async def lifespan(app: FastAPI):
     # 명시 활성화한 Chat 인증 오류는 Provider warm-up보다 먼저, 비밀값 없이 거부한다.
     validate_chat_auth_configuration(settings)
+    validate_novel_auth_configuration(settings)
 
-    if settings.AI_VOICE_ENABLED:
+    if settings.AI_VOICE_WARM_UP:
         await get_voice_translation_service().warm_up()
         await get_voice_speech_evidence_guard().warm_up()
         await get_speech_runtime().warm_up()
@@ -74,17 +76,23 @@ async def check_api_key_middleware(request: Request, call_next):
 
     # 전용 Chat 키는 범용 모델 실행 POST에만 유효하다. LL/Voice 키와 오류 wire는 유지한다.
     provided_api_key = request.headers.get("X-API-KEY")
+    novel_decision = authorize_novel_api_key(
+        settings, request.method, request.url.path, provided_api_key
+    )
     chat_decision = authorize_chat_api_key(
         settings, request.method, request.url.path, provided_api_key
     )
-    if chat_decision is True:
+    if novel_decision is not False and chat_decision is not False and (
+        novel_decision is True or chat_decision is True
+    ):
         return await call_next(request)
 
-    if chat_decision is None and request.url.path in exempt_paths:
+    if novel_decision is None and chat_decision is None and request.url.path in exempt_paths:
         return await call_next(request)
 
     if (
-        chat_decision is False
+        novel_decision is False
+        or chat_decision is False
         or not settings.SERVER_API_KEY
         or not provided_api_key
         or not provided_api_key.isascii()

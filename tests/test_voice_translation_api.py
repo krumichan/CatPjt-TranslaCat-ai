@@ -100,9 +100,7 @@ class VoiceTranslationApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.original_api_key = settings.SERVER_API_KEY
-        cls.original_voice_enabled = settings.AI_VOICE_ENABLED
         settings.SERVER_API_KEY = "internal-secret"
-        settings.AI_VOICE_ENABLED = True
         cls.translation_provider = ApiTranslationProvider()
         cls.translation_service = VoiceTranslationService(
             cls.translation_provider,
@@ -125,7 +123,6 @@ class VoiceTranslationApiTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.client.close()
         settings.SERVER_API_KEY = cls.original_api_key
-        settings.AI_VOICE_ENABLED = cls.original_voice_enabled
 
     def test_internal_websocket_contract_and_event_order(self):
         with self.client.websocket_connect(

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
 from app.ai.ports import SpeechSynthesisProvider
+from app.ai.providers.openai.speech import SpeechAudioDecodeError
 from app.api.dependencies import get_speech_execution_provider
 from app.common.provider_failure import provider_failure_origin
 from app.common.provider_retry import retry_after_details
@@ -54,6 +55,12 @@ async def synthesize(
                 "retryable": True,
                 **provider_failure_origin(error),
             },
+        ) from None
+    except SpeechAudioDecodeError:
+        # 정상 입력에 대한 제공자 오디오 손상은 사용자 요청 오류와 구분한다.
+        raise HTTPException(
+            502,
+            detail={"code": "SPEECH_RESPONSE_INVALID", "retryable": False},
         ) from None
     except ValueError as error:
         raise HTTPException(

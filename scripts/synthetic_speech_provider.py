@@ -8,14 +8,14 @@ import os
 import struct
 import threading
 import wave
-from pathlib import Path
 
 from app.ai.ports import SpeechSynthesisResult
 from app.features.speech_to_text.runtime import WhisperRuntimeResult, WhisperRuntimeSegment
 from scripts.listening_test_provider import listening_fixture_duration
+from scripts.synthetic_paths import synthetic_runtime_directory
 
 # 제어 파일과 실행 흔적은 저장소 밖 공통 검증 디렉터리에 둔다.
-ROOT = Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
+ROOT = synthetic_runtime_directory()
 _stats_lock = threading.Lock()
 
 

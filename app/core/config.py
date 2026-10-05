@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     CHAT_AUTH_ENVIRONMENT: str = ""
     CHAT_SERVER_API_KEY: SecretStr = Field(default_factory=lambda: SecretStr(""), repr=False)
 
+    # 소설은 항상 제공하며 전용 수신 자격증명을 LL/CHAT과 분리한다.
+    NOVEL_AUTH_ENVIRONMENT: str = ""
+    NOVEL_SERVER_API_KEY: SecretStr = Field(default_factory=lambda: SecretStr(""), repr=False)
+    NOVEL_MODEL_PROFILE_MAX_CONCURRENCY: int = Field(default=2, ge=1, le=10)
+    NOVEL_MODEL_PROFILE_MAX_QUEUE: int = Field(default=64, ge=0, le=256)
+
     # AI Provider
     AI_TEXT_PROVIDER: str = "openai"
     AI_TEXT_PROVIDER_MAX_CONCURRENCY: int = Field(default=8, ge=1, le=128)
@@ -130,7 +136,8 @@ class Settings(BaseSettings):
     AI_LISTENING_TTS_AUDIO_TTL_SECONDS: int = Field(default=3600, ge=1)
 
     # Voice Translation V2 / Internal Streaming Pipeline
-    AI_VOICE_ENABLED: bool = True
+    # 시작 시 예열만 제어한다. 요청 수락은 실제 provider 준비와 용량으로 판단한다.
+    AI_VOICE_WARM_UP: bool = True
     AI_VOICE_STT_MODEL_NAME: str = "base"
     AI_VOICE_STT_MODEL_REVISION: str | None = None
     AI_VOICE_STT_DEVICE: str = "cpu"

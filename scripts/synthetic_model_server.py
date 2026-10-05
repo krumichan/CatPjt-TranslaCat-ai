@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-from pathlib import Path
 
 if os.environ.get("TRANSLACAT_TEST_MODEL_EXECUTION") != "1":
     raise RuntimeError("Local test model execution server requires explicit test marker")
@@ -21,6 +20,7 @@ from app.api.internal.speech_transcription import get_speech_evidence_runtime  #
 from app.core.config import settings  # noqa: E402
 from scripts.leveltest_test_provider import execute_leveltest_fixture  # noqa: E402
 from scripts.listening_test_provider import execute_listening_fixture  # noqa: E402
+from scripts.local_smoke_test_provider import execute_local_smoke_fixture  # noqa: E402
 from scripts.model_execution_replay import execute_replay  # noqa: E402
 from scripts.practice_test_provider import execute_practice_fixture  # noqa: E402
 from scripts.speaking_conversation_test_provider import (  # noqa: E402
@@ -32,11 +32,12 @@ from scripts.speaking_evaluation_test_provider import (  # noqa: E402
 from scripts.speaking_runtime_test_provider import (  # noqa: E402
     execute_speaking_runtime_fixture,
 )
+from scripts.synthetic_paths import synthetic_runtime_directory  # noqa: E402
 from scripts.synthetic_speech_provider import SyntheticSpeechProvider  # noqa: E402
 from scripts.writing_cutover_provider import execute_writing_fixture  # noqa: E402
 
 # 합성 서버는 호스트 .env의 음성/OCR 예열 설정을 상속하지 않는다.
-settings.AI_VOICE_ENABLED = False
+settings.AI_VOICE_WARM_UP = False
 settings.OCR_WARM_UP = False
 
 from app.main import app  # noqa: E402
@@ -48,10 +49,7 @@ class SyntheticProvider:
     @classmethod
     def record_calls(cls):
         # 프로세스가 바뀐 뒤에도 이전 계수로 차이를 계산하지 않도록 시작 시 0과 PID를 게시한다.
-        stats_path = (
-            Path(__file__).resolve().parents[2]
-            / ".codex-workspace/verification/ai/runtime/synthetic_execution_stats.json"
-        )
+        stats_path = synthetic_runtime_directory() / "synthetic_execution_stats.json"
         stats_path.parent.mkdir(parents=True, exist_ok=True)
         pending = stats_path.with_suffix(f".{os.getpid()}.tmp")
         pending.write_text(
@@ -64,6 +62,11 @@ class SyntheticProvider:
         # 합성 호출 수만 남긴다. 요청 원문·자격증명·응답 내용은 기록하지 않는다.
         type(self).calls += 1
         self.record_calls()
+
+        # 결합 검사의 명시적 표식만 고정 출력으로 받으며 실제 업무 판단은 호출 서비스에 둔다.
+        local_smoke = execute_local_smoke_fixture(kwargs)
+        if local_smoke is not None:
+            return local_smoke
 
         # 검증된 원본 호출을 먼저 대조하며 알 수 없는 입력을 실 Provider로 넘기지 않는다.
         replay = execute_replay(kwargs)
@@ -102,7 +105,12 @@ class SyntheticProvider:
         raise ValueError("No validated synthetic execution fixture")
 
 
-settings.SERVER_API_KEY = "synthetic-local-model-key"
+# 기존 fixture 계약은 유지하고 명시한 로컬 launcher의 공통 개발 키만 선택적으로 받는다.
+settings.SERVER_API_KEY = os.environ.get(
+    "TRANSLACAT_TEST_SERVER_API_KEY", "synthetic-local-model-key"
+)
+if not settings.SERVER_API_KEY:
+    raise RuntimeError("Synthetic local execution requires a server API key")
 SyntheticProvider.record_calls()
 app.dependency_overrides[get_model_execution_provider] = lambda: SyntheticProvider()
 speech_fixture = SyntheticSpeechProvider()
@@ -125,6 +133,7 @@ async def restrict_synthetic_execution(request, call_next):
         "/internal/v1/speech/normalize",
         "/internal/v1/speech/transcribe",
         "/internal/v1/speech/evidence",
+        "/api/v1/account-book/receipts/runtime-identity",
     }
     if request.url.path not in allowed:
         return JSONResponse(status_code=404, content={"code": "SYNTHETIC_ENDPOINT_DISABLED"})

@@ -29,7 +29,10 @@ def inputs(tmp_path, monkeypatch):
         "CHAT_AUTH_ENVIRONMENT",
         "CHAT_SERVER_API_KEY",
         "AI_SETTINGS_ENV_FILE",
-        "AI_VOICE_ENABLED",
+        "SERVER_API_KEY",
+        "OPENAI_API_KEY",
+        "GOOGLE_API_KEY",
+        "AI_VOICE_WARM_UP",
         "OCR_WARM_UP",
     ):
         monkeypatch.setenv(name, "")
@@ -56,10 +59,100 @@ def test_prepare_reuses_single_key_and_preserves_source_files(inputs, monkeypatc
     # 검증
     assert os.environ["CHAT_SERVER_API_KEY"] == KEY
     assert os.environ["AI_SETTINGS_ENV_FILE"] == str(environment)
-    assert os.environ["AI_VOICE_ENABLED"] == "false"
+    assert os.environ["AI_VOICE_WARM_UP"] == "false"
     assert os.environ["OCR_WARM_UP"] == "false"
     assert (environment.read_bytes(), secret.read_bytes()) == before
     assert result["chatApiKey"] == "APPLIED"
+
+
+def test_legacy_mode_reuses_shared_global_key_without_rotating_source(inputs):
+    # 준비: LL/BE/CHAT이 공유하는 로컬 키를 명시한다.
+    environment, secret = inputs
+    environment.write_text(f"CHAT_AUTH_MODE=legacy\nSERVER_API_KEY={KEY}\n", encoding="utf-8")
+    before = (environment.read_bytes(), secret.read_bytes())
+
+    # 실행
+    result = launcher.prepare_environment(environment, secret, "Development", True, "legacy")
+
+    # 검증: dedicated 전환 없이 동일한 글로벌 인증 계약을 유지한다.
+    assert result["chatAuthMode"] == "legacy"
+    assert os.environ["SERVER_API_KEY"] == KEY
+    assert "CHAT_SERVER_API_KEY" not in os.environ
+    assert (environment.read_bytes(), secret.read_bytes()) == before
+
+
+def test_legacy_mode_rejects_conflicting_global_key_without_mutation(inputs):
+    # 준비
+    environment, secret = inputs
+    before = dict(os.environ)
+
+    # 실행
+    with pytest.raises(launcher.LocalConfigurationError):
+        launcher.prepare_environment(environment, secret, "Development", True, "legacy")
+
+    # 검증
+    assert dict(os.environ) == before
+
+
+def test_live_provider_credentials_are_reused_without_importing_original_server_key(inputs):
+    # 준비: provider 원본 파일과 결합 실행 설정은 다른 서버간 키를 가진다.
+    environment, secret = inputs
+    provider_source = environment.with_name("provider-source.env")
+    provider_source.write_text(
+        "SERVER_API_KEY=unrelated-original-server-key\n"
+        "OPENAI_API_KEY=local-only-provider-credential\nCHAT_AUTH_MODE=dedicated\n",
+        encoding="utf-8",
+    )
+    environment.write_text("CHAT_AUTH_MODE=legacy\nAI_TEXT_PROVIDER=openai\n", encoding="utf-8")
+    before = (environment.read_bytes(), provider_source.read_bytes(), secret.read_bytes())
+
+    # 실행
+    result = launcher.prepare_environment(
+        environment,
+        secret,
+        "Development",
+        False,
+        "legacy",
+        provider_source,
+    )
+
+    # 검증: 메모리의 provider 키만 재사용하고 모든 입력 파일은 보존한다.
+    assert os.environ["SERVER_API_KEY"] == KEY
+    assert os.environ["OPENAI_API_KEY"] == "local-only-provider-credential"
+    assert os.environ["CHAT_AUTH_MODE"] == "legacy"
+    assert "local-only-provider-credential" not in json.dumps(result)
+    assert (environment.read_bytes(), provider_source.read_bytes(), secret.read_bytes()) == before
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "OPENAI_API_KEY=different-local-provider-key\n",
+        "OPENAI_API_KEY_FILE=unsupported-secret-file\n",
+        "SERVER_API_KEY=not-a-provider-credential\n",
+    ],
+)
+def test_live_provider_source_conflicts_or_missing_values_fail_before_mutation(inputs, source):
+    # 준비: 기존 선택 파일에는 이미 다른 합성 provider 키가 있다.
+    environment, secret = inputs
+    provider_source = environment.with_name("provider-source.env")
+    provider_source.write_text(source, encoding="utf-8")
+    before = dict(os.environ)
+
+    # 실행
+    with pytest.raises(launcher.LocalConfigurationError) as failure:
+        launcher.prepare_environment(
+            environment,
+            secret,
+            "Development",
+            False,
+            "dedicated",
+            provider_source,
+        )
+
+    # 검증
+    assert dict(os.environ) == before
+    assert "different-local-provider-key" not in str(failure.value)
 
 
 @pytest.mark.parametrize(
@@ -345,6 +438,7 @@ def test_powershell_entry_point_binds_and_rejects_invalid_mode(
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
     )
 

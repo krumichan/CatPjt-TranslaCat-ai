@@ -547,11 +547,24 @@ class FailingTranslationProvider(FakeTranslationProvider):
 
 class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.original_voice_enabled = settings.AI_VOICE_ENABLED
-        settings.AI_VOICE_ENABLED = True
+        self.original_voice_warm_up = settings.AI_VOICE_WARM_UP
+        settings.AI_VOICE_WARM_UP = False
 
     def tearDown(self) -> None:
-        settings.AI_VOICE_ENABLED = self.original_voice_enabled
+        settings.AI_VOICE_WARM_UP = self.original_voice_warm_up
+
+    async def test_ready_provider_accepts_stream_without_startup_warm_up(self):
+        # 준비: 예열 생략은 이미 준비된 provider의 서비스 가용성을 끄지 않는다.
+        service = VoiceStreamApplicationService(
+            stt_provider=FakeVoiceSttProvider(),
+            translation_service=VoiceTranslationService(FakeTranslationProvider(), max_retries=0),
+        )
+
+        # 실행 / 검증: 기존 readiness·수용량 경계는 유지한다.
+        self.assertFalse(settings.AI_VOICE_WARM_UP)
+        self.assertTrue(service.ready)
+        self.assertTrue(service.accepting_streams)
+        self.assertNotIn("AI_VOICE_ENABLED", type(settings).model_fields)
 
     async def test_open_stream_rejects_not_ready_stt_provider(self):
         service = VoiceStreamApplicationService(

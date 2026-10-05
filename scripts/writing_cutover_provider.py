@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.ai.ports import StructuredGenerationResult
 from app.ai.providers.openai.response import OpenAIProviderResponseError
+from scripts.synthetic_paths import synthetic_runtime_directory
 
 
 @lru_cache(maxsize=1)
@@ -34,9 +35,7 @@ async def execute_writing_fixture(kwargs):
     candidates = fixtures["candidates"]
     if name == "writing_candidate_batch":
         payload = _payload(kwargs, "learning-data")
-        control_root = (
-            Path(__file__).resolve().parents[2] / ".codex-workspace/verification/ai/runtime"
-        )
+        control_root = synthetic_runtime_directory()
         control_path = control_root / "writing-control.json"
         control = (
             json.loads(control_path.read_text(encoding="utf-8")) if control_path.exists() else {}
@@ -126,6 +125,16 @@ async def execute_writing_fixture(kwargs):
                 )
             ],
         }
+        # 유형 관측도 검토한 고정 과제에서만 읽는다. 모델 목표나 임의 입력으로 PASS를 만들지 않는다.
+        observation = fixture.get("reviewObservation")
+        if fixture["writingType"] == "FREE":
+            if observation is None:
+                raise ValueError("Synthetic FREE observation required")
+            output["contentChoiceObservation"] = observation
+        elif fixture["writingType"] == "GUIDED":
+            if observation is None:
+                raise ValueError("Synthetic GUIDED observation required")
+            output["productionObservation"] = observation
     else:
         payload = _payload(kwargs, "evaluation-data")
         source_texts = {item["draft"]["originText"] for item in candidates}

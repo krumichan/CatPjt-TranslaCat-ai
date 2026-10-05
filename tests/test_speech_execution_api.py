@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from openai import APITimeoutError
 
 from app.ai.ports import SpeechSynthesisResult
+from app.ai.providers.openai.speech import SpeechAudioDecodeError
 from app.api.dependencies import get_speech_execution_provider
 from app.core.config import settings
 
@@ -176,4 +177,23 @@ def test_speech_preserves_sdk_timeout_origin(speech_client):
 
     # 검증: 기존 기술 코드와 SDK 출처를 함께 보존한다.
     assert response.json()["detail"]["failureKind"] == "SDK_TIMEOUT"
+    assert len(provider.calls) == 1
+
+
+def test_invalid_provider_wav_is_not_reported_as_bad_user_input(speech_client):
+    # 준비: 정상 요청에 외부 제공자가 잘린 WAV를 반환한 경우를 재현한다.
+    client, provider = speech_client
+    provider.failure = SpeechAudioDecodeError(byte_count=20, header_magic="52494646")
+
+    # 실행
+    response = client.post(
+        "/internal/v1/speech/synthesize",
+        json=command(),
+        headers={"X-API-KEY": "synthetic-speech-key"},
+    )
+
+    # 검증: 요청자에게 텍스트를 바꾸도록 유도하지 않고 출력 실패를 명시한다.
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "SPEECH_RESPONSE_INVALID"
+    assert response.json()["detail"]["retryable"] is False
     assert len(provider.calls) == 1
