@@ -31,6 +31,7 @@ from app.features.voice_translation.language import (
     normalize_confidence,
 )
 from app.features.voice_translation.prompts import build_voice_translation_prompt
+from app.features.voice_translation.speech_detector import PassThroughSpeechEvidenceGuard
 from app.features.voice_translation.stable_prefix import StablePrefixAssembler
 from app.features.voice_translation.stream import (
     VoiceChannelStreamContext,
@@ -177,7 +178,8 @@ class VoiceSchemaAndAudioTest(unittest.TestCase):
 
 
 class VoiceLanguageAndPrefixTest(unittest.TestCase):
-    def test_language_lock_hysteresis_and_manual_override(self):
+    def test_language_lock_hysteresis_and_manual_filter(self):
+        # 준비/실행: 자동 언어 잠금은 연속 관측으로만 변경한다.
         manager = LanguageStateManager(
             lock_confidence=0.80,
             switch_confidence=0.85,
@@ -197,10 +199,13 @@ class VoiceLanguageAndPrefixTest(unittest.TestCase):
             switch_consecutive_count=3,
             manual_language="en",
         )
-        self.assertEqual(manual.observe("ja", 0.99).locked_language, "en")
+        # 검증: 수동 입력 언어와 다른 관측은 강제 번역하지 않는다.
+        with self.assertRaises(VoicePipelineException) as caught:
+            manual.observe("ja", 0.99)
+        self.assertEqual(caught.exception.code, VoiceErrorCode.LANGUAGE_MISMATCH)
         self.assertEqual(
             manual.resolve_translation_source(
-                detected_language="ja",
+                detected_language="en",
                 confidence=0.99,
             ),
             "en",
@@ -239,6 +244,24 @@ class VoiceLanguageAndPrefixTest(unittest.TestCase):
         self.assertEqual(payload["sourceText"], source_text)
         self.assertEqual(payload["sourceLanguage"], "ko")
 
+    def test_voice_prompt_limits_previous_context_without_changing_current_text(self):
+        # 준비: 이전 발화는 현재 발화와 별개인 비신뢰 참고 정보다.
+        previous = "앞 문장 " * 80
+
+        # 실행
+        prompt = build_voice_translation_prompt(
+            source_text="is love.",
+            source_language="en",
+            target_language="ko",
+            previous_source_text=previous,
+        )
+        payload = json.loads(prompt.splitlines()[-1])
+
+        # 검증: 문맥 길이를 제한하고 번역 대상은 현재 발화로 유지한다.
+        self.assertEqual(payload["sourceText"], "is love.")
+        self.assertEqual(payload["previousSourceText"], previous.strip()[-240:])
+        self.assertLessEqual(len(payload["previousSourceText"]), 240)
+
     def test_voice_gemini_config_disables_thinking_and_bounds_tokens(self):
         schema = VoiceTranslationProviderPayload.model_json_schema(by_alias=True)
         config = GeminiConfigManager().get_voice_translation_config(schema)
@@ -257,6 +280,7 @@ class FakeTranslationProvider:
     def __init__(self, *, valid_reading: bool = True) -> None:
         self.calls = 0
         self.valid_reading = valid_reading
+        self.previous_source_texts: list[str | None] = []
 
     async def translate_voice_utterance(
         self,
@@ -264,9 +288,11 @@ class FakeTranslationProvider:
         source_text: str,
         source_language: str,
         target_language: str,
+        previous_source_text: str | None = None,
     ) -> VoiceTranslationGenerationResult:
         del target_language
         self.calls += 1
+        self.previous_source_texts.append(previous_source_text)
         tokens = []
         if source_language == "ja":
             tokens = [
@@ -316,9 +342,12 @@ class VoiceTranslationServiceTest(unittest.IsolatedAsyncioTestCase):
             source_text="会議を始めます。",
             source_language="ja",
             target_language="ko",
+            previous_source_text="前の話題です。",
         )
         self.assertEqual(result.translated_text, "회의를 시작하겠습니다.")
         self.assertEqual(result.input_tokens, 10)
+        payload = json.loads(Client.aio.models.kwargs["contents"].splitlines()[-1])
+        self.assertEqual(payload["previousSourceText"], "前の話題です。")
         self.assertEqual(
             "".join(token.surface for token in result.source_reading_tokens),
             "会議を始めます。",
@@ -335,6 +364,24 @@ class VoiceTranslationServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.translation_skipped)
         self.assertEqual(result.translated_text, "안녕하세요")
         self.assertEqual(provider.calls, 0)
+
+    async def test_previous_source_reuses_single_translation_call(self):
+        # 준비
+        provider = FakeTranslationProvider()
+        service = VoiceTranslationService(provider, max_retries=0)
+
+        # 실행
+        result = await service.translate(
+            source_text="is love.",
+            source_language="en",
+            target_language="ko",
+            previous_source_text="And the L.",
+        )
+
+        # 검증: 추가 호출 없이 같은 번역 요청에 문맥을 싣는다.
+        self.assertEqual(result.translated_text, "번역 결과")
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(provider.previous_source_texts, ["And the L."])
 
     async def test_reading_validation_is_warning_not_translation_failure(self):
         provider = FakeTranslationProvider(valid_reading=False)
@@ -553,6 +600,68 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         settings.AI_VOICE_WARM_UP = self.original_voice_warm_up
 
+    async def test_completed_same_language_source_is_next_translation_context(self):
+        # 준비: 연속 영어 두 문장 뒤에 한국어와 긴 침묵 뒤의 새 문장이 들어온다.
+        class SequenceStt(FakeVoiceSttProvider):
+            def __init__(self):
+                super().__init__()
+                self.final_results = iter(
+                    [
+                        ("And the L.", "en"),
+                        ("is love.", "en"),
+                        ("다음 주제입니다.", "ko"),
+                        ("새로운 주제입니다.", "ko"),
+                    ]
+                )
+
+            async def transcribe_pcm(self, pcm_bytes: bytes, **kwargs):
+                del pcm_bytes
+                if kwargs["is_final"]:
+                    text, language = next(self.final_results)
+                else:
+                    text, language = "", "en"
+                return VoiceSttResult(
+                    text=text,
+                    language=language,
+                    language_confidence=0.99,
+                    no_speech_probability=0.01,
+                    provider="fake",
+                    model="fake-stt",
+                )
+
+        provider = FakeTranslationProvider()
+        service = VoiceStreamApplicationService(
+            stt_provider=SequenceStt(),
+            translation_service=VoiceTranslationService(provider, max_retries=0),
+            speech_evidence_guard=PassThroughSpeechEvidenceGuard(),
+        )
+        context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
+
+        try:
+            # 실행: 각 발화를 확정한 뒤 다음 발화를 전달한다.
+            for utterance_index in range(4):
+                if utterance_index == 3:
+                    for _ in range(60):
+                        await context.feed_audio(pcm_frame(0))
+                        await asyncio.sleep(0)
+                    await context._input_queue.join()
+                for frame in [pcm_frame(4000)] * 3 + [pcm_frame(0)] * 3:
+                    await context.feed_audio(frame)
+                    await asyncio.sleep(0)
+                while True:
+                    event = await asyncio.wait_for(context.next_event(), timeout=2)
+                    event_type = getattr(event, "type", None)
+                    if event_type == "VOICE_PIPELINE_FAILED":
+                        self.fail("Unexpected pipeline failure")
+                    if event_type == "VOICE_PIPELINE_COMPLETED":
+                        break
+
+            # 검증: 언어가 다르거나 5초 넘게 떨어진 문장은 문맥에서 제외한다.
+            self.assertEqual(provider.calls, 4)
+            self.assertEqual(provider.previous_source_texts, [None, "And the L.", None, None])
+        finally:
+            await service.release_stream(context)
+
     async def test_ready_provider_accepts_stream_without_startup_warm_up(self):
         # 준비: 예열 생략은 이미 준비된 provider의 서비스 가용성을 끄지 않는다.
         service = VoiceStreamApplicationService(
@@ -601,7 +710,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 FakeTranslationProvider(),
                 max_retries=0,
             ),
-            speech_evidence_guard=RejectSpeechEvidenceGuard(),
+            speech_evidence_guard=PassThroughSpeechEvidenceGuard(),
         )
         await context.start()
         await context._start_utterance(0)
@@ -793,7 +902,10 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(context._worker_task, return_exceptions=True)
             self.assertTrue(await context.feed_audio(pcm_frame(4000)))
             self.assertTrue(await context.feed_audio(pcm_frame(4000)))
-            self.assertFalse(await context.feed_audio(pcm_frame(4000)))
+            # 검증: 입력 초과는 무음 누락 대신 명시적인 종료 오류로 전달한다.
+            with self.assertRaises(VoicePipelineException) as caught:
+                await context.feed_audio(pcm_frame(4000))
+            self.assertEqual(caught.exception.code, VoiceErrorCode.BACKPRESSURE)
             ready = await context.next_event()
             backpressure = await context.next_event()
             self.assertEqual(ready.type, "STREAM_READY")

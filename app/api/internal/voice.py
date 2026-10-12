@@ -159,7 +159,7 @@ async def voice_readiness(
         ready=service.ready,
         accepting_streams=service.accepting_streams,
         stt_model=service.stt_provider.model_version,
-        translation_model=settings.AI_VOICE_TRANSLATION_MODEL_NAME,
+        translation_model=service.translation_service.model_name,
         active_streams=service.active_stream_count,
     )
     if not payload.ready:
@@ -231,7 +231,21 @@ async def _receive_stream_frames(
     sender_task: asyncio.Task[None],
 ) -> None:
     while True:
-        message = await websocket.receive()
+        # 서버 측 포화/종료 이벤트가 먼저 끝나면 추가 클라이언트 입력을 기다리지 않는다.
+        receiver_task = asyncio.create_task(websocket.receive())
+        try:
+            done, _ = await asyncio.wait(
+                {receiver_task, sender_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if sender_task in done:
+                await sender_task
+                return
+            message = receiver_task.result()
+        finally:
+            if not receiver_task.done():
+                receiver_task.cancel()
+                await asyncio.gather(receiver_task, return_exceptions=True)
         if message.get("type") == "websocket.disconnect":
             return
 

@@ -5,7 +5,8 @@ import re
 import time
 from dataclasses import dataclass
 
-from app.ai.ports import VoiceTranslationProvider
+from app.ai.model_policy import get_model_name_for_task
+from app.ai.ports import VoiceTranslationGenerationResult, VoiceTranslationProvider
 from app.common.idempotency import InMemoryIdempotencyStore
 from app.core.config import settings
 from app.features.voice_translation.errors import (
@@ -44,6 +45,7 @@ class VoiceTranslationService:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
         max_concurrency: int | None = None,
+        total_timeout_seconds: float | None = None,
         idempotency_store: InMemoryIdempotencyStore[VoiceTranslationRetryResponse] | None = None,
     ) -> None:
         self.provider = provider
@@ -60,6 +62,11 @@ class VoiceTranslationService:
             if max_concurrency is None
             else max_concurrency
         )
+        self.total_timeout_seconds = (
+            settings.AI_VOICE_TRANSLATION_TOTAL_TIMEOUT_SECONDS
+            if total_timeout_seconds is None
+            else total_timeout_seconds
+        )
         if self.max_concurrency < 1:
             raise ValueError("Voice translation concurrency must be positive")
         self._translation_slots = asyncio.Semaphore(self.max_concurrency)
@@ -72,6 +79,13 @@ class VoiceTranslationService:
     def ready(self) -> bool:
         return bool(getattr(self.provider, "ready", True))
 
+    @property
+    def model_name(self) -> str:
+        resolver = getattr(self.provider, "model_name_for", None)
+        if callable(resolver):
+            return str(resolver("VOICE_TRANSLATION"))
+        return get_model_name_for_task("VOICE_TRANSLATION")
+
     async def warm_up(self) -> None:
         warm_up = getattr(self.provider, "warm_up", None)
         if warm_up is not None:
@@ -83,6 +97,7 @@ class VoiceTranslationService:
         source_text: str,
         source_language: str,
         target_language: str,
+        previous_source_text: str | None = None,
     ) -> VoiceTranslationResult:
         started = time.perf_counter()
         if source_language == target_language:
@@ -92,36 +107,20 @@ class VoiceTranslationService:
                 source_reading_tokens=[],
                 warnings=[],
                 latency_ms=0,
-                model=self._model_metadata(settings.AI_VOICE_TRANSLATION_MODEL_NAME),
+                model=self._model_metadata(self.model_name),
             )
 
-        async with self._translation_slots:
-            provider_result = None
-            last_error: VoicePipelineException | None = None
-            for attempt in range(self.max_retries + 1):
-                try:
-                    provider_result = await asyncio.wait_for(
-                        self.provider.translate_voice_utterance(
-                            source_text=source_text,
-                            source_language=source_language,
-                            target_language=target_language,
-                        ),
-                        timeout=self.timeout_seconds,
-                    )
-                    break
-                except VoicePipelineException as exc:
-                    mapped = exc
-                except Exception as exc:
-                    mapped = map_translation_provider_exception(exc)
-
-                last_error = mapped
-                if not mapped.retryable or attempt >= self.max_retries:
-                    raise mapped
-                await asyncio.sleep(min(0.05 * (2**attempt), 0.2))
-
-        if provider_result is None:
-            assert last_error is not None
-            raise last_error
+        # 동시성 슬롯 대기와 재시도를 합쳐 하나의 전체 기한을 적용한다.
+        try:
+            async with asyncio.timeout(self.total_timeout_seconds):
+                provider_result = await self._translate_with_retries(
+                    source_text=source_text,
+                    source_language=source_language,
+                    target_language=target_language,
+                    previous_source_text=previous_source_text,
+                )
+        except TimeoutError as exc:
+            raise map_translation_provider_exception(exc) from exc
 
         translated_text = provider_result.translated_text.strip()
         self._validate_plain_text(translated_text)
@@ -142,6 +141,45 @@ class VoiceTranslationService:
             latency_ms=latency_ms,
             model=self._model_metadata(provider_result.model),
         )
+
+    async def _translate_with_retries(
+        self,
+        *,
+        source_text: str,
+        source_language: str,
+        target_language: str,
+        previous_source_text: str | None,
+    ) -> VoiceTranslationGenerationResult:
+        async with self._translation_slots:
+            provider_result = None
+            last_error: VoicePipelineException | None = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    provider_result = await asyncio.wait_for(
+                        self.provider.translate_voice_utterance(
+                            source_text=source_text,
+                            source_language=source_language,
+                            target_language=target_language,
+                            previous_source_text=previous_source_text,
+                        ),
+                        timeout=self.timeout_seconds,
+                    )
+                    break
+                except VoicePipelineException as exc:
+                    mapped = exc
+                except Exception as exc:
+                    mapped = map_translation_provider_exception(exc)
+
+                last_error = mapped
+                if not mapped.retryable or attempt >= self.max_retries:
+                    raise mapped
+                await asyncio.sleep(min(0.05 * (2**attempt), 0.2))
+
+        if provider_result is None:
+            assert last_error is not None
+            raise last_error
+
+        return provider_result
 
     async def retry(
         self,

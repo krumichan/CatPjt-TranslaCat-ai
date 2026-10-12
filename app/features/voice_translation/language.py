@@ -51,12 +51,32 @@ class LanguageStateManager:
         language: str | None,
         confidence: float | None,
     ) -> VoiceLanguageObservation:
-        detected = normalize_voice_language(language)
+        # 알려진 비지원 언어를 감지 실패와 구분해 이전 언어로 번역하지 않는다.
+        detected = _normalize_supported_observation(language)
         normalized_confidence = normalize_confidence(confidence)
         if detected is None:
             normalized_confidence = None
 
         if self.manual_language is not None:
+            # 수동 선택은 언어 필터이며 STT 언어를 강제로 덮어쓰지 않는다.
+            if (
+                detected is None
+                or normalized_confidence is None
+                or normalized_confidence < self.minimum_detection_confidence
+            ):
+                raise VoicePipelineException(
+                    code=VoiceErrorCode.LANGUAGE_UNDETERMINED,
+                    stage=VoiceStage.LANGUAGE,
+                    message="선택한 입력 언어와 일치하는지 확인할 수 없습니다.",
+                    retryable=False,
+                )
+            if detected != self.manual_language:
+                raise VoicePipelineException(
+                    code=VoiceErrorCode.LANGUAGE_MISMATCH,
+                    stage=VoiceStage.LANGUAGE,
+                    message="선택한 입력 언어와 실제 음성의 언어가 다릅니다.",
+                    retryable=False,
+                )
             return VoiceLanguageObservation(
                 detected_language=detected,
                 confidence=normalized_confidence,
@@ -108,9 +128,10 @@ class LanguageStateManager:
         confidence: float | None,
     ) -> str:
         if self.manual_language is not None:
+            self.observe(detected_language, confidence)
             return self.manual_language
 
-        detected = normalize_voice_language(detected_language)
+        detected = _normalize_supported_observation(detected_language)
         normalized_confidence = normalize_confidence(confidence)
         if (
             detected is not None
@@ -132,6 +153,18 @@ class LanguageStateManager:
     def _reset_switch_candidate(self) -> None:
         self._switch_candidate = None
         self._switch_count = 0
+
+
+def _normalize_supported_observation(language: str | None) -> str | None:
+    raw_language = language.strip().lower().split("-")[0] if language else None
+    if raw_language and raw_language != "und" and raw_language not in SUPPORTED_VOICE_LANGUAGES:
+        raise VoicePipelineException(
+            code=VoiceErrorCode.UNSUPPORTED_LANGUAGE,
+            stage=VoiceStage.LANGUAGE,
+            message="지원하지 않는 입력 언어입니다. 한국어, 일본어, 영어를 사용해 주세요.",
+            retryable=False,
+        )
+    return normalize_voice_language(language)
 
 
 def normalize_voice_language(language: str | None) -> str | None:

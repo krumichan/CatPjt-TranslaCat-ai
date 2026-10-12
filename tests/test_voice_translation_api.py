@@ -85,8 +85,9 @@ class ApiTranslationProvider:
         source_text: str,
         source_language: str,
         target_language: str,
+        previous_source_text: str | None = None,
     ) -> VoiceTranslationGenerationResult:
-        del source_text, source_language, target_language
+        del source_text, source_language, target_language, previous_source_text
         self.calls += 1
         return VoiceTranslationGenerationResult(
             translated_text="こんにちは",

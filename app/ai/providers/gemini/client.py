@@ -355,11 +355,13 @@ class GeminiService:
         source_text: str,
         source_language: str,
         target_language: str,
+        previous_source_text: str | None = None,
     ) -> VoiceTranslationGenerationResult:
         prompt = build_voice_translation_prompt(
             source_text=source_text,
             source_language=source_language,
             target_language=target_language,
+            previous_source_text=previous_source_text,
         )
         schema = VoiceTranslationProviderPayload.model_json_schema(by_alias=True)
 

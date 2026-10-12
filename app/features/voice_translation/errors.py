@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from openai import APIConnectionError, APITimeoutError
+
 from app.schemas.voice_translation import VoiceError, VoiceErrorCode, VoiceStage
 
 
@@ -28,21 +30,27 @@ class VoicePipelineException(Exception):
 
 
 def map_translation_provider_exception(exc: Exception) -> VoicePipelineException:
+    # 공급자의 영구 실패 판정을 우선 보존하고 SDK 전송 오류를 구분한다.
     status_code = _read_status_code(exc)
-    if isinstance(exc, (TimeoutError,)) or status_code in {408, 504}:
+    explicitly_permanent = getattr(exc, "retryable", None) is False
+    if isinstance(exc, (TimeoutError, APITimeoutError)) or status_code in {408, 504}:
         return VoicePipelineException(
             code=VoiceErrorCode.TRANSLATION_TIMEOUT,
             stage=VoiceStage.TRANSLATION,
             message="번역 Provider 응답 시간이 초과되었습니다.",
-            retryable=True,
+            retryable=not explicitly_permanent,
         )
 
-    retryable = isinstance(exc, ConnectionError) or status_code in {
-        429,
-        500,
-        502,
-        503,
-    }
+    retryable = not explicitly_permanent and (
+        isinstance(exc, (ConnectionError, APIConnectionError))
+        or status_code
+        in {
+            429,
+            500,
+            502,
+            503,
+        }
+    )
     return VoicePipelineException(
         code=VoiceErrorCode.TRANSLATION_FAILED,
         stage=VoiceStage.TRANSLATION,

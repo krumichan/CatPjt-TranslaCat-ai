@@ -183,12 +183,14 @@ class AiProviderPool:
         source_text: str,
         source_language: str,
         target_language: str,
+        previous_source_text: str | None = None,
     ) -> Any:
         return await self._invoke(
             "translate_voice_utterance",
             source_text=source_text,
             source_language=source_language,
             target_language=target_language,
+            previous_source_text=previous_source_text,
         )
 
     async def _invoke(self, method_name: str, **kwargs: Any) -> Any:

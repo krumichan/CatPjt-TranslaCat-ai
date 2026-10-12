@@ -10,6 +10,25 @@ from app.features.voice_translation.errors import VoicePipelineException
 from app.schemas.voice_translation import VoiceAudioFormat, VoiceErrorCode, VoiceStage
 
 
+def normalize_voice_pcm(pcm_bytes: bytes) -> bytes:
+    import numpy as np
+
+    # 발화 단위로 DC 성분을 제거한다. 프레임마다 이득을 바꾸어 파형을 흔들지 않는다.
+    if not pcm_bytes:
+        return pcm_bytes
+    samples = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32)
+    samples -= samples.mean()
+    peak = float(np.max(np.abs(samples))) / 32768.0
+    rms = float(np.sqrt(np.mean(samples * samples))) / 32768.0
+
+    # 작은 음성만 최대 12배 보정한다. 무음 근처의 잡음을 무제한 증폭하지 않으며,
+    # 보정된 입력도 Silero 확인을 통과해야 STT에 전달된다.
+    if rms >= 0.0001 and peak > 0:
+        gain = max(1.0, min(12.0, 0.04 / rms, 0.9 / peak))
+        samples *= gain
+    return np.clip(np.rint(samples), -32768, 32767).astype("<i2").tobytes()
+
+
 @dataclass(frozen=True)
 class PcmFrame:
     data: bytes
@@ -69,11 +88,18 @@ class AudioFrameValidator:
         minimum_frame_duration_ms: int,
         maximum_frame_duration_ms: int,
         speech_rms_threshold: float,
+        speech_candidate_rms_threshold: float | None = None,
     ) -> None:
         self.audio_format = audio_format
         self.minimum_frame_duration_ms = minimum_frame_duration_ms
         self.maximum_frame_duration_ms = maximum_frame_duration_ms
         self.speech_rms_threshold = speech_rms_threshold
+        # 낮은 음량 후보는 이후 음성 모델로 확인하는 경로에서만 명시적으로 허용한다.
+        self.speech_candidate_rms_threshold = (
+            speech_rms_threshold
+            if speech_candidate_rms_threshold is None
+            else min(speech_rms_threshold, speech_candidate_rms_threshold)
+        )
 
     def validate(self, data: bytes) -> PcmFrame:
         if not isinstance(data, bytes) or not data:
@@ -136,7 +162,7 @@ class AudioFrameValidator:
             rms=rms,
             peak=peak,
             clipping_ratio=clipping_ratio,
-            is_speech=rms >= self.speech_rms_threshold,
+            is_speech=rms >= self.speech_candidate_rms_threshold,
         )
 
 

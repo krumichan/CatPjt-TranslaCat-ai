@@ -95,4 +95,5 @@ class VoiceTranslationProvider(Protocol):
         source_text: str,
         source_language: str,
         target_language: str,
+        previous_source_text: str | None = None,
     ) -> VoiceTranslationGenerationResult: ...

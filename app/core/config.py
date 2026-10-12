@@ -154,7 +154,12 @@ class Settings(BaseSettings):
     AI_VOICE_MIN_FRAME_DURATION_MS: int = Field(default=20, ge=20, le=200)
     AI_VOICE_MAX_FRAME_DURATION_MS: int = Field(default=200, ge=20, le=200)
     AI_VOICE_MAX_BUFFERED_AUDIO_MS: int = Field(default=3000, ge=500, le=30_000)
+    AI_VOICE_FINAL_QUEUE_CAPACITY: int = Field(default=8, ge=1, le=32)
+    AI_VOICE_MAX_PENDING_FINAL_AUDIO_MS: int = Field(default=30_000, ge=1000, le=120_000)
+    AI_VOICE_PIPELINE_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=20)
+    AI_VOICE_DRAIN_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0, le=20)
     AI_VOICE_VAD_RMS_THRESHOLD: float = Field(default=0.012, ge=0, le=1)
+    AI_VOICE_VAD_QUIET_RMS_THRESHOLD: float = Field(default=0.0003, ge=0, le=1)
     AI_VOICE_VAD_SILERO_GUARD_ENABLED: bool = True
     AI_VOICE_VAD_SILERO_THRESHOLD: float = Field(default=0.50, ge=0, le=1)
     AI_VOICE_VAD_SILERO_MIN_SPEECH_MS: int = Field(default=100, ge=32, le=250)
@@ -171,6 +176,7 @@ class Settings(BaseSettings):
     AI_VOICE_LANGUAGE_MIN_CONFIDENCE: float = Field(default=0.50, ge=0, le=1)
     AI_VOICE_TRANSLATION_MODEL_NAME: str = "gemini-2.5-flash"
     AI_VOICE_TRANSLATION_TIMEOUT_SECONDS: float = Field(default=3.0, gt=0)
+    AI_VOICE_TRANSLATION_TOTAL_TIMEOUT_SECONDS: float = Field(default=6.0, gt=0, le=20)
     AI_VOICE_TRANSLATION_MAX_RETRIES: int = Field(default=1, ge=0, le=3)
     AI_VOICE_TRANSLATION_MAX_CONCURRENCY: int = Field(default=4, ge=1, le=64)
     AI_VOICE_TRANSLATION_MAX_OUTPUT_TOKENS: int = Field(

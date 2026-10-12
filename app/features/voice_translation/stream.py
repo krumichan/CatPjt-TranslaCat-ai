@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypeAlias
 from uuid import uuid4
 
@@ -17,21 +18,25 @@ from app.features.voice_translation.audio import (
     VadProcessResult,
     VadUtterance,
     VoiceActivityDetector,
+    normalize_voice_pcm,
 )
 from app.features.voice_translation.errors import VoicePipelineException
 from app.features.voice_translation.language import (
     LanguageStateManager,
+    VoiceLanguageObservation,
     normalize_confidence,
     normalize_voice_language,
 )
 from app.features.voice_translation.speech_detector import (
     PassThroughSpeechEvidenceGuard,
+    SileroSpeechEvidenceGuard,
     VoiceSpeechEvidenceGuard,
 )
 from app.features.voice_translation.stable_prefix import StablePrefixAssembler
-from app.features.voice_translation.stt import VoiceSttProvider
+from app.features.voice_translation.stt import VoiceSttProvider, VoiceSttResult
 from app.features.voice_translation.translation import VoiceTranslationService
 from app.schemas.voice_translation import (
+    SUPPORTED_VOICE_LANGUAGES,
     VoiceBackpressureEvent,
     VoiceErrorCode,
     VoiceEventBase,
@@ -50,6 +55,12 @@ from app.schemas.voice_translation import (
 )
 
 logger = logging.getLogger(__name__)
+_MAX_TRANSLATION_CONTEXT_GAP_MS = 5000
+
+
+def _is_repetitive_transcript(text: str) -> bool:
+    words = re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text.casefold())
+    return len(words) >= 8 and len(set(words)) / len(words) <= 0.40
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,19 @@ class _FlushCommand:
 class _CloseCommand:
     reason: str
     future: asyncio.Future[None]
+
+
+@dataclass
+class _FinalizationJob:
+    identity: _UtteranceIdentity
+    utterance: VadUtterance
+    partial_inference_ms: int | None
+    queued_at: float
+    deadline: float
+    stage: VoiceStage = VoiceStage.STT
+    source_text: str | None = None
+    detected_language: str | None = None
+    language_confidence: float | None = None
 
 
 _StreamCommand: TypeAlias = _AudioCommand | _FlushCommand | _CloseCommand
@@ -102,11 +126,22 @@ class VoiceChannelStreamContext:
         self._input_capacity = input_capacity
         self._input_queue: asyncio.Queue[_StreamCommand] = asyncio.Queue(maxsize=input_capacity)
         self._event_queue: asyncio.Queue[VoiceEventBase] = asyncio.Queue(maxsize=64)
+        self._final_queue: asyncio.Queue[_FinalizationJob] = asyncio.Queue(
+            maxsize=settings.AI_VOICE_FINAL_QUEUE_CAPACITY,
+        )
+        self._pending_final_jobs: dict[str, _FinalizationJob] = {}
+        self._pending_final_audio_ms = 0
         self._validator = AudioFrameValidator(
             stream_open.audio_format,
             minimum_frame_duration_ms=settings.AI_VOICE_MIN_FRAME_DURATION_MS,
             maximum_frame_duration_ms=settings.AI_VOICE_MAX_FRAME_DURATION_MS,
             speech_rms_threshold=settings.AI_VOICE_VAD_RMS_THRESHOLD,
+            speech_candidate_rms_threshold=(
+                settings.AI_VOICE_VAD_QUIET_RMS_THRESHOLD
+                if isinstance(speech_evidence_guard, SileroSpeechEvidenceGuard)
+                and speech_evidence_guard.enabled
+                else None
+            ),
         )
         policy = stream_open.policy
         self._vad = VoiceActivityDetector(
@@ -127,8 +162,13 @@ class VoiceChannelStreamContext:
             initial_locked_language=stream_open.last_locked_language,
             minimum_detection_confidence=settings.AI_VOICE_LANGUAGE_MIN_CONFIDENCE,
         )
+        self._last_completed_source_text: str | None = None
+        self._last_completed_source_language: str | None = None
+        self._last_completed_sequence: int | None = None
+        self._last_completed_end_offset_ms: int | None = None
 
         self._worker_task: asyncio.Task[None] | None = None
+        self._final_worker_task: asyncio.Task[None] | None = None
         self._partial_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._current_identity: _UtteranceIdentity | None = None
@@ -141,6 +181,10 @@ class VoiceChannelStreamContext:
         self._flushed = False
         self._closed = False
         self._backpressure_announced = False
+        self._flush_future: asyncio.Future[None] | None = None
+        self._close_future: asyncio.Future[None] | None = None
+        self._termination_lock = asyncio.Lock()
+        self._termination_task: asyncio.Task[None] | None = None
 
     @property
     def closed(self) -> bool:
@@ -157,6 +201,11 @@ class VoiceChannelStreamContext:
             self._run(),
             name=(f"voice-stream-{self.stream_open.session_id}-{self.stream_open.channel.value}"),
         )
+        self._final_worker_task = asyncio.create_task(
+            self._run_finalizations(),
+            name=f"voice-final-{self.stream_open.session_id}-{self.stream_open.channel.value}",
+        )
+        self._final_worker_task.add_done_callback(self._inference_task_done)
         await self._emit(
             VoiceStreamReadyEvent(
                 event_id=self._event_id(),
@@ -168,6 +217,14 @@ class VoiceChannelStreamContext:
         )
 
     async def next_event(self) -> VoiceEventBase:
+        # 전송 큐가 가득 차 종료 이벤트를 넣지 못한 경우에도 소비자는 종료를 확인한다.
+        if self._closed and self._event_queue.empty():
+            return VoiceStreamClosedEvent(
+                event_id=self._event_id(),
+                session_id=self.stream_open.session_id,
+                channel=self.stream_open.channel,
+                reason="PIPELINE_ERROR",
+            )
         return await self._event_queue.get()
 
     async def feed_audio(self, data: bytes) -> bool:
@@ -185,7 +242,7 @@ class VoiceChannelStreamContext:
             if self._input_queue.qsize() <= self._input_capacity // 2:
                 self._backpressure_announced = False
             return True
-        except asyncio.QueueFull:
+        except asyncio.QueueFull as exc:
             if not self._backpressure_announced:
                 self._backpressure_announced = True
                 await self._emit(
@@ -213,24 +270,39 @@ class VoiceChannelStreamContext:
                         retry_after_ms=settings.AI_VOICE_BACKPRESSURE_RETRY_AFTER_MS,
                     )
                 )
-            return False
+            # 수신 거절을 숨기고 계속 진행하면 음성과 타임라인이 서로 어긋난다.
+            self._accepting_audio = False
+            raise VoicePipelineException(
+                code=VoiceErrorCode.BACKPRESSURE,
+                stage=VoiceStage.STREAM,
+                message="음성 입력 처리 용량을 초과하여 스트림을 종료합니다. 다시 시작해 주세요.",
+                retryable=True,
+            ) from exc
 
     async def flush(self, reason: str) -> None:
-        if self._closed or self._flushed:
+        if self._flush_future is not None:
+            await asyncio.shield(self._flush_future)
+            return
+        if self._closed:
             return
         self._accepting_audio = False
         self._flushed = True
         loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
+        self._flush_future = future
         await self._input_queue.put(_FlushCommand(reason=reason, future=future))
         await future
 
     async def close(self, reason: str) -> None:
+        if self._close_future is not None:
+            await asyncio.shield(self._close_future)
+            return
         if self._closed:
             return
         self._accepting_audio = False
         loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
+        self._close_future = future
         await self._input_queue.put(_CloseCommand(reason=reason, future=future))
         await future
         if self._worker_task is not None:
@@ -245,6 +317,7 @@ class VoiceChannelStreamContext:
             self._worker_task.cancel()
             await asyncio.gather(self._worker_task, return_exceptions=True)
         await self._cancel_background_tasks()
+        await self._cancel_final_jobs()
         self._vad.clear()
         self._drain_input_queue()
 
@@ -255,8 +328,20 @@ class VoiceChannelStreamContext:
         source_text: str | None = None,
         detected_language: str | None = None,
         language_confidence: float | None = None,
+        identity: _UtteranceIdentity | None = None,
     ) -> None:
-        identity = self._current_identity
+        identity = identity or self._current_identity
+        # 원문/공급자 오류 메시지를 남기지 않고 실패 단계와 발화를 추적한다.
+        logger.warning(
+            "Voice pipeline failed session=%s channel=%s code=%s stage=%s "
+            "retryable=%s utterance_sequence=%s",
+            self.stream_open.session_id,
+            self.stream_open.channel.value,
+            error.code.value,
+            error.stage.value,
+            error.retryable,
+            identity.sequence if identity else None,
+        )
         await self._emit(
             VoicePipelineFailedEvent(
                 event_id=self._event_id(),
@@ -299,7 +384,9 @@ class VoiceChannelStreamContext:
             )
             try:
                 await self.emit_failure(
-                    VoicePipelineException(
+                    exc
+                    if isinstance(exc, VoicePipelineException)
+                    else VoicePipelineException(
                         code=VoiceErrorCode.INTERNAL_ERROR,
                         stage=VoiceStage.STREAM,
                         message="Voice Stream 처리 중 내부 오류가 발생했습니다.",
@@ -308,11 +395,48 @@ class VoiceChannelStreamContext:
                 )
             except Exception:
                 pass
+            await self._terminate_stream()
+
+    async def _terminate_stream(self) -> None:
+        async with self._termination_lock:
+            if self._closed:
+                return
             self._accepting_audio = False
-            self._closed = True
-            await self._cancel_background_tasks()
-            self._vad.clear()
-            self._drain_input_queue()
+            try:
+                if (
+                    self._worker_task is not asyncio.current_task()
+                    and self._worker_task is not None
+                ):
+                    self._worker_task.cancel()
+                    await asyncio.gather(self._worker_task, return_exceptions=True)
+                try:
+                    await self._cancel_final_jobs(
+                        VoicePipelineException(
+                            code=VoiceErrorCode.BACKPRESSURE,
+                            stage=VoiceStage.STREAM,
+                            message="음성 스트림이 종료되어 대기 중인 발화를 완료하지 못했습니다.",
+                            retryable=True,
+                        )
+                    )
+                except VoicePipelineException:
+                    # 전송 자체가 포화여도 상태/대기 중인 제어 명령은 반드시 정리한다.
+                    pass
+                await self._cancel_background_tasks()
+                self._vad.clear()
+                self._drain_input_queue()
+                try:
+                    await self._finish_close("PIPELINE_ERROR")
+                except VoicePipelineException:
+                    pass
+            finally:
+                self._closed = True
+
+    def _inference_task_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled() or task.exception() is None or self._closed:
+            return
+        if self._termination_task is None:
+            self._termination_task = asyncio.create_task(self._terminate_stream())
+            self._termination_task.add_done_callback(self._consume_task_result)
 
     async def _process_command(self, command: _StreamCommand) -> bool:
         if isinstance(command, _AudioCommand):
@@ -320,12 +444,14 @@ class VoiceChannelStreamContext:
             return False
         if isinstance(command, _FlushCommand):
             await self._handle_vad_result(self._vad.flush())
+            await self._drain_final_jobs()
             if not command.future.done():
                 command.future.set_result(None)
             return False
 
         if not self._flushed:
             await self._handle_vad_result(self._vad.flush())
+        await self._drain_final_jobs()
         await self._finish_close(command.reason)
         if not command.future.done():
             command.future.set_result(None)
@@ -345,7 +471,7 @@ class VoiceChannelStreamContext:
             self._schedule_partial(result.partial)
 
         if result.utterance is not None:
-            await self._finalize_utterance(result.utterance)
+            self._queue_finalization(result.utterance)
         elif result.no_speech is not None:
             await self._emit_no_speech(result.no_speech)
 
@@ -373,6 +499,8 @@ class VoiceChannelStreamContext:
         assembler = self._current_assembler
         if identity is None or assembler is None:
             return
+        if self._pending_final_jobs:
+            return
         if self._partial_task is not None and not self._partial_task.done():
             return
 
@@ -392,10 +520,22 @@ class VoiceChannelStreamContext:
     ) -> None:
         started = time.perf_counter()
         try:
+            normalized_pcm = normalize_voice_pcm(partial.pcm_bytes)
+            # 잡음/음악은 임시 자막에서도 제외하고 확정 작업에는 추론 자리를 양보한다.
+            has_speech = await asyncio.wait_for(
+                self.speech_evidence_guard.has_speech(normalized_pcm),
+                timeout=settings.AI_VOICE_VAD_SILERO_TIMEOUT_SECONDS,
+            )
+            if (
+                not has_speech
+                or identity.key in self._finalized_utterance_keys
+                or self._pending_final_jobs
+            ):
+                return
             result = await asyncio.wait_for(
                 self.stt_provider.transcribe_pcm(
-                    partial.pcm_bytes,
-                    language=self.stream_open.manual_source_language,
+                    normalized_pcm,
+                    language=None,
                     is_final=False,
                     initial_prompt=assembler.stable_prefix or None,
                 ),
@@ -421,9 +561,24 @@ class VoiceChannelStreamContext:
             0,
             int((time.perf_counter() - started) * 1000),
         )
-        if identity.key in self._finalized_utterance_keys or self._current_identity != identity:
+        if (
+            self._closed
+            or identity.key in self._finalized_utterance_keys
+            or self._current_identity != identity
+        ):
             return
         self._last_partial_inference_ms = partial_inference_ms
+
+        # 표시하지 않을 언어의 임시 결과는 다음 추론의 힌트에도 섞지 않는다.
+        detected_language = normalize_voice_language(result.language)
+        if detected_language is None:
+            return
+        if self.stream_open.manual_source_language not in (None, detected_language):
+            return
+        if self.stream_open.manual_source_language is not None:
+            confidence = normalize_confidence(result.language_confidence)
+            if confidence is None or confidence < settings.AI_VOICE_LANGUAGE_MIN_CONFIDENCE:
+                return
         update = assembler.update(result.text)
         if not update.changed or not update.text:
             return
@@ -437,8 +592,6 @@ class VoiceChannelStreamContext:
             return
         if identity.key in self._finalized_utterance_keys:
             return
-
-        detected_language = normalize_voice_language(result.language)
 
         await self._emit(
             VoiceTranscriptPartialEvent(
@@ -474,13 +627,218 @@ class VoiceChannelStreamContext:
             ),
         )
 
-    async def _finalize_utterance(self, utterance: VadUtterance) -> None:
+    def _queue_finalization(self, utterance: VadUtterance) -> None:
         identity = self._current_identity
         if identity is None:
             return
-        self._mark_finalized(identity.key)
 
-        speech_evidence = await self._confirm_speech_evidence(utterance.pcm_bytes)
+        # 확정 추론과 오디오 소비를 분리하되 저장하는 PCM과 발화 수를 함께 제한한다.
+        audio_ms = len(utterance.pcm_bytes) // 32
+        if (
+            len(self._pending_final_jobs) >= settings.AI_VOICE_FINAL_QUEUE_CAPACITY
+            or self._pending_final_audio_ms + audio_ms
+            > settings.AI_VOICE_MAX_PENDING_FINAL_AUDIO_MS
+        ):
+            raise VoicePipelineException(
+                code=VoiceErrorCode.BACKPRESSURE,
+                stage=VoiceStage.STREAM,
+                message="확정 음성 처리 용량을 초과하여 스트림을 종료합니다. 다시 시작해 주세요.",
+                retryable=True,
+            )
+        self._mark_finalized(identity.key)
+        if self._partial_task is not None and not self._partial_task.done():
+            self._partial_task.cancel()
+        self._partial_task = None
+
+        queued_at = asyncio.get_running_loop().time()
+        job = _FinalizationJob(
+            identity=identity,
+            utterance=utterance,
+            partial_inference_ms=self._last_partial_inference_ms,
+            queued_at=queued_at,
+            deadline=queued_at + settings.AI_VOICE_PIPELINE_TIMEOUT_SECONDS,
+        )
+        self._pending_final_jobs[identity.key] = job
+        self._pending_final_audio_ms += audio_ms
+        self._final_queue.put_nowait(job)
+        self._clear_current_utterance()
+
+    async def _run_finalizations(self) -> None:
+        while True:
+            job = await self._final_queue.get()
+            try:
+                # 같은 채널의 확정 순서와 언어 상태는 하나의 worker에서 보존한다.
+                if asyncio.get_running_loop().time() >= job.deadline:
+                    raise TimeoutError
+                async with asyncio.timeout_at(job.deadline):
+                    await self._finalize_utterance(job)
+            except TimeoutError:
+                await self._emit_final_job_failure(
+                    job,
+                    VoicePipelineException(
+                        code=VoiceErrorCode.STT_TIMEOUT,
+                        stage=VoiceStage.STREAM,
+                        message="대기 시간을 포함한 음성 처리 기한을 초과했습니다.",
+                        retryable=True,
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await self._emit_final_job_failure(
+                    job,
+                    VoicePipelineException(
+                        code=VoiceErrorCode.INTERNAL_ERROR,
+                        stage=VoiceStage.STREAM,
+                        message="확정 음성 처리 중 오류가 발생했습니다.",
+                        retryable=True,
+                    ),
+                )
+            finally:
+                if self._pending_final_jobs.pop(job.identity.key, None) is not None:
+                    self._pending_final_audio_ms -= len(job.utterance.pcm_bytes) // 32
+                self._final_queue.task_done()
+
+    async def _drain_final_jobs(self) -> None:
+        # flush/close는 남은 확정을 최대 20초만 기다리며 늦은 결과를 취소한다.
+        try:
+            await asyncio.wait_for(
+                self._final_queue.join(),
+                timeout=settings.AI_VOICE_DRAIN_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            await self._cancel_final_jobs(
+                VoicePipelineException(
+                    code=VoiceErrorCode.STT_TIMEOUT,
+                    stage=VoiceStage.STREAM,
+                    message="음성 종료 처리 기한을 초과하여 남은 발화를 중단했습니다.",
+                    retryable=True,
+                )
+            )
+
+    async def _cancel_final_jobs(self, error: VoicePipelineException | None = None) -> None:
+        pending = list(self._pending_final_jobs.values())
+        # 공급자의 취소 응답을 기다리며 종료 기한을 다시 늘리지 않는다.
+        # 소유권을 먼저 제거하므로 뒤늦게 돌아온 결과도 상태를 변경할 수 없다.
+        self._pending_final_jobs.clear()
+        self._pending_final_audio_ms = 0
+        if self._final_worker_task is not None:
+            worker = self._final_worker_task
+            self._final_worker_task = None
+            worker.cancel()
+            worker.add_done_callback(self._consume_task_result)
+            await asyncio.sleep(0)
+        while not self._final_queue.empty():
+            self._final_queue.get_nowait()
+            self._final_queue.task_done()
+
+        # 이미 수락한 발화마다 실패를 알려 DB/화면에 처리 중 상태를 남기지 않는다.
+        if error is not None:
+            for job in pending:
+                await self._emit_final_job_failure(job, error)
+
+    async def _emit_final_job_failure(
+        self,
+        job: _FinalizationJob,
+        error: VoicePipelineException,
+    ) -> None:
+        # STT가 이미 끝난 발화는 종료/전체 기한 오류에도 원문과 번역 실패 단계를 보존한다.
+        code = error.code
+        if code == VoiceErrorCode.STT_TIMEOUT and job.stage == VoiceStage.TRANSLATION:
+            code = VoiceErrorCode.TRANSLATION_TIMEOUT
+        await self.emit_failure(
+            VoicePipelineException(
+                code=code,
+                stage=job.stage,
+                message=error.public_message,
+                retryable=error.retryable,
+            ),
+            source_text=job.source_text,
+            detected_language=job.detected_language,
+            language_confidence=job.language_confidence,
+            identity=job.identity,
+        )
+
+    async def _transcribe_final_with_context(self, pcm_bytes: bytes) -> VoiceSttResult:
+        # 자동 감지를 먼저 유지해 실제 언어 전환과 비지원 언어를 확인한다.
+        deadline = asyncio.get_running_loop().time() + settings.AI_VOICE_STT_FINAL_TIMEOUT_SECONDS
+        original = await self.stt_provider.transcribe_pcm(
+            pcm_bytes,
+            language=None,
+            is_final=True,
+            initial_prompt=None,
+        )
+
+        # 영어 등으로 잠긴 대화에서 저확신 비지원 언어와 반복 원문이 함께 나올 때만 재인식한다.
+        # 수동 언어 선택과 자연스러운 비지원 언어 발화에는 이 문맥 보정을 적용하지 않는다.
+        detected = (original.language or "").strip().lower().split("-")[0]
+        confidence = normalize_confidence(original.language_confidence)
+        locked = self._language.locked_language
+        if (
+            self.stream_open.manual_source_language is not None
+            or locked is None
+            or detected in SUPPORTED_VOICE_LANGUAGES
+            or detected in ("", "und")
+            or confidence is None
+            or confidence >= 0.65
+            or not _is_repetitive_transcript(original.text)
+        ):
+            return original
+
+        # 두 번째 추론은 첫 번째와 같은 전체 STT 기한 안에서만 수행한다.
+        remaining = deadline - asyncio.get_running_loop().time() - 0.25
+        if remaining < 0.5:
+            return original
+        try:
+            candidate = await asyncio.wait_for(
+                self.stt_provider.transcribe_pcm(
+                    pcm_bytes,
+                    language=locked,
+                    is_final=True,
+                    initial_prompt=None,
+                ),
+                timeout=min(3.0, remaining),
+            )
+        except Exception:
+            logger.info(
+                "Voice contextual STT retry unavailable session=%s channel=%s original_language=%s",
+                self.stream_open.session_id,
+                self.stream_open.channel.value,
+                detected,
+            )
+            return original
+
+        # 강제 언어의 confidence는 독립적인 언어 판정이 아니므로 공개 결과에 사용하지 않는다.
+        words = re.findall(r"[^\W_]+(?:['’][^\W_]+)*", candidate.text.casefold())
+        accepted = (
+            normalize_voice_language(candidate.language) == locked
+            and len(words) >= 5
+            and len(set(words)) / len(words) > 0.50
+            and (candidate.no_speech_probability is None or candidate.no_speech_probability < 0.50)
+        )
+        logger.info(
+            "Voice contextual STT retry session=%s channel=%s original_language=%s "
+            "original_confidence=%.2f locked_language=%s accepted=%s",
+            self.stream_open.session_id,
+            self.stream_open.channel.value,
+            detected,
+            confidence,
+            locked,
+            accepted,
+        )
+        if not accepted:
+            return original
+        return replace(candidate, language_confidence=None)
+
+    async def _finalize_utterance(self, job: _FinalizationJob) -> None:
+        identity = job.identity
+        utterance = job.utterance
+
+        # 음량 보정은 한 번만 수행해 VAD 확인과 STT가 같은 파형을 사용한다.
+        normalized_pcm = normalize_voice_pcm(utterance.pcm_bytes)
+        job.stage = VoiceStage.VAD
+        speech_evidence = await self._confirm_speech_evidence(normalized_pcm, identity=identity)
+        self._check_final_job_ownership(job)
         if speech_evidence is None:
             return
         has_speech, speech_evidence_ms = speech_evidence
@@ -489,56 +847,59 @@ class VoiceChannelStreamContext:
                 VadNoSpeech(
                     started_at_offset_ms=utterance.started_at_offset_ms,
                     ended_at_offset_ms=utterance.ended_at_offset_ms,
-                )
+                ),
+                identity=identity,
+                clear_current=False,
             )
             return
 
         stt_started = time.perf_counter()
+        job.stage = VoiceStage.STT
         try:
             stt_result = await asyncio.wait_for(
-                self.stt_provider.transcribe_pcm(
-                    utterance.pcm_bytes,
-                    language=self.stream_open.manual_source_language,
-                    is_final=True,
-                    initial_prompt=None,
-                ),
+                self._transcribe_final_with_context(normalized_pcm),
                 timeout=settings.AI_VOICE_STT_FINAL_TIMEOUT_SECONDS,
             )
         except TimeoutError:
+            self._check_final_job_ownership(job)
             await self.emit_failure(
                 VoicePipelineException(
                     code=VoiceErrorCode.STT_TIMEOUT,
                     stage=VoiceStage.STT,
                     message="Final STT 응답 시간이 초과되었습니다.",
                     retryable=True,
-                )
+                ),
+                identity=identity,
             )
-            self._clear_current_utterance()
             return
         except VoicePipelineException as exc:
-            await self.emit_failure(exc)
-            self._clear_current_utterance()
+            self._check_final_job_ownership(job)
+            await self.emit_failure(exc, identity=identity)
             return
         except Exception:
+            self._check_final_job_ownership(job)
             await self.emit_failure(
                 VoicePipelineException(
                     code=VoiceErrorCode.STT_FAILED,
                     stage=VoiceStage.STT,
                     message="Final STT 처리에 실패했습니다.",
                     retryable=True,
-                )
+                ),
+                identity=identity,
             )
-            self._clear_current_utterance()
             return
 
         stt_finalize_ms = max(0, int((time.perf_counter() - stt_started) * 1000))
+        self._check_final_job_ownership(job)
         source_text = stt_result.text.strip()
         if not source_text:
             await self._emit_no_speech(
                 VadNoSpeech(
                     started_at_offset_ms=utterance.started_at_offset_ms,
                     ended_at_offset_ms=utterance.ended_at_offset_ms,
-                )
+                ),
+                identity=identity,
+                clear_current=False,
             )
             return
         if len(source_text) > 10_000:
@@ -548,15 +909,32 @@ class VoiceChannelStreamContext:
                     stage=VoiceStage.STT,
                     message="Final STT 결과가 허용 길이를 초과했습니다.",
                     retryable=False,
-                )
+                ),
+                identity=identity,
             )
-            self._clear_current_utterance()
             return
 
-        observation = self._language.observe(
-            stt_result.language,
-            stt_result.language_confidence,
-        )
+        # 원문은 보존하되 비지원/선택 불일치 언어를 번역하거나 잠금에 반영하지 않는다.
+        job.source_text = source_text
+        job.stage = VoiceStage.LANGUAGE
+        language_error: VoicePipelineException | None = None
+        try:
+            observation = self._language.observe(
+                stt_result.language,
+                stt_result.language_confidence,
+            )
+        except VoicePipelineException as exc:
+            language_error = exc
+            detected = normalize_voice_language(stt_result.language)
+            observation = VoiceLanguageObservation(
+                detected_language=detected,
+                confidence=normalize_confidence(stt_result.language_confidence)
+                if detected
+                else None,
+                locked_language=self._language.locked_language,
+            )
+        job.detected_language = observation.detected_language
+        job.language_confidence = observation.confidence
         final_event = VoiceTranscriptFinalEvent(
             event_id=self._event_id(),
             session_id=self.stream_open.session_id,
@@ -575,25 +953,45 @@ class VoiceChannelStreamContext:
         await self._emit(final_event)
 
         try:
+            if language_error is not None:
+                raise language_error
+            job.stage = VoiceStage.TRANSLATION
             source_language = self._language.resolve_translation_source(
                 detected_language=observation.detected_language,
                 confidence=observation.confidence,
+            )
+            # 인접한 성공 문장만 같은 언어의 번역 문맥으로 제공한다. 별도 모델 호출은 없다.
+            gap_ms = (
+                max(0, utterance.started_at_offset_ms - self._last_completed_end_offset_ms)
+                if self._last_completed_end_offset_ms is not None
+                else None
+            )
+            previous_source_text = (
+                self._last_completed_source_text
+                if self._last_completed_source_language == source_language
+                and self._last_completed_sequence == identity.sequence - 1
+                and gap_ms is not None
+                and gap_ms <= _MAX_TRANSLATION_CONTEXT_GAP_MS
+                else None
             )
             translation = await self.translation_service.translate(
                 source_text=source_text,
                 source_language=source_language,
                 target_language=self.stream_open.target_language,
+                previous_source_text=previous_source_text,
             )
         except VoicePipelineException as exc:
+            self._check_final_job_ownership(job)
             await self.emit_failure(
                 exc,
                 source_text=source_text,
                 detected_language=observation.detected_language,
                 language_confidence=observation.confidence,
+                identity=identity,
             )
-            self._clear_current_utterance()
             return
         except Exception:
+            self._check_final_job_ownership(job)
             await self.emit_failure(
                 VoicePipelineException(
                     code=VoiceErrorCode.TRANSLATION_FAILED,
@@ -604,12 +1002,13 @@ class VoiceChannelStreamContext:
                 source_text=source_text,
                 detected_language=observation.detected_language,
                 language_confidence=observation.confidence,
+                identity=identity,
             )
-            self._clear_current_utterance()
             return
 
-        total_after_speech_ms = (
-            utterance.endpointing_ms + speech_evidence_ms + stt_finalize_ms + translation.latency_ms
+        self._check_final_job_ownership(job)
+        total_after_speech_ms = utterance.endpointing_ms + max(
+            0, int((asyncio.get_running_loop().time() - job.queued_at) * 1000)
         )
         await self._emit(
             VoicePipelineCompletedEvent(
@@ -634,7 +1033,7 @@ class VoiceChannelStreamContext:
                 latency=VoiceLatency(
                     endpointing_ms=utterance.endpointing_ms,
                     speech_evidence_ms=speech_evidence_ms,
-                    partial_inference_ms=self._last_partial_inference_ms,
+                    partial_inference_ms=job.partial_inference_ms,
                     stt_finalize_ms=stt_finalize_ms,
                     translation_ms=translation.latency_ms,
                     ai_total_after_speech_ms=total_after_speech_ms,
@@ -650,6 +1049,10 @@ class VoiceChannelStreamContext:
                 ),
             )
         )
+        self._last_completed_source_text = source_text
+        self._last_completed_source_language = source_language
+        self._last_completed_sequence = identity.sequence
+        self._last_completed_end_offset_ms = utterance.ended_at_offset_ms
         logger.info(
             "Voice utterance completed session=%s channel=%s sequence=%s "
             "duration_ms=%s detected_language=%s total_after_speech_ms=%s "
@@ -665,11 +1068,23 @@ class VoiceChannelStreamContext:
             settings.AI_VOICE_VAD_VERSION,
             settings.AI_VOICE_SCHEMA_VERSION,
         )
-        self._clear_current_utterance()
+
+    def _check_final_job_ownership(self, job: _FinalizationJob) -> None:
+        if job.identity.key not in self._pending_final_jobs:
+            raise asyncio.CancelledError
+        if asyncio.get_running_loop().time() >= job.deadline:
+            raise TimeoutError
+
+    @staticmethod
+    def _consume_task_result(task: asyncio.Task[None]) -> None:
+        if not task.cancelled():
+            task.exception()
 
     async def _confirm_speech_evidence(
         self,
         pcm_bytes: bytes,
+        *,
+        identity: _UtteranceIdentity,
     ) -> tuple[bool, int] | None:
         started = time.perf_counter()
         try:
@@ -695,12 +1110,18 @@ class VoiceChannelStreamContext:
             latency_ms = max(0, int((time.perf_counter() - started) * 1000))
             return has_speech, latency_ms
 
-        await self.emit_failure(error)
-        self._clear_current_utterance()
+        if identity.key in self._pending_final_jobs:
+            await self.emit_failure(error, identity=identity)
         return None
 
-    async def _emit_no_speech(self, outcome: VadNoSpeech) -> None:
-        identity = self._current_identity
+    async def _emit_no_speech(
+        self,
+        outcome: VadNoSpeech,
+        *,
+        identity: _UtteranceIdentity | None = None,
+        clear_current: bool = True,
+    ) -> None:
+        identity = identity or self._current_identity
         if identity is not None:
             self._mark_finalized(identity.key)
         await self._emit(
@@ -715,11 +1136,13 @@ class VoiceChannelStreamContext:
                 speech_duration_ms=0,
             )
         )
-        self._clear_current_utterance()
+        if clear_current:
+            self._clear_current_utterance()
 
     async def _finish_close(self, reason: str) -> None:
         self._accepting_audio = False
         await self._cancel_background_tasks()
+        await self._cancel_final_jobs()
         self._vad.clear()
         await self._emit(
             VoiceStreamClosedEvent(
@@ -732,11 +1155,13 @@ class VoiceChannelStreamContext:
         self._closed = True
 
     async def _cancel_background_tasks(self) -> None:
+        # partial 공급자가 취소 응답을 늦추더라도 스트림 종료는 지연하지 않는다.
         tasks = [task for task in self._background_tasks if not task.done()]
         for task in tasks:
             task.cancel()
+            task.add_done_callback(self._consume_task_result)
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.sleep(0)
         self._background_tasks.clear()
         self._partial_task = None
 
@@ -744,6 +1169,7 @@ class VoiceChannelStreamContext:
         self._background_tasks.discard(task)
         if self._partial_task is task:
             self._partial_task = None
+        self._inference_task_done(task)
 
     def _clear_current_utterance(self) -> None:
         self._current_identity = None
@@ -813,10 +1239,7 @@ class VoiceStreamApplicationService:
 
     @property
     def accepting_streams(self) -> bool:
-        return (
-            self._accepting_streams
-            and len(self._streams) < settings.AI_VOICE_MAX_ACTIVE_STREAMS
-        )
+        return self._accepting_streams and len(self._streams) < settings.AI_VOICE_MAX_ACTIVE_STREAMS
 
     @property
     def active_stream_count(self) -> int:
