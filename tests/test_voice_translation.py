@@ -739,6 +739,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         await context.abort()
 
     async def test_stream_orders_partial_final_and_completed(self):
+        # 준비: partial과 final 결과를 모두 반환하는 합성 공급자로 스트림을 연다.
         stt = FakeVoiceSttProvider()
         translation_provider = FakeTranslationProvider()
         translation = VoiceTranslationService(translation_provider, max_retries=0)
@@ -748,14 +749,20 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
         context = await service.open_stream(VoiceStreamOpen.model_validate(stream_open_payload()))
 
+        # 실행: partial 작업이 실제 이벤트를 낸 뒤 침묵으로 발화를 확정한다.
         for _ in range(8):
             await context.feed_audio(pcm_frame(4000))
             await asyncio.sleep(0)
+
+        event_types: list[str] = []
+        while "TRANSCRIPT_PARTIAL" not in event_types:
+            event = await asyncio.wait_for(context.next_event(), timeout=1)
+            event_types.append(event.type)
+
         for _ in range(3):
             await context.feed_audio(pcm_frame(0))
             await asyncio.sleep(0)
 
-        event_types: list[str] = []
         completed = None
         for _ in range(10):
             event = await asyncio.wait_for(context.next_event(), timeout=1)
@@ -764,6 +771,7 @@ class VoiceStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 completed = event
                 break
 
+        # 검증: partial, final, 번역 완료의 공개 순서와 최종 번역을 보존한다.
         self.assertIsNotNone(completed)
         self.assertLess(
             event_types.index("SPEECH_STARTED"),
