@@ -221,10 +221,15 @@ class ReceiptAnalysisService:
             prompt = build_receipt_vision_prompt(options)
             provider_result: StructuredGenerationResult | None = None
             try:
+                # 첫 판독의 전송량만 줄이고, 선택 복구에는 아래의 원본 바이트를 유지한다.
+                # 전처리도 같은 요청 deadline에 포함하며 provider permit을 점유하지 않는다.
+                preview_bytes, preview_mime = await asyncio.to_thread(
+                    self._prepare_whole_image, image_bytes, file.content_type or "image/jpeg"
+                )
                 provider_result = await self._call_vision_provider(
                     prompt=prompt,
-                    image_bytes=image_bytes,
-                    mime_type=file.content_type or "image/jpeg",
+                    image_bytes=preview_bytes,
+                    mime_type=preview_mime,
                     request_context=request_context,
                     attempt_kind="WHOLE_IMAGE",
                 )
@@ -299,6 +304,35 @@ class ReceiptAnalysisService:
             round((time.perf_counter() - started) * 1000),
         )
         return response
+
+    @staticmethod
+    def _prepare_whole_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
+        # 픽셀 한도를 디코딩 전에 확인하고 EXIF 보정으로 복구 원본과 좌표계를 맞춘다.
+        # 속도와 정확도 비교 후 선택한 2,400px를 사용하고 선택 복구에는 원본을 남긴다.
+        max_edge = 2400
+        with Image.open(io.BytesIO(image_bytes)) as opened:
+            if opened.width * opened.height > settings.RECEIPT_VISION_MAX_IMAGE_PIXELS:
+                raise ValueError("Receipt image exceeds the decoded pixel limit")
+            orientation = opened.getexif().get(274, 1)
+            if max(opened.size) <= max_edge and orientation == 1:
+                return image_bytes, mime_type
+            source = ImageOps.exif_transpose(opened)
+
+            # 투명 스캔의 글자 대비를 유지하고 큰 사진만 비율대로 축소한다.
+            if "A" in source.getbands() or "transparency" in source.info:
+                rgba = source.convert("RGBA")
+                source = Image.new("RGB", rgba.size, "white")
+                source.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                source = source.convert("RGB")
+            scale = min(1.0, max_edge / max(source.size))
+            source = source.resize(
+                (max(1, round(source.width * scale)), max(1, round(source.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            output = io.BytesIO()
+            source.save(output, format="JPEG", quality=90, subsampling=0)
+            return output.getvalue(), "image/jpeg"
 
     async def _call_vision_provider(
         self,
@@ -417,7 +451,7 @@ class ReceiptAnalysisService:
             return await self._call_vision_provider(
                 prompt=region.prompt,
                 image_bytes=region.image_bytes,
-                mime_type="image/png",
+                mime_type="image/jpeg",
                 schema=region.schema,
                 request_context=request_context,
                 attempt_kind=region.plan.kind,
@@ -530,7 +564,9 @@ class ReceiptAnalysisService:
                     Image.Resampling.LANCZOS,
                 )
             buffer = io.BytesIO()
-            crop.save(buffer, format="PNG", optimize=True)
+            # 사진 crop의 해상도는 보존하고 전송량이 큰 무손실 PNG만 JPEG로 바꾼다.
+            # 작은 결제 글자를 보존하도록 고품질·색차 축소 없음으로 인코딩한다.
+            crop.save(buffer, format="JPEG", quality=95, subsampling=0)
             prepared.append(
                 _PreparedRecovery(
                     index=index,

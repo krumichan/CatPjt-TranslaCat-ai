@@ -1,7 +1,6 @@
 import asyncio
 import io
 import json
-import time
 from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -491,7 +490,12 @@ def test_target_currency_never_enters_prompt_or_source_detection():
     assert first == second
 
 
-def upload(contents=b"image"):
+def upload(contents=None):
+    # Vision 전처리까지 실행하도록 기본 fixture도 유효한 이미지로 만든다.
+    if contents is None:
+        encoded = io.BytesIO()
+        Image.new("RGB", (100, 100), "white").save(encoded, format="JPEG")
+        contents = encoded.getvalue()
     return UploadFile(
         filename="receipts.jpg",
         file=io.BytesIO(contents),
@@ -859,13 +863,26 @@ def test_recovery_failure_preserves_other_candidates_and_releases_shared_permit(
 
 
 def test_total_deadline_skips_new_recovery_when_remaining_budget_is_too_small(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.features.receipt import service as service_module
+    from app.features.receipt.vision_scheduler import ReceiptVisionScheduler
+
+    # 준비: 빌드 부하와 OS 스케줄링 대신 동일한 가짜 시계로 남은 예산을 검증한다.
+    now = [100.0]
+    scheduler = ReceiptVisionScheduler(
+        max_in_flight=3, max_recovery_in_flight=2, max_pending=8, clock=lambda: now[0]
+    )
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(perf_counter=lambda: now[0]))
+    monkeypatch.setattr(service_module, "get_receipt_vision_scheduler", lambda: scheduler)
+
     class SlowInitialProvider:
         def __init__(self):
             self.calls = 0
 
         async def call_with_image(self, **_kwargs):
             self.calls += 1
-            await asyncio.sleep(0.03)
+            now[0] += 0.03
             return {
                 "receipts": [
                     receipt(
@@ -884,7 +901,7 @@ def test_total_deadline_skips_new_recovery_when_remaining_budget_is_too_small(mo
     encoded = io.BytesIO()
     Image.new("RGB", (1200, 1200), "white").save(encoded, format="JPEG")
     provider = SlowInitialProvider()
-    started = time.perf_counter()
+    # 실행: 첫 판독이 30ms 예산을 사용한 것으로 진행한다.
     response = asyncio.run(
         ReceiptAnalysisService(OCRService(), cast(TextGenerationProvider, provider)).analyze(
             upload(encoded.getvalue()),
@@ -892,7 +909,9 @@ def test_total_deadline_skips_new_recovery_when_remaining_budget_is_too_small(mo
         )
     )
 
-    assert time.perf_counter() - started < 0.08
+    # 검증: 남은 50ms가 복구 최소 60ms보다 작으므로 추가 호출하지 않는다.
+    assert now[0] == pytest.approx(100.03)
+    assert scheduler.snapshot.active == scheduler.snapshot.pending == 0
     assert provider.calls == 1
     assert response.receipt_count == 1
     assert "REGION_RECOVERY_SKIPPED_TIME_BUDGET" in response.receipts[0].warnings
@@ -1399,3 +1418,46 @@ def test_receipt_limit_matches_backend_and_reports_truncation():
     response = validate(*(receipt(store_name=f"Store {index}") for index in range(31)))
     assert response.receipt_count == 30
     assert "RECEIPT_LIMIT_REACHED" in response.warnings
+
+
+@pytest.mark.parametrize("missing_financial", [False, True])
+def test_recovery_upload_uses_photographic_jpeg_with_matching_mime(missing_financial):
+    # 준비: 실제 사진과 같은 JPEG 입력에서 이름 또는 금융정보만 복구한다.
+    initial = receipt(
+        title="Example East",
+        store_name="Example",
+        branch_name="East",
+        merchant_evidence="Example",
+        branch_evidence="East",
+        purchase_total=None if missing_financial else "12.34",
+        original_amount=None,
+        bounding_box=[0.1, 0.1, 0.5, 0.9],
+    )
+    provider = AsyncMock()
+    provider.call_with_image.side_effect = [
+        {"receipts": [initial]},
+        {"receipts": [receipt(purchase_total="12.34", original_amount=None)]},
+    ]
+    encoded = io.BytesIO()
+    Image.new("RGB", (1600, 1200), "white").save(encoded, format="JPEG")
+    original = encoded.getvalue()
+
+    # 실행: 기존 전체 이미지 판독과 선택 영역 복구 경로를 그대로 사용한다.
+    response = asyncio.run(
+        ReceiptAnalysisService(OCRService(), provider).analyze(
+            upload(original),
+            ReceiptAnalysisOptions(analysis_mode=ReceiptAnalysisMode.VISION_ONLY),
+        )
+    )
+
+    # 검증: 작은 글자용 해상도와 복구 결과는 유지하고 전송 인코딩/MIME를 맞춘다.
+    assert provider.call_with_image.await_count == 2
+    recovery = provider.call_with_image.call_args_list[1].kwargs
+    assert recovery["mime_type"] == "image/jpeg"
+    with Image.open(io.BytesIO(recovery["image_bytes"])) as crop:
+        assert crop.format == "JPEG"
+        assert crop.mode == "RGB"
+        assert crop.width >= 640
+        assert crop.height > 0
+    assert provider.call_with_image.call_args_list[0].kwargs["image_bytes"] == original
+    assert response.receipts[0].book_amount == Decimal("12.34")
