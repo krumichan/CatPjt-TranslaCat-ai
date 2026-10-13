@@ -993,7 +993,8 @@ class _TestWhisperRuntime(FasterWhisperRuntime):
 
 
 class SharedSttRuntimeTest(unittest.IsolatedAsyncioTestCase):
-    async def test_final_priority_and_partial_queue_reservation(self):
+    async def test_final_priority_and_busy_partial_suppression(self):
+        # 준비: 이미 실행 중인 임시 추론과 대기 중인 일반 추론을 구분한다.
         model = _BlockingWhisperModel()
         runtime = _TestWhisperRuntime(model)
         await runtime.warm_up()
@@ -1007,11 +1008,11 @@ class SharedSttRuntimeTest(unittest.IsolatedAsyncioTestCase):
         started = await asyncio.to_thread(model.started.wait, 1)
         self.assertTrue(started)
 
-        second_partial = asyncio.create_task(
+        standard = asyncio.create_task(
             runtime.transcribe(
                 b"two",
-                options={"label": "partial-2"},
-                priority=InferencePriority.PARTIAL,
+                options={"label": "standard"},
+                priority=InferencePriority.STANDARD,
             )
         )
         await asyncio.sleep(0)
@@ -1022,6 +1023,7 @@ class SharedSttRuntimeTest(unittest.IsolatedAsyncioTestCase):
                 priority=InferencePriority.PARTIAL,
             )
 
+        # 실행: 임시 요청은 거절하지만 확정 요청은 일반 요청보다 먼저 처리한다.
         final = asyncio.create_task(
             runtime.transcribe(
                 b"final",
@@ -1031,8 +1033,10 @@ class SharedSttRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.sleep(0)
         model.release.set()
-        await asyncio.gather(first_partial, second_partial, final)
-        self.assertEqual(model.calls, ["partial-1", "final", "partial-2"])
+        await asyncio.gather(first_partial, standard, final)
+
+        # 검증
+        self.assertEqual(model.calls, ["partial-1", "final", "standard"])
         await runtime.shutdown()
 
 

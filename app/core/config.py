@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     # Voice Translation V2 / Internal Streaming Pipeline
     # 시작 시 예열만 제어한다. 요청 수락은 실제 provider 준비와 용량으로 판단한다.
     AI_VOICE_WARM_UP: bool = True
+    # 외부 음성 전송은 명시적으로 선택한 경우에만 사용하며 자동 전환하지 않는다.
+    AI_VOICE_STT_PROVIDER: Literal["faster-whisper", "openai", "openai-transcribe"] = (
+        "faster-whisper"
+    )
+    # 실시간 임시 번역은 별도 품질/비용 검증 후 명시 활성화한다.
+    AI_VOICE_REALTIME_PREVIEW_ENABLED: bool = False
+    AI_VOICE_REALTIME_PREVIEW_MIN_AUDIO_MS: int = Field(default=1800, ge=1200, le=4000)
+    AI_VOICE_REALTIME_PREVIEW_MAX_CONCURRENCY: int = Field(default=4, ge=1, le=8)
     AI_VOICE_STT_MODEL_NAME: str = "base"
     AI_VOICE_STT_MODEL_REVISION: str | None = None
     AI_VOICE_STT_DEVICE: str = "cpu"
@@ -175,7 +183,7 @@ class Settings(BaseSettings):
     )
     AI_VOICE_LANGUAGE_MIN_CONFIDENCE: float = Field(default=0.50, ge=0, le=1)
     AI_VOICE_TRANSLATION_MODEL_NAME: str = "gemini-2.5-flash"
-    AI_VOICE_TRANSLATION_TIMEOUT_SECONDS: float = Field(default=3.0, gt=0)
+    AI_VOICE_TRANSLATION_TIMEOUT_SECONDS: float = Field(default=6.0, gt=0)
     AI_VOICE_TRANSLATION_TOTAL_TIMEOUT_SECONDS: float = Field(default=6.0, gt=0, le=20)
     AI_VOICE_TRANSLATION_MAX_RETRIES: int = Field(default=1, ge=0, le=3)
     AI_VOICE_TRANSLATION_MAX_CONCURRENCY: int = Field(default=4, ge=1, le=64)

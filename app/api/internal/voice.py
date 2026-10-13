@@ -106,8 +106,7 @@ async def stream_voice_translation(
         await websocket.close(code=4408, reason="STREAM_OPEN_TIMEOUT")
     except VoicePipelineException as exc:
         if context is not None:
-            await context.emit_failure(exc)
-            await context.close("PIPELINE_ERROR")
+            await context.fail_and_close(exc)
             if sender_task is not None:
                 await _wait_for_sender(sender_task)
         else:

@@ -122,6 +122,49 @@ class VoiceStreamResilienceTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(source_text, logged)
         self.assertNotIn(provider_message, logged)
 
+    async def test_worker_and_socket_failure_close_once_without_cancelled_control_future(self):
+        # 준비: 마지막 입력을 flush할 때 처리 대기열이 초과되는 운영 오류를 재현한다.
+        context = await self.create_context()
+        error = VoicePipelineException(
+            code=VoiceErrorCode.BACKPRESSURE,
+            stage=VoiceStage.STREAM,
+            message="Synthetic queue capacity failure",
+            retryable=True,
+        )
+        await self.feed(context, [pcm_frame(4000)] * 3)
+
+        # 실행: worker에서 실패한 flush를 WebSocket 경계가 다시 정리한다.
+        with patch.object(context, "_queue_finalization", side_effect=error):
+            with self.assertRaises(VoicePipelineException):
+                await asyncio.wait_for(context.flush("TEST"), timeout=1)
+            await asyncio.wait_for(context.fail_and_close(error), timeout=1)
+
+        # 검증: 실패와 종료 이벤트가 한 번씩 전달되고 취소 예외가 전파되지 않는다.
+        events = []
+        while not context._event_queue.empty():
+            events.append(await context.next_event())
+        self.assertTrue(context.closed)
+        self.assertEqual(sum(event.type == "VOICE_PIPELINE_FAILED" for event in events), 1)
+        self.assertEqual(sum(event.type == "STREAM_CLOSED" for event in events), 1)
+
+    async def test_busy_native_provider_skips_partial_before_speech_guard(self):
+        # 준비: 이전 요청을 취소했지만 native 추론이 아직 실행 중이다.
+        class BusyStt(FakeVoiceSttProvider):
+            partial_available = False
+
+        stt = BusyStt()
+        context = await self.create_context(stt=stt)
+
+        # 실행
+        await self.feed(context, [pcm_frame(4000)] * 8)
+        await asyncio.sleep(0)
+
+        # 검증: 불필요한 중간 추론은 건너뛰고 마지막 확정 인식은 수행한다.
+        self.assertEqual(stt.calls, [])
+        events = await self.closed_events(context)
+        self.assertIn("VOICE_PIPELINE_COMPLETED", [event.type for event in events])
+        self.assertTrue(all(stt.calls))
+
     async def test_noise_guard_blocks_partial_as_well_as_final_stt(self):
         # 준비: partial 주기를 넘기는 잡음을 음성 확인 단계에서 거절한다.
         stt = FakeVoiceSttProvider()

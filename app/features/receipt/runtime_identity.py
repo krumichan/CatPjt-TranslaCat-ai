@@ -16,6 +16,8 @@ _ROOT = Path(__file__).resolve().parents[3]
 _SOURCE_FILES = (
     "app/api/v1/receipt.py",
     "app/ai/model_policy.py",
+    "app/ai/providers/openai/client.py",
+    "app/ai/providers/openai/http_client.py",
     "app/core/config.py",
     "app/main.py",
     "app/features/receipt/currencies.py",

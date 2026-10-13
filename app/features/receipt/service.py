@@ -23,7 +23,7 @@ from app.ai.ports import (
     TextGenerationProvider,
 )
 from app.core.config import settings
-from app.features.receipt.parser import extract_receipt_candidates
+from app.features.receipt.parser import extract_receipt_candidates, normalize_date
 from app.features.receipt.prompts import (
     build_receipt_identity_recovery_prompt,
     build_receipt_text_analysis_prompt,
@@ -597,7 +597,11 @@ class ReceiptAnalysisService:
         financial_needed = (
             missing_amount
             or raw.get("detected_currency_code") is None
-            or raw.get("transaction_date") is None
+            # 이미 읽힌 원문 날짜를 코드로 변환할 수 있으면 금융 재판독을 추가하지 않는다.
+            or (
+                raw.get("transaction_date") is None
+                and normalize_date(raw.get("source_date")) is None
+            )
         )
         identity_needed = ReceiptAnalysisService._needs_identity_region_recovery(raw)
         if not financial_needed and not identity_needed:

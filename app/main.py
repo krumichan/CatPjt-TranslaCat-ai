@@ -13,6 +13,7 @@ from app.api.dependencies import (
     get_speech_synthesis_provider,
     get_voice_speech_evidence_guard,
     get_voice_stream_service,
+    get_voice_stt_provider,
     get_voice_translation_service,
 )
 from app.api.internal import internal_router
@@ -37,7 +38,10 @@ async def lifespan(app: FastAPI):
     if settings.AI_VOICE_WARM_UP:
         await get_voice_translation_service().warm_up()
         await get_voice_speech_evidence_guard().warm_up()
-        await get_speech_runtime().warm_up()
+        # 외부 Voice 인식에서는 사용하지 않는 CPU 모델을 미리 적재하지 않는다.
+        # 기존 파일 STT와 Speaking은 각 서비스의 기존 lazy warm-up을 유지한다.
+        if settings.AI_VOICE_STT_PROVIDER == "faster-whisper":
+            await get_speech_runtime().warm_up()
 
     if settings.OCR_WARM_UP and not settings.RECEIPT_VISION_DISABLE_OCR_WARMUP:
         await get_ocr_service().warm_up()
@@ -46,6 +50,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await get_voice_stream_service().shutdown()
+        shutdown_voice_stt = getattr(get_voice_stt_provider(), "shutdown", None)
+        if shutdown_voice_stt is not None:
+            await shutdown_voice_stt()
         await get_speech_runtime().shutdown()
         if get_speaking_speech_runtime() is not get_speech_runtime():
             await get_speaking_speech_runtime().shutdown()

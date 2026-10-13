@@ -50,19 +50,29 @@ class LanguageStateManager:
         self,
         language: str | None,
         confidence: float | None,
+        *,
+        trusted_language: bool = False,
     ) -> VoiceLanguageObservation:
         # 알려진 비지원 언어를 감지 실패와 구분해 이전 언어로 번역하지 않는다.
         detected = _normalize_supported_observation(language)
         normalized_confidence = normalize_confidence(confidence)
         if detected is None:
             normalized_confidence = None
+        trusted_detection = (
+            trusted_language and detected is not None and normalized_confidence is None
+        )
 
         if self.manual_language is not None:
             # 수동 선택은 언어 필터이며 STT 언어를 강제로 덮어쓰지 않는다.
             if (
                 detected is None
-                or normalized_confidence is None
-                or normalized_confidence < self.minimum_detection_confidence
+                or (
+                    not trusted_detection
+                    and (
+                        normalized_confidence is None
+                        or normalized_confidence < self.minimum_detection_confidence
+                    )
+                )
             ):
                 raise VoicePipelineException(
                     code=VoiceErrorCode.LANGUAGE_UNDETERMINED,
@@ -83,7 +93,7 @@ class LanguageStateManager:
                 locked_language=self.manual_language,
             )
 
-        # Unknown/no-evidence observations do not participate in hysteresis.
+        # 수치 신뢰도가 없는 공급자 감지는 번역에만 사용하고 잠금/전환 점수를 만들지 않는다.
         if detected is None or normalized_confidence is None:
             return VoiceLanguageObservation(
                 detected_language=detected,
@@ -126,17 +136,23 @@ class LanguageStateManager:
         *,
         detected_language: str | None,
         confidence: float | None,
+        trusted_language: bool = False,
     ) -> str:
         if self.manual_language is not None:
-            self.observe(detected_language, confidence)
+            self.observe(detected_language, confidence, trusted_language=trusted_language)
             return self.manual_language
 
         detected = _normalize_supported_observation(detected_language)
         normalized_confidence = normalize_confidence(confidence)
         if (
             detected is not None
-            and normalized_confidence is not None
-            and normalized_confidence >= self.minimum_detection_confidence
+            and (
+                (trusted_language and normalized_confidence is None)
+                or (
+                    normalized_confidence is not None
+                    and normalized_confidence >= self.minimum_detection_confidence
+                )
+            )
         ):
             return detected
 

@@ -8,9 +8,13 @@ from app.features.receipt.service import ReceiptAnalysisService
 from app.features.speech_to_text import FasterWhisperRuntime
 from app.features.speech_to_text.runtime_policy import speaking_runtime
 from app.features.translation.service import TranslationService
+from app.features.voice_translation.hosted_stt import OpenAIWhisperVoiceSttProvider
+from app.features.voice_translation.preview_translation import OpenAIVoicePreviewTranslationProvider
+from app.features.voice_translation.realtime_preview import OpenAILivePreviewProvider
 from app.features.voice_translation.speech_detector import SileroSpeechEvidenceGuard
 from app.features.voice_translation.stream import VoiceStreamApplicationService
-from app.features.voice_translation.stt import FasterWhisperVoiceSttProvider
+from app.features.voice_translation.stt import FasterWhisperVoiceSttProvider, VoiceSttProvider
+from app.features.voice_translation.transcribe_stt import OpenAITranscribeVoiceSttProvider
 from app.features.voice_translation.translation import VoiceTranslationService
 from app.services.ocr_service import OCRService
 from app.services.stt_service import STTService
@@ -38,13 +42,38 @@ _receipt_analysis_service = ReceiptAnalysisService(
     ai_provider=_ai_provider,
 )
 
-_voice_stt_provider = FasterWhisperVoiceSttProvider(_speech_runtime)
+# 외부 음성 인식은 명시적 설정일 때만 선택하며 로컬 오류에 따라 자동 전환하지 않는다.
+_voice_stt_provider: VoiceSttProvider
+if settings.AI_VOICE_STT_PROVIDER == "openai-transcribe":
+    _voice_stt_provider = OpenAITranscribeVoiceSttProvider()
+elif settings.AI_VOICE_STT_PROVIDER == "openai":
+    _voice_stt_provider = OpenAIWhisperVoiceSttProvider()
+else:
+    _voice_stt_provider = FasterWhisperVoiceSttProvider(_speech_runtime)
 _voice_speech_evidence_guard = SileroSpeechEvidenceGuard()
 _voice_translation_service = VoiceTranslationService(_ai_provider)
 _voice_stream_service = VoiceStreamApplicationService(
     stt_provider=_voice_stt_provider,
     translation_service=_voice_translation_service,
     speech_evidence_guard=_voice_speech_evidence_guard,
+    preview_provider=(
+        OpenAILivePreviewProvider(settings.OPENAI_API_KEY)
+        if settings.AI_VOICE_REALTIME_PREVIEW_ENABLED else None
+    ),
+    preview_language_provider=(
+        OpenAITranscribeVoiceSttProvider()
+        if settings.AI_VOICE_REALTIME_PREVIEW_ENABLED else None
+    ),
+    preview_translation_service=(
+        VoiceTranslationService(
+            OpenAIVoicePreviewTranslationProvider(_model_execution_provider),
+            max_retries=0,
+            max_concurrency=2,
+            timeout_seconds=3,
+            total_timeout_seconds=3,
+        )
+        if settings.AI_VOICE_REALTIME_PREVIEW_ENABLED else None
+    ),
 )
 
 
@@ -86,6 +115,10 @@ def get_receipt_analysis_service() -> ReceiptAnalysisService:
 
 def get_voice_translation_service() -> VoiceTranslationService:
     return _voice_translation_service
+
+
+def get_voice_stt_provider() -> VoiceSttProvider:
+    return _voice_stt_provider
 
 
 def get_voice_speech_evidence_guard() -> SileroSpeechEvidenceGuard:

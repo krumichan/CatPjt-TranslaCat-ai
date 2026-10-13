@@ -24,6 +24,8 @@ class VoiceSttResult:
     provider: str
     model: str
     model_version: str | None = None
+    # 공급자의 명시적 언어 감지를 신뢰하되 수치 신뢰도를 만들어 내지는 않는다.
+    trusted_language: bool = False
 
 
 class VoiceSttProvider(Protocol):
@@ -54,6 +56,10 @@ class FasterWhisperVoiceSttProvider:
     @property
     def model_version(self) -> str:
         return self.runtime.model_version
+
+    @property
+    def partial_available(self) -> bool:
+        return self.runtime.partial_available
 
     async def transcribe_pcm(
         self,

@@ -25,6 +25,7 @@ from app.ai.ports import (
 )
 from app.ai.prompt_registry import get_prompt_rule
 from app.ai.providers.openai.error_diagnostics import safe_openai_error_metadata
+from app.ai.providers.openai.http_client import create_openai_http_client
 from app.ai.providers.openai.response import (
     OpenAIProviderResponseError as OpenAIProviderResponseError,
 )
@@ -54,6 +55,7 @@ class OpenAIService:
                 # Application services already own retry/idempotency policy. Avoid
                 # hidden SDK retries that could multiply cost or duplicate work.
                 max_retries=0,
+                http_client=create_openai_http_client(),
             )
         return self._client
 

@@ -192,12 +192,25 @@ class VoiceSpeechStartedEvent(VoiceUtteranceEventBase):
 
 class VoiceTranscriptPartialEvent(VoiceUtteranceEventBase):
     type: Literal["TRANSCRIPT_PARTIAL"] = "TRANSCRIPT_PARTIAL"
-    revision: int = Field(..., ge=1)
+    revision: int = Field(..., ge=1, le=9_007_199_254_740_991, strict=True)
     source_text: str = Field(..., min_length=1, max_length=10_000)
+    translated_text: str | None = Field(default=None, min_length=1, max_length=10_000)
+    target_language: str | None = Field(default=None, min_length=2, max_length=3)
     detected_language: str | None = Field(default=None, min_length=2, max_length=3)
     language_confidence: float | None = Field(default=None, ge=0, le=1)
     started_at_offset_ms: int = Field(..., ge=0)
     ended_at_offset_ms: int = Field(..., ge=0)
+
+    @model_validator(mode="after")
+    def validate_preview_translation(self) -> VoiceTranscriptPartialEvent:
+        if (
+            self.target_language is not None
+            and self.target_language not in SUPPORTED_VOICE_LANGUAGES
+        ):
+            raise ValueError("Unsupported preview targetLanguage")
+        if self.translated_text is not None and self.target_language is None:
+            raise ValueError("targetLanguage is required for a translated preview")
+        return self
 
 
 class VoiceFinalEventBase(VoiceUtteranceEventBase):

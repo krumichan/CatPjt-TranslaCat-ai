@@ -32,6 +32,7 @@ class SileroSpeechEvidenceGuard:
         self._ready = not self.enabled
         self._warm_up_lock = asyncio.Lock()
         self._inference_semaphore = asyncio.Semaphore(1)
+        self._native_tasks: set[asyncio.Task[bool]] = set()
 
     @property
     def ready(self) -> bool:
@@ -55,8 +56,22 @@ class SileroSpeechEvidenceGuard:
             return bool(pcm_bytes)
         if not self._ready:
             raise RuntimeError("Silero speech evidence guard is not ready")
-        async with self._inference_semaphore:
-            return await asyncio.to_thread(self._has_speech_sync, pcm_bytes)
+        # timeout은 호출자만 해제한다. native 작업이 끝날 때까지 추론 자리를 보존한다.
+        await self._inference_semaphore.acquire()
+        if not self._ready:
+            self._inference_semaphore.release()
+            raise RuntimeError("Silero speech evidence guard is not ready")
+        task = asyncio.create_task(asyncio.to_thread(self._has_speech_sync, pcm_bytes))
+        self._native_tasks.add(task)
+        task.add_done_callback(self._finish_native_inference)
+        return await asyncio.shield(task)
+
+    def _finish_native_inference(self, task: asyncio.Task[bool]) -> None:
+        self._native_tasks.discard(task)
+        self._inference_semaphore.release()
+        # 호출자가 취소된 뒤의 예외도 회수해 미처리 task 경고로 남기지 않는다.
+        if not task.cancelled():
+            task.exception()
 
     async def shutdown(self) -> None:
         self._ready = not self.enabled

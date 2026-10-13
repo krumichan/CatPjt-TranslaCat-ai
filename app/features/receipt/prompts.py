@@ -27,7 +27,11 @@ For each receipt:
   a decimal point.
 - payment_breakdown: every payment allocation as payment_type, positive decimal
   amount string, short printed evidence, and duplicate_group. Loyalty points are
-  LOYALTY_POINTS. Card/cash/e-money/gift/voucher allocations use their matching type.
+  LOYALTY_POINTS only when actually redeemed/used to pay this purchase. Point balances,
+  earned/awarded points and tax-exclusive purchase amounts are NOT redeemed points.
+  Card/cash/e-money/gift/voucher allocations use their matching type.
+  Read the settled payment line independently: never make tax or subtotal a payment,
+  or invent a remaining card amount merely to balance the purchase total.
   The same payment printed both in a top payment summary and a lower card detail is
   ONE allocation: include both observations only when useful, with the exact same
   duplicate_group so the server can collapse them. Never combine separate payments.

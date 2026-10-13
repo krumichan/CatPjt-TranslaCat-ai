@@ -2,12 +2,13 @@
 
 import math
 import re
+import unicodedata
 from datetime import date, time
 from decimal import Decimal
 from typing import Any
 
 from app.features.receipt.currencies import normalize_currency
-from app.features.receipt.parser import normalize_amount, normalize_date
+from app.features.receipt.parser import has_japanese_era, normalize_amount, normalize_date
 from app.schemas.receipt import (
     ReceiptAmountReviewStatus,
     ReceiptAnalysisItem,
@@ -38,6 +39,29 @@ _INTERNAL_RECEIPT_WARNINGS = {
 }
 
 
+_NON_PAYMENT_EVIDENCE = re.compile(
+    r"税抜|税額|消費税|小計|\b(?:subtotal|tax amount|vat amount|before tax|tax exclusive)\b|"
+    r"\b(?:tax|vat)\s*[:：]?\s*[0-9]|세전|부가세|소계",
+    re.IGNORECASE,
+)
+_UNREDEEMED_POINTS_EVIDENCE = re.compile(
+    r"前回残|残高|保有|累計|獲得|付与|(?:お?買上|お?買い上げ)ポイント|"
+    r"\b(?:earned|earning|balance|available|accumulated)\b|적립|잔여|잔액|보유",
+    re.IGNORECASE,
+)
+
+
+def _payment_evidence_conflicts(payment_type: ReceiptPaymentType, evidence: str | None) -> bool:
+    if evidence is None:
+        return False
+    text = unicodedata.normalize("NFKC", evidence)
+    # 모델이 생성한 근거의 모순만 검출한다. 문자열의 일치를 원본 판독 성공으로 보지는 않는다.
+    return bool(_NON_PAYMENT_EVIDENCE.search(text)) or (
+        payment_type == ReceiptPaymentType.LOYALTY_POINTS
+        and bool(_UNREDEEMED_POINTS_EVIDENCE.search(text))
+    )
+
+
 def _non_negative_amount(value: object, currency: str | None) -> Decimal | None:
     if value in (0, "0", "0.0", "0.00"):
         return Decimal("0")
@@ -66,11 +90,17 @@ def _payment_items(
         if amount is None:
             warnings.append("INVALID_PAYMENT_AMOUNT")
             continue
+        evidence = _text(raw.get("evidence"), 160)
+        if _payment_evidence_conflicts(payment_type, evidence):
+            # 금액/관측 문구를 보존하되 확정되지 않은 분류를 BE에도 전달한다.
+            # warnings만 추가하면 BE의 독립 재계산이 잘못된 금액을 다시 READY로 만들 수 있다.
+            payment_type = ReceiptPaymentType.UNKNOWN
+            warnings.append("PAYMENT_EVIDENCE_CONFLICT")
         result.append(
             ReceiptPaymentItem(
                 payment_type=payment_type,
                 amount=amount,
-                evidence=_text(raw.get("evidence"), 160),
+                evidence=evidence,
                 duplicate_group=_text(raw.get("duplicate_group"), 80),
             )
         )
@@ -376,7 +406,7 @@ def validate_item(raw: object, index: int, options: ReceiptAnalysisOptions) -> R
         date_order = "DMY"
         warnings.append("DATE_ORDER_FROM_TURKISH_LOCALE")
     date_value = normalize_date(source_date or raw.get("transaction_date"), date_order)
-    if source_date and date_value is None:
+    if source_date and date_value is None and not has_japanese_era(source_date):
         # For named months in any script the provider can supply the ISO form.
         # Numeric dates embedded in surrounding text still require an explicit order.
         numeric_date = re.search(

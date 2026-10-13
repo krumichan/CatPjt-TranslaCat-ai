@@ -27,6 +27,11 @@ from app.features.voice_translation.language import (
     normalize_confidence,
     normalize_voice_language,
 )
+from app.features.voice_translation.realtime_preview import (
+    VoicePreviewJob,
+    VoicePreviewProvider,
+    VoicePreviewUpdate,
+)
 from app.features.voice_translation.speech_detector import (
     PassThroughSpeechEvidenceGuard,
     SileroSpeechEvidenceGuard,
@@ -56,6 +61,7 @@ from app.schemas.voice_translation import (
 
 logger = logging.getLogger(__name__)
 _MAX_TRANSLATION_CONTEXT_GAP_MS = 5000
+_MAX_TRANSLATION_CONTEXT_SILENCE_SEGMENTS = 256
 
 
 def _is_repetitive_transcript(text: str) -> bool:
@@ -87,6 +93,15 @@ class _CloseCommand:
 
 
 @dataclass
+class _PreparedUtterance:
+    stt_result: VoiceSttResult | None = None
+    stt_finalize_ms: int = 0
+    speech_evidence_ms: int = 0
+    no_speech: bool = False
+    error: VoicePipelineException | None = None
+
+
+@dataclass
 class _FinalizationJob:
     identity: _UtteranceIdentity
     utterance: VadUtterance
@@ -97,6 +112,7 @@ class _FinalizationJob:
     source_text: str | None = None
     detected_language: str | None = None
     language_confidence: float | None = None
+    preparation_task: asyncio.Task[_PreparedUtterance] | None = None
 
 
 _StreamCommand: TypeAlias = _AudioCommand | _FlushCommand | _CloseCommand
@@ -112,11 +128,20 @@ class VoiceChannelStreamContext:
         stt_provider: VoiceSttProvider,
         translation_service: VoiceTranslationService,
         speech_evidence_guard: VoiceSpeechEvidenceGuard,
+        preview_provider: VoicePreviewProvider | None = None,
+        preview_language_provider: VoiceSttProvider | None = None,
+        preview_translation_service: VoiceTranslationService | None = None,
+        preview_slots: asyncio.Semaphore | None = None,
     ) -> None:
         self.stream_open = stream_open
         self.stt_provider = stt_provider
         self.translation_service = translation_service
         self.speech_evidence_guard = speech_evidence_guard
+        self._preview_provider = preview_provider
+        self._preview_language_provider = preview_language_provider
+        self._preview_translation_service = preview_translation_service
+        self._preview_slots = preview_slots or asyncio.Semaphore(1)
+        self._preview_jobs: dict[str, VoicePreviewJob] = {}
 
         frame_duration_ms = stream_open.audio_format.frame_duration_ms
         input_capacity = max(
@@ -131,6 +156,8 @@ class VoiceChannelStreamContext:
         )
         self._pending_final_jobs: dict[str, _FinalizationJob] = {}
         self._pending_final_audio_ms = 0
+        self._active_final_job: _FinalizationJob | None = None
+        self._prefetched_job: _FinalizationJob | None = None
         self._validator = AudioFrameValidator(
             stream_open.audio_format,
             minimum_frame_duration_ms=settings.AI_VOICE_MIN_FRAME_DURATION_MS,
@@ -166,6 +193,7 @@ class VoiceChannelStreamContext:
         self._last_completed_source_language: str | None = None
         self._last_completed_sequence: int | None = None
         self._last_completed_end_offset_ms: int | None = None
+        self._context_no_speech_sequences: set[int] = set()
 
         self._worker_task: asyncio.Task[None] | None = None
         self._final_worker_task: asyncio.Task[None] | None = None
@@ -185,6 +213,7 @@ class VoiceChannelStreamContext:
         self._close_future: asyncio.Future[None] | None = None
         self._termination_lock = asyncio.Lock()
         self._termination_task: asyncio.Task[None] | None = None
+        self._pipeline_failure_emitted = False
 
     @property
     def closed(self) -> bool:
@@ -291,7 +320,7 @@ class VoiceChannelStreamContext:
         future: asyncio.Future[None] = loop.create_future()
         self._flush_future = future
         await self._input_queue.put(_FlushCommand(reason=reason, future=future))
-        await future
+        await asyncio.shield(future)
 
     async def close(self, reason: str) -> None:
         if self._close_future is not None:
@@ -304,7 +333,7 @@ class VoiceChannelStreamContext:
         future: asyncio.Future[None] = loop.create_future()
         self._close_future = future
         await self._input_queue.put(_CloseCommand(reason=reason, future=future))
-        await future
+        await asyncio.shield(future)
         if self._worker_task is not None:
             await asyncio.gather(self._worker_task, return_exceptions=True)
 
@@ -331,6 +360,10 @@ class VoiceChannelStreamContext:
         identity: _UtteranceIdentity | None = None,
     ) -> None:
         identity = identity or self._current_identity
+        # 실패한 구간을 건너 이전 성공 원문의 의미를 다음 발화에 이어 붙이지 않는다.
+        self._clear_translation_context()
+        if identity is not None:
+            self._context_no_speech_sequences.discard(identity.sequence)
         # 원문/공급자 오류 메시지를 남기지 않고 실패 단계와 발화를 추적한다.
         logger.warning(
             "Voice pipeline failed session=%s channel=%s code=%s stage=%s "
@@ -382,20 +415,28 @@ class VoiceChannelStreamContext:
                 self.stream_open.channel.value,
                 type(exc).__name__,
             )
-            try:
-                await self.emit_failure(
-                    exc
-                    if isinstance(exc, VoicePipelineException)
-                    else VoicePipelineException(
-                        code=VoiceErrorCode.INTERNAL_ERROR,
-                        stage=VoiceStage.STREAM,
-                        message="Voice Stream 처리 중 내부 오류가 발생했습니다.",
-                        retryable=True,
-                    )
+            await self.fail_and_close(
+                exc
+                if isinstance(exc, VoicePipelineException)
+                else VoicePipelineException(
+                    code=VoiceErrorCode.INTERNAL_ERROR,
+                    stage=VoiceStage.STREAM,
+                    message="Voice Stream 처리 중 내부 오류가 발생했습니다.",
+                    retryable=True,
                 )
-            except Exception:
+            )
+
+    async def fail_and_close(self, error: VoicePipelineException) -> None:
+        # worker와 WebSocket 경계가 같은 실패를 받아도 한 번만 알린다.
+        # 실패한 worker에 CLOSE를 다시 넣으면 정리 중 취소된 Future를 기다리게 된다.
+        self._accepting_audio = False
+        if not self._pipeline_failure_emitted and not self._closed:
+            self._pipeline_failure_emitted = True
+            try:
+                await self.emit_failure(error)
+            except VoicePipelineException:
                 pass
-            await self._terminate_stream()
+        await self._terminate_stream()
 
     async def _terminate_stream(self) -> None:
         async with self._termination_lock:
@@ -499,7 +540,15 @@ class VoiceChannelStreamContext:
         assembler = self._current_assembler
         if identity is None or assembler is None:
             return
+        if self._preview_provider is not None and self._preview_language_provider is not None:
+            self._offer_realtime_preview(partial, identity)
+            return
         if self._pending_final_jobs:
+            return
+        if not getattr(self.stt_provider, "supports_partial", True):
+            return
+        # 취소된 native 추론도 실제로 끝날 때까지 자리를 차지하므로 공급자의 여유를 확인한다.
+        if not getattr(self.stt_provider, "partial_available", True):
             return
         if self._partial_task is not None and not self._partial_task.done():
             return
@@ -511,6 +560,60 @@ class VoiceChannelStreamContext:
         self._partial_task = task
         self._background_tasks.add(task)
         task.add_done_callback(self._partial_done)
+
+    def _offer_realtime_preview(self, partial: VadPartial, identity: _UtteranceIdentity) -> None:
+        existing = self._preview_jobs.get(identity.key)
+        if existing is not None:
+            existing.offer(partial)
+            return
+        if (
+            partial.ended_at_offset_ms - partial.started_at_offset_ms
+            < settings.AI_VOICE_REALTIME_PREVIEW_MIN_AUDIO_MS
+            or len(self._preview_jobs) >= 2
+            or len(self._pending_final_jobs) >= 2
+            or self._preview_provider is None
+            or self._preview_language_provider is None
+            or self._preview_translation_service is None
+        ):
+            return
+
+        async def emit_preview(update: VoicePreviewUpdate) -> None:
+            # 최종 원문 이벤트가 소유권을 제거한다. 큐의 여유도 확정 결과에 남긴다.
+            if (
+                self._closed
+                or identity.key not in self._preview_jobs
+                or self._event_queue.qsize() >= 48
+            ):
+                return
+            await self._emit(VoiceTranscriptPartialEvent(
+                event_id=self._event_id(),
+                session_id=self.stream_open.session_id,
+                channel=self.stream_open.channel,
+                utterance_key=identity.key,
+                utterance_sequence=identity.sequence,
+                revision=update.revision,
+                source_text=update.source_text,
+                translated_text=update.translated_text,
+                target_language=self.stream_open.target_language,
+                detected_language=update.detected_language,
+                started_at_offset_ms=update.started_at_offset_ms,
+                ended_at_offset_ms=update.ended_at_offset_ms,
+            ))
+
+        job = VoicePreviewJob(
+            partial,
+            provider=self._preview_provider,
+            language_provider=self._preview_language_provider,
+            translation_service=self._preview_translation_service,
+            speech_guard=self.speech_evidence_guard,
+            target_language=self.stream_open.target_language,
+            manual_language=self.stream_open.manual_source_language,
+            emit=emit_preview,
+            slots=self._preview_slots,
+        )
+        self._preview_jobs[identity.key] = job
+        self._background_tasks.add(job.task)
+        job.task.add_done_callback(self._partial_done)
 
     async def _run_partial(
         self,
@@ -631,6 +734,13 @@ class VoiceChannelStreamContext:
         identity = self._current_identity
         if identity is None:
             return
+        preview = self._preview_jobs.get(identity.key)
+        if preview is not None:
+            preview.offer(VadPartial(
+                pcm_bytes=utterance.pcm_bytes,
+                started_at_offset_ms=utterance.started_at_offset_ms,
+                ended_at_offset_ms=utterance.ended_at_offset_ms,
+            ), final=True)
 
         # 확정 추론과 오디오 소비를 분리하되 저장하는 PCM과 발화 수를 함께 제한한다.
         audio_ms = len(utterance.pcm_bytes) // 32
@@ -662,10 +772,52 @@ class VoiceChannelStreamContext:
         self._pending_final_audio_ms += audio_ms
         self._final_queue.put_nowait(job)
         self._clear_current_utterance()
+        self._schedule_stt_prefetch()
+
+    def _schedule_stt_prefetch(self) -> None:
+        # 외부 STT만 바로 다음 한 발화를 준비한다. 언어 상태/번역 문맥은 건드리지 않는다.
+        active = self._active_final_job
+        if (
+            not getattr(self.stt_provider, "supports_stt_prefetch", False)
+            or active is None
+            or active.stage != VoiceStage.TRANSLATION
+            or self._prefetched_job is not None
+            or self._closed
+        ):
+            return
+        following = next(
+            (
+                job for job in self._pending_final_jobs.values()
+                if job.identity.sequence > active.identity.sequence
+            ),
+            None,
+        )
+        if following is None:
+            return
+        self._prefetched_job = following
+        following.preparation_task = asyncio.create_task(
+            self._prepare_prefetched_utterance(following),
+            name=f"voice-stt-prefetch-{following.identity.key}",
+        )
+        following.preparation_task.add_done_callback(self._consume_preparation_result)
+
+    async def _prepare_prefetched_utterance(self, job: _FinalizationJob) -> _PreparedUtterance:
+        # 미리 시작해도 원래 수락 시점의 전체 기한과 STT 기한을 그대로 적용한다.
+        async with asyncio.timeout_at(job.deadline):
+            self._check_final_job_ownership(job)
+            return await self._prepare_utterance(job)
+
+    @staticmethod
+    def _consume_preparation_result(task: asyncio.Task[_PreparedUtterance]) -> None:
+        if not task.cancelled():
+            task.exception()
 
     async def _run_finalizations(self) -> None:
         while True:
             job = await self._final_queue.get()
+            self._active_final_job = job
+            if self._prefetched_job is job:
+                self._prefetched_job = None
             try:
                 # 같은 채널의 확정 순서와 언어 상태는 하나의 worker에서 보존한다.
                 if asyncio.get_running_loop().time() >= job.deadline:
@@ -695,8 +847,11 @@ class VoiceChannelStreamContext:
                     ),
                 )
             finally:
+                if job.preparation_task is not None and not job.preparation_task.done():
+                    job.preparation_task.cancel()
                 if self._pending_final_jobs.pop(job.identity.key, None) is not None:
                     self._pending_final_audio_ms -= len(job.utterance.pcm_bytes) // 32
+                self._active_final_job = None
                 self._final_queue.task_done()
 
     async def _drain_final_jobs(self) -> None:
@@ -722,6 +877,11 @@ class VoiceChannelStreamContext:
         # 소유권을 먼저 제거하므로 뒤늦게 돌아온 결과도 상태를 변경할 수 없다.
         self._pending_final_jobs.clear()
         self._pending_final_audio_ms = 0
+        self._prefetched_job = None
+        # 선행 STT도 같은 소유권에 속한다. 종료 후 늦은 결과가 이벤트를 만들지 못한다.
+        for job in pending:
+            if job.preparation_task is not None and not job.preparation_task.done():
+                job.preparation_task.cancel()
         if self._final_worker_task is not None:
             worker = self._final_worker_task
             self._final_worker_task = None
@@ -830,69 +990,91 @@ class VoiceChannelStreamContext:
             return original
         return replace(candidate, language_confidence=None)
 
-    async def _finalize_utterance(self, job: _FinalizationJob) -> None:
-        identity = job.identity
+    async def _prepare_utterance(self, job: _FinalizationJob) -> _PreparedUtterance:
         utterance = job.utterance
 
         # 음량 보정은 한 번만 수행해 VAD 확인과 STT가 같은 파형을 사용한다.
         normalized_pcm = normalize_voice_pcm(utterance.pcm_bytes)
         job.stage = VoiceStage.VAD
-        speech_evidence = await self._confirm_speech_evidence(normalized_pcm, identity=identity)
+        try:
+            has_speech, speech_evidence_ms = await self._confirm_speech_evidence(normalized_pcm)
+        except VoicePipelineException as exc:
+            self._check_final_job_ownership(job)
+            return _PreparedUtterance(error=exc)
         self._check_final_job_ownership(job)
-        if speech_evidence is None:
-            return
-        has_speech, speech_evidence_ms = speech_evidence
         if not has_speech:
-            await self._emit_no_speech(
-                VadNoSpeech(
-                    started_at_offset_ms=utterance.started_at_offset_ms,
-                    ended_at_offset_ms=utterance.ended_at_offset_ms,
-                ),
-                identity=identity,
-                clear_current=False,
-            )
-            return
+            return _PreparedUtterance(no_speech=True)
 
         stt_started = time.perf_counter()
         job.stage = VoiceStage.STT
         try:
             stt_result = await asyncio.wait_for(
-                self._transcribe_final_with_context(normalized_pcm),
+                self.stt_provider.transcribe_pcm(
+                    normalized_pcm, language=None, is_final=True, initial_prompt=None
+                )
+                if getattr(self.stt_provider, "supports_stt_prefetch", False)
+                else self._transcribe_final_with_context(normalized_pcm),
                 timeout=settings.AI_VOICE_STT_FINAL_TIMEOUT_SECONDS,
             )
         except TimeoutError:
             self._check_final_job_ownership(job)
-            await self.emit_failure(
-                VoicePipelineException(
+            return _PreparedUtterance(
+                error=VoicePipelineException(
                     code=VoiceErrorCode.STT_TIMEOUT,
                     stage=VoiceStage.STT,
                     message="Final STT 응답 시간이 초과되었습니다.",
                     retryable=True,
                 ),
-                identity=identity,
             )
-            return
         except VoicePipelineException as exc:
             self._check_final_job_ownership(job)
-            await self.emit_failure(exc, identity=identity)
-            return
+            return _PreparedUtterance(error=exc)
         except Exception:
             self._check_final_job_ownership(job)
-            await self.emit_failure(
-                VoicePipelineException(
+            return _PreparedUtterance(
+                error=VoicePipelineException(
                     code=VoiceErrorCode.STT_FAILED,
                     stage=VoiceStage.STT,
                     message="Final STT 처리에 실패했습니다.",
                     retryable=True,
                 ),
-                identity=identity,
             )
-            return
 
         stt_finalize_ms = max(0, int((time.perf_counter() - stt_started) * 1000))
         self._check_final_job_ownership(job)
         source_text = stt_result.text.strip()
         if not source_text:
+            return _PreparedUtterance(no_speech=True)
+        if len(source_text) > 10_000:
+            return _PreparedUtterance(
+                error=VoicePipelineException(
+                    code=VoiceErrorCode.STT_FAILED,
+                    stage=VoiceStage.STT,
+                    message="Final STT 결과가 허용 길이를 초과했습니다.",
+                    retryable=False,
+                ),
+            )
+        return _PreparedUtterance(
+            stt_result=stt_result,
+            stt_finalize_ms=stt_finalize_ms,
+            speech_evidence_ms=speech_evidence_ms,
+        )
+
+    async def _finalize_utterance(self, job: _FinalizationJob) -> None:
+        identity = job.identity
+        utterance = job.utterance
+
+        # 준비 결과의 성공/무음/오류는 모두 순서대로 소비해 발화 이벤트 순서를 유지한다.
+        prepared = (
+            await job.preparation_task
+            if job.preparation_task is not None
+            else await self._prepare_utterance(job)
+        )
+        self._check_final_job_ownership(job)
+        if prepared.error is not None:
+            await self.emit_failure(prepared.error, identity=identity)
+            return
+        if prepared.no_speech:
             await self._emit_no_speech(
                 VadNoSpeech(
                     started_at_offset_ms=utterance.started_at_offset_ms,
@@ -902,17 +1084,12 @@ class VoiceChannelStreamContext:
                 clear_current=False,
             )
             return
-        if len(source_text) > 10_000:
-            await self.emit_failure(
-                VoicePipelineException(
-                    code=VoiceErrorCode.STT_FAILED,
-                    stage=VoiceStage.STT,
-                    message="Final STT 결과가 허용 길이를 초과했습니다.",
-                    retryable=False,
-                ),
-                identity=identity,
-            )
-            return
+        stt_result = prepared.stt_result
+        if stt_result is None:
+            raise RuntimeError("Missing prepared STT result")
+        source_text = stt_result.text.strip()
+        stt_finalize_ms = prepared.stt_finalize_ms
+        speech_evidence_ms = prepared.speech_evidence_ms
 
         # 원문은 보존하되 비지원/선택 불일치 언어를 번역하거나 잠금에 반영하지 않는다.
         job.source_text = source_text
@@ -922,6 +1099,7 @@ class VoiceChannelStreamContext:
             observation = self._language.observe(
                 stt_result.language,
                 stt_result.language_confidence,
+                trusted_language=stt_result.trusted_language,
             )
         except VoicePipelineException as exc:
             language_error = exc
@@ -959,8 +1137,10 @@ class VoiceChannelStreamContext:
             source_language = self._language.resolve_translation_source(
                 detected_language=observation.detected_language,
                 confidence=observation.confidence,
+                trusted_language=stt_result.trusted_language,
             )
-            # 인접한 성공 문장만 같은 언어의 번역 문맥으로 제공한다. 별도 모델 호출은 없다.
+            # 확인된 무음만 건너 같은 언어의 가까운 성공 원문을 제공한다.
+            # 미확인/실패 구간은 문맥을 연결하는 근거로 사용하지 않는다.
             gap_ms = (
                 max(0, utterance.started_at_offset_ms - self._last_completed_end_offset_ms)
                 if self._last_completed_end_offset_ms is not None
@@ -969,11 +1149,13 @@ class VoiceChannelStreamContext:
             previous_source_text = (
                 self._last_completed_source_text
                 if self._last_completed_source_language == source_language
-                and self._last_completed_sequence == identity.sequence - 1
+                and observation.detected_language == source_language
+                and self._has_only_silence_context_gap(identity.sequence)
                 and gap_ms is not None
                 and gap_ms <= _MAX_TRANSLATION_CONTEXT_GAP_MS
                 else None
             )
+            self._schedule_stt_prefetch()
             translation = await self.translation_service.translate(
                 source_text=source_text,
                 source_language=source_language,
@@ -1049,10 +1231,20 @@ class VoiceChannelStreamContext:
                 ),
             )
         )
-        self._last_completed_source_text = source_text
-        self._last_completed_source_language = source_language
-        self._last_completed_sequence = identity.sequence
-        self._last_completed_end_offset_ms = utterance.ended_at_offset_ms
+        # 과거 잠금으로 번역한 미확정 언어는 다음 문장의 문맥 근거로 재사용하지 않는다.
+        if observation.detected_language == source_language:
+            self._last_completed_source_text = source_text
+            self._last_completed_source_language = source_language
+            self._last_completed_sequence = identity.sequence
+            self._last_completed_end_offset_ms = utterance.ended_at_offset_ms
+        else:
+            self._clear_translation_context()
+        # VAD 무음은 앞선 최종 번역보다 먼저 올 수 있어 미래 sequence의 판정은 보존한다.
+        self._context_no_speech_sequences = {
+            sequence
+            for sequence in self._context_no_speech_sequences
+            if sequence > identity.sequence
+        }
         logger.info(
             "Voice utterance completed session=%s channel=%s sequence=%s "
             "duration_ms=%s detected_language=%s total_after_speech_ms=%s "
@@ -1069,6 +1261,24 @@ class VoiceChannelStreamContext:
             settings.AI_VOICE_SCHEMA_VERSION,
         )
 
+    def _has_only_silence_context_gap(self, sequence: int) -> bool:
+        previous = self._last_completed_sequence
+        if (
+            previous is None
+            or not 0 < sequence - previous <= len(self._context_no_speech_sequences) + 1
+        ):
+            return False
+        return all(
+            skipped in self._context_no_speech_sequences
+            for skipped in range(previous + 1, sequence)
+        )
+
+    def _clear_translation_context(self) -> None:
+        self._last_completed_source_text = None
+        self._last_completed_source_language = None
+        self._last_completed_sequence = None
+        self._last_completed_end_offset_ms = None
+
     def _check_final_job_ownership(self, job: _FinalizationJob) -> None:
         if job.identity.key not in self._pending_final_jobs:
             raise asyncio.CancelledError
@@ -1083,9 +1293,7 @@ class VoiceChannelStreamContext:
     async def _confirm_speech_evidence(
         self,
         pcm_bytes: bytes,
-        *,
-        identity: _UtteranceIdentity,
-    ) -> tuple[bool, int] | None:
+    ) -> tuple[bool, int]:
         started = time.perf_counter()
         try:
             has_speech = await asyncio.wait_for(
@@ -1110,9 +1318,7 @@ class VoiceChannelStreamContext:
             latency_ms = max(0, int((time.perf_counter() - started) * 1000))
             return has_speech, latency_ms
 
-        if identity.key in self._pending_final_jobs:
-            await self.emit_failure(error, identity=identity)
-        return None
+        raise error
 
     async def _emit_no_speech(
         self,
@@ -1124,6 +1330,9 @@ class VoiceChannelStreamContext:
         identity = identity or self._current_identity
         if identity is not None:
             self._mark_finalized(identity.key)
+            self._context_no_speech_sequences.add(identity.sequence)
+            if len(self._context_no_speech_sequences) > _MAX_TRANSLATION_CONTEXT_SILENCE_SEGMENTS:
+                self._context_no_speech_sequences.remove(min(self._context_no_speech_sequences))
         await self._emit(
             VoiceNoSpeechEvent(
                 event_id=self._event_id(),
@@ -1155,6 +1364,9 @@ class VoiceChannelStreamContext:
         self._closed = True
 
     async def _cancel_background_tasks(self) -> None:
+        for preview in self._preview_jobs.values():
+            preview.cancel()
+        self._preview_jobs.clear()
         # partial 공급자가 취소 응답을 늦추더라도 스트림 종료는 지연하지 않는다.
         tasks = [task for task in self._background_tasks if not task.done()]
         for task in tasks:
@@ -1177,6 +1389,15 @@ class VoiceChannelStreamContext:
         self._last_partial_inference_ms = None
 
     async def _emit(self, event: VoiceEventBase) -> None:
+        # 원문 확정/실패/무음은 모두 임시 번역보다 우선한다.
+        if isinstance(event, (
+            VoiceTranscriptFinalEvent, VoicePipelineCompletedEvent,
+            VoicePipelineFailedEvent, VoiceNoSpeechEvent,
+        )):
+            key = getattr(event, "utterance_key", None)
+            preview = self._preview_jobs.pop(key, None) if isinstance(key, str) else None
+            if preview is not None:
+                preview.cancel()
         try:
             self._event_queue.put_nowait(event)
         except asyncio.QueueFull as exc:
@@ -1202,11 +1423,17 @@ class VoiceChannelStreamContext:
             try:
                 command = self._input_queue.get_nowait()
             except asyncio.QueueEmpty:
-                return
+                break
             if isinstance(command, (_FlushCommand, _CloseCommand)):
                 if not command.future.done():
-                    command.future.cancel()
+                    command.future.set_result(None)
             self._input_queue.task_done()
+
+        # worker가 이미 꺼낸 제어 명령은 큐에 없지만 호출자는 같은 Future를 기다린다.
+        # 종료 오류는 이벤트로 전달하고 제어 대기는 종료 관찰 후 정상적으로 해제한다.
+        for future in (self._flush_future, self._close_future):
+            if future is not None and not future.done():
+                future.set_result(None)
 
     @staticmethod
     def _event_id() -> str:
@@ -1220,10 +1447,17 @@ class VoiceStreamApplicationService:
         stt_provider: VoiceSttProvider,
         translation_service: VoiceTranslationService,
         speech_evidence_guard: VoiceSpeechEvidenceGuard | None = None,
+        preview_provider: VoicePreviewProvider | None = None,
+        preview_language_provider: VoiceSttProvider | None = None,
+        preview_translation_service: VoiceTranslationService | None = None,
     ) -> None:
         self.stt_provider = stt_provider
         self.translation_service = translation_service
         self.speech_evidence_guard = speech_evidence_guard or PassThroughSpeechEvidenceGuard()
+        self.preview_provider = preview_provider
+        self.preview_language_provider = preview_language_provider
+        self.preview_translation_service = preview_translation_service
+        self._preview_slots = asyncio.Semaphore(settings.AI_VOICE_REALTIME_PREVIEW_MAX_CONCURRENCY)
         self._streams: dict[str, VoiceChannelStreamContext] = {}
         self._accepting_streams = True
         self._lock = asyncio.Lock()
@@ -1285,6 +1519,10 @@ class VoiceStreamApplicationService:
                 stt_provider=self.stt_provider,
                 translation_service=self.translation_service,
                 speech_evidence_guard=self.speech_evidence_guard,
+                preview_provider=self.preview_provider,
+                preview_language_provider=self.preview_language_provider,
+                preview_translation_service=self.preview_translation_service,
+                preview_slots=self._preview_slots,
             )
             self._streams[key] = context
         await context.start()
@@ -1309,6 +1547,11 @@ class VoiceStreamApplicationService:
             )
         async with self._lock:
             self._streams.clear()
+        # 별도로 생성한 언어 확인 클라이언트만 닫고 주 STT의 소유권은 보존한다.
+        if self.preview_language_provider is not self.stt_provider:
+            shutdown = getattr(self.preview_language_provider, "shutdown", None)
+            if shutdown is not None:
+                await shutdown()
 
     async def _close_for_shutdown(self, stream: VoiceChannelStreamContext) -> None:
         try:

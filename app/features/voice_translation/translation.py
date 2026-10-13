@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from dataclasses import dataclass
+from uuid import uuid4
 
 from app.ai.model_policy import get_model_name_for_task
 from app.ai.ports import VoiceTranslationGenerationResult, VoiceTranslationProvider
@@ -25,6 +27,7 @@ from app.schemas.voice_translation import (
 
 _HTML_PATTERN = re.compile(r"<\s*/?\s*[a-zA-Z!][^>]*>")
 _KANJI_PATTERN = re.compile(r"[一-龯々〆ヵヶ]")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -110,7 +113,10 @@ class VoiceTranslationService:
                 model=self._model_metadata(self.model_name),
             )
 
-        # 동시성 슬롯 대기와 재시도를 합쳐 하나의 전체 기한을 적용한다.
+        # 슬롯 대기와 재시도를 합친 전체 기한은 유지하고, 원문 없이 호출별 지연을 추적한다.
+        operation_id = uuid4().hex
+        outcome = "cancelled"
+        failure_code: str | None = None
         try:
             async with asyncio.timeout(self.total_timeout_seconds):
                 provider_result = await self._translate_with_retries(
@@ -118,9 +124,26 @@ class VoiceTranslationService:
                     source_language=source_language,
                     target_language=target_language,
                     previous_source_text=previous_source_text,
+                    operation_id=operation_id,
                 )
+            outcome = "provider_completed"
         except TimeoutError as exc:
-            raise map_translation_provider_exception(exc) from exc
+            mapped = map_translation_provider_exception(exc)
+            outcome = "timeout"
+            failure_code = mapped.code.value
+            raise mapped from exc
+        except VoicePipelineException as exc:
+            outcome = "failed"
+            failure_code = exc.code.value
+            raise
+        finally:
+            logger.info(
+                "Voice translation finished operation=%s total_ms=%s outcome=%s code=%s",
+                operation_id,
+                max(0, int((time.perf_counter() - started) * 1000)),
+                outcome,
+                failure_code,
+            )
 
         translated_text = provider_result.translated_text.strip()
         self._validate_plain_text(translated_text)
@@ -149,11 +172,21 @@ class VoiceTranslationService:
         source_language: str,
         target_language: str,
         previous_source_text: str | None,
+        operation_id: str,
     ) -> VoiceTranslationGenerationResult:
+        queued_at = time.perf_counter()
         async with self._translation_slots:
+            logger.info(
+                "Voice translation admitted operation=%s slot_wait_ms=%s",
+                operation_id,
+                max(0, int((time.perf_counter() - queued_at) * 1000)),
+            )
             provider_result = None
             last_error: VoicePipelineException | None = None
             for attempt in range(self.max_retries + 1):
+                attempt_started = time.perf_counter()
+                attempt_outcome = "cancelled"
+                failure_code: str | None = None
                 try:
                     provider_result = await asyncio.wait_for(
                         self.provider.translate_voice_utterance(
@@ -164,11 +197,33 @@ class VoiceTranslationService:
                         ),
                         timeout=self.timeout_seconds,
                     )
+                    attempt_outcome = "completed"
                     break
+                except TimeoutError as exc:
+                    # 응답 대기를 소비한 요청을 취소한 뒤 같은 작업을 즉시 다시 시작하지 않는다.
+                    # 빠른 공급자 오류의 재시도만 아래 경로에서 남은 전체 기한 안에 허용한다.
+                    mapped = map_translation_provider_exception(exc)
+                    attempt_outcome = "timeout"
+                    failure_code = mapped.code.value
+                    raise mapped from exc
                 except VoicePipelineException as exc:
                     mapped = exc
+                    attempt_outcome = "provider_failed"
+                    failure_code = mapped.code.value
                 except Exception as exc:
                     mapped = map_translation_provider_exception(exc)
+                    attempt_outcome = "provider_failed"
+                    failure_code = mapped.code.value
+                finally:
+                    logger.info(
+                        "Voice translation attempt operation=%s attempt=%s "
+                        "duration_ms=%s outcome=%s code=%s",
+                        operation_id,
+                        attempt + 1,
+                        max(0, int((time.perf_counter() - attempt_started) * 1000)),
+                        attempt_outcome,
+                        failure_code,
+                    )
 
                 last_error = mapped
                 if not mapped.retryable or attempt >= self.max_retries:

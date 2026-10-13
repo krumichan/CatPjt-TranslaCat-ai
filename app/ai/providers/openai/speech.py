@@ -8,6 +8,7 @@ import wave
 from openai import AsyncOpenAI
 
 from app.ai.ports import SpeechSynthesisResult
+from app.ai.providers.openai.http_client import create_openai_http_client
 from app.core.config import settings
 
 OPENAI_SPEECH_POLICY_VERSION = "openai-speech-v1"
@@ -121,6 +122,7 @@ class OpenAISpeechService:
                 api_key=settings.OPENAI_API_KEY,
                 timeout=settings.OPENAI_SPEECH_TIMEOUT_SECONDS,
                 max_retries=0,
+                http_client=create_openai_http_client(),
             )
         return self._client
 

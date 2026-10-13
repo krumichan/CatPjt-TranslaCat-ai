@@ -1,6 +1,7 @@
 """Conservative parsing: uncertain separators/dates are never silently corrected."""
 
 import re
+import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -96,10 +97,47 @@ def normalize_amount(value: object, currency_code: str | None = None) -> Decimal
     return amount
 
 
+_JAPANESE_ERAS = {
+    "令和": (date(2019, 5, 1), None),
+    "平成": (date(1989, 1, 8), date(2019, 4, 30)),
+    "昭和": (date(1926, 12, 25), date(1989, 1, 7)),
+}
+_ERA_DATE = re.compile(
+    r"(令和|平成|昭和)\s*(元|[0-9]{1,2})\s*年\s*([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*日"
+)
+
+
+def has_japanese_era(value: object) -> bool:
+    return isinstance(value, str) and value.strip().startswith(tuple(_JAPANESE_ERAS))
+
+
+def _normalize_era_date(text: str) -> str | None:
+    match = _ERA_DATE.fullmatch(text)
+    if not match:
+        return None
+    era, era_year, month, day = match.groups()
+    year = 1 if era_year == "元" else int(era_year)
+    if year < 1:
+        return None
+    start, end = _JAPANESE_ERAS[era]
+
+    # 연도 덧셈뿐 아니라 실제 개원일·종료일과 윤년까지 확인한다.
+    try:
+        result = date(start.year + year - 1, int(month), int(day))
+    except ValueError:
+        return None
+    if result < start or (end is not None and result > end):
+        return None
+    return result.isoformat()
+
+
 def normalize_date(value: object, date_order: str | None = None) -> str | None:
     if not isinstance(value, str):
         return None
-    text = value.strip()
+    text = unicodedata.normalize("NFKC", value).strip()
+    # 원문에 명시된 연호는 로컬에서 변환한다. 연호 없는 짧은 연도는 추측하지 않는다.
+    if has_japanese_era(text):
+        return _normalize_era_date(text)
     ymd = re.fullmatch(r"(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})日?", text)
     if ymd:
         year, month, day = map(int, ymd.groups())

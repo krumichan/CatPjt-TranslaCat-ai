@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from importlib.metadata import PackageNotFoundError, version
@@ -57,6 +58,10 @@ class _InferenceRequest:
     audio: Any
     options: dict[str, Any]
     future: asyncio.Future[WhisperRuntimeResult]
+    priority: InferencePriority
+    queued_at: float
+    native_started_at: float | None = None
+    native_finished_at: float | None = None
 
 
 class FasterWhisperRuntime:
@@ -112,6 +117,8 @@ class FasterWhisperRuntime:
         )
         self._sequence = itertools.count()
         self._workers: list[asyncio.Task[None]] = []
+        self._active_inferences = 0
+        self._partial_not_before = 0.0
 
     @property
     def ready(self) -> bool:
@@ -120,6 +127,20 @@ class FasterWhisperRuntime:
     @property
     def queued_requests(self) -> int:
         return self._queue.qsize()
+
+    @property
+    def active_inferences(self) -> int:
+        return self._active_inferences
+
+    @property
+    def partial_available(self) -> bool:
+        # 호출자 취소와 무관하게 native 추론이 점유한 worker와 대기 중인 확정을 우선한다.
+        return (
+            self.ready
+            and self._active_inferences < self.max_concurrency
+            and self._queue.empty()
+            and time.perf_counter() >= self._partial_not_before
+        )
 
     @property
     def model_version(self) -> str:
@@ -169,7 +190,11 @@ class FasterWhisperRuntime:
         if not self.ready:
             raise SpeechRuntimeNotReady("Speech runtime is not ready")
 
-        # Keep one queue slot available for Final STT whenever possible.
+        # 임시 자막은 빈 추론 자리에서만 계산한다. 취소된 native 작업 뒤로 쌓지 않는다.
+        if priority == InferencePriority.PARTIAL and not self.partial_available:
+            raise SpeechRuntimeQueueFull("Partial STT deferred while inference capacity is busy")
+
+        # 확정 음성이 들어올 수 있도록 일반 요청도 마지막 대기 자리를 사용하지 않는다.
         if priority != InferencePriority.FINAL and self._queue.qsize() >= max(
             0, self.queue_capacity - 1
         ):
@@ -177,7 +202,13 @@ class FasterWhisperRuntime:
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[WhisperRuntimeResult] = loop.create_future()
-        request = _InferenceRequest(audio=audio, options=options, future=future)
+        request = _InferenceRequest(
+            audio=audio,
+            options=options,
+            future=future,
+            priority=priority,
+            queued_at=time.perf_counter(),
+        )
         try:
             self._queue.put_nowait((int(priority), next(self._sequence), request))
         except asyncio.QueueFull as exc:
@@ -239,14 +270,14 @@ class FasterWhisperRuntime:
         del index
         while True:
             _, _, request = await self._queue.get()
+            inference_started = False
+            error_type: str | None = None
             try:
                 if request.future.cancelled():
                     continue
-                result = await asyncio.to_thread(
-                    self._transcribe_sync,
-                    request.audio,
-                    request.options,
-                )
+                self._active_inferences += 1
+                inference_started = True
+                result = await asyncio.to_thread(self._run_inference, request)
                 if not request.future.done():
                     request.future.set_result(result)
             except asyncio.CancelledError:
@@ -254,10 +285,52 @@ class FasterWhisperRuntime:
                     request.future.cancel()
                 raise
             except Exception as exc:
+                error_type = type(exc).__name__
                 if not request.future.done():
                     request.future.set_exception(exc)
             finally:
+                if inference_started:
+                    self._active_inferences -= 1
+                    self._record_inference(request, error_type=error_type)
                 self._queue.task_done()
+
+    def _run_inference(self, request: _InferenceRequest) -> WhisperRuntimeResult:
+        # 실제 native 실행 시간을 분리해 executor/추론 대기와 계산 병목을 구별한다.
+        request.native_started_at = time.perf_counter()
+        try:
+            return self._transcribe_sync(request.audio, request.options)
+        finally:
+            request.native_finished_at = time.perf_counter()
+
+    def _record_inference(self, request: _InferenceRequest, *, error_type: str | None) -> None:
+        started = request.native_started_at
+        finished = request.native_finished_at
+        if started is None or finished is None:
+            return
+        inference_seconds = max(0.0, finished - started)
+
+        # 갱신 주기보다 느린 임시 인식은 계산 시간만큼 쉬어 확정 요청에 여유를 준다.
+        # 상한은 기존 최종 STT 기한이며 요청 timeout 자체를 늘리지 않는다.
+        if request.priority == InferencePriority.PARTIAL and (
+            request.future.cancelled()
+            or inference_seconds > settings.AI_VOICE_PARTIAL_INTERVAL_MS / 1000
+        ):
+            cooldown = min(
+                settings.AI_VOICE_STT_FINAL_TIMEOUT_SECONDS,
+                max(settings.AI_VOICE_PARTIAL_INTERVAL_MS / 1000, inference_seconds),
+            )
+            self._partial_not_before = max(self._partial_not_before, finished + cooldown)
+
+        # 음성·원문·공급자 메시지 없이 대기/추론 시간과 실패 종류만 남긴다.
+        logger.info(
+            "Shared STT inference priority=%s queue_wait_ms=%s inference_ms=%s "
+            "cancelled=%s error_type=%s",
+            request.priority.name,
+            max(0, int((started - request.queued_at) * 1000)),
+            int(inference_seconds * 1000),
+            request.future.cancelled(),
+            error_type or "none",
+        )
 
     def _transcribe_sync(
         self,
