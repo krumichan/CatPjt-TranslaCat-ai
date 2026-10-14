@@ -340,7 +340,13 @@ def test_selected_settings_file_drives_http_authentication_without_provider(inpu
 
     environment, secret = inputs
     launcher.prepare_environment(environment, secret, "Development", True)
-    configuration = Settings(_env_file=environment)
+    # 소설 수신도 항상 검증하므로 테스트 앱의 별도 소설 자격증명을 준비한다.
+    # CHAT/공통 키 허용과 잘못된 범위 거부 assertion은 그대로 유지한다.
+    configuration = Settings(
+        _env_file=environment,
+        NOVEL_AUTH_ENVIRONMENT="Development",
+        NOVEL_SERVER_API_KEY="local-contract-only-novel-credential-0002",
+    )
     with patch("app.core.config_logger.setup_logging"):
         from app import main as application
     monkeypatch.setattr(application, "settings", configuration)

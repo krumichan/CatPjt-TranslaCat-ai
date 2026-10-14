@@ -8,6 +8,7 @@ from app.features.receipt.service import ReceiptAnalysisService
 from app.features.speech_to_text import FasterWhisperRuntime
 from app.features.speech_to_text.runtime_policy import speaking_runtime
 from app.features.translation.service import TranslationService
+from app.features.voice_translation.final_translation import OpenAIVoiceFinalTranslationProvider
 from app.features.voice_translation.hosted_stt import OpenAIWhisperVoiceSttProvider
 from app.features.voice_translation.preview_translation import OpenAIVoicePreviewTranslationProvider
 from app.features.voice_translation.realtime_preview import OpenAILivePreviewProvider
@@ -51,7 +52,11 @@ elif settings.AI_VOICE_STT_PROVIDER == "openai":
 else:
     _voice_stt_provider = FasterWhisperVoiceSttProvider(_speech_runtime)
 _voice_speech_evidence_guard = SileroSpeechEvidenceGuard()
-_voice_translation_service = VoiceTranslationService(_ai_provider)
+# 운영 OpenAI 경로는 후리가나 출력 대기 없이 확정 번역을 전달한다. 다른 공급자는 보존한다.
+_voice_translation_service = VoiceTranslationService(
+    OpenAIVoiceFinalTranslationProvider(_model_execution_provider)
+    if settings.AI_TEXT_PROVIDER == "openai" else _ai_provider
+)
 _voice_stream_service = VoiceStreamApplicationService(
     stt_provider=_voice_stt_provider,
     translation_service=_voice_translation_service,

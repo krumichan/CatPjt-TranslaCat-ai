@@ -30,6 +30,7 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "EPISODE": AiTaskModelPolicy(AiModelTier.LUNA, "none", 8192),
     "VOICE": AiTaskModelPolicy(AiModelTier.LUNA, "none", 2048),
     "VOICE_TRANSLATION": AiTaskModelPolicy(AiModelTier.LUNA, "none", 2048),
+    "VOICE_TRANSLATION_TEXT": AiTaskModelPolicy(AiModelTier.LUNA, "none", 768),
     "VOICE_TRANSLATION_PREVIEW": AiTaskModelPolicy(AiModelTier.LUNA, "none", 768),
     "RECEIPT_ANALYSIS": AiTaskModelPolicy(AiModelTier.LUNA, "none", 16384),
 }

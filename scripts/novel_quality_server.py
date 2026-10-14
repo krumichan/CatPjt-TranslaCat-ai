@@ -268,6 +268,49 @@ class BudgetedLegacyExecutor:
     def __init__(self, upstream, ledger, phase="explore"):
         self.upstream, self.ledger, self.phase = upstream, ledger, phase
 
+    async def call(self, *, type_name, data, schema):
+        """기존 작품 정보/목차 API도 같은 장부를 거친다. 제품 모델 정책은 바꾸지 않는다."""
+        from app.ai.model_policy import get_model_name_for_task, get_task_model_policy
+        from app.ai.prompt_registry import get_prompt_rule
+
+        # 소설 목차와 작품 정보에 필요한 두 작업만 허용한다.
+        if type_name not in {"RANK", "NOVEL"}:
+            raise CampaignBudgetExceeded("QA_TRANSLATION_TASK_FORBIDDEN")
+        model = get_model_name_for_task(type_name)
+        policy = get_task_model_policy(type_name)
+        body = json.dumps(
+            {"data": data, "schema": schema, "rule": get_prompt_rule(type_name)},
+            ensure_ascii=False,
+        )
+        amount = text_reservation(model, len(body.encode()) + 4096, policy.max_output_tokens)
+
+        async with provider_slot(self.ledger.path.parent):
+            attempt = self.ledger.reserve("NOVEL_LEGACY", model, amount, metadata={
+                "phase": self.phase, "traceId": TRACE.get(), "sdkMaxRetries": 0,
+                "typeName": type_name, "requestSha256": hashlib.sha256(body.encode()).hexdigest(),
+                "transport": "PUBLIC_TRANSLATE_BATCH",
+            })
+            started = time.monotonic()
+            recording = ACTIVE_LEGACY_ATTEMPT.set(attempt)
+            try:
+                result = await self.upstream.call_with_metadata(
+                    type_name=type_name, data=data, schema=schema
+                )
+                if result.provider != "openai" or result.model != model:
+                    raise CampaignBudgetExceeded("UNEXPECTED_PROVIDER_IDENTITY")
+                self.ledger.finish(
+                    attempt, status="COMPLETED", elapsed=time.monotonic() - started,
+                    accounted=text_reservation(model, result.input_tokens, result.output_tokens),
+                )
+                return result.data
+            except BaseException as exc:
+                self.ledger.finish(attempt,
+                    status="CANCELLED" if isinstance(exc, asyncio.CancelledError) else "FAILED",
+                    elapsed=time.monotonic() - started, failure=type(exc).__name__)
+                raise
+            finally:
+                ACTIVE_LEGACY_ATTEMPT.reset(recording)
+
     async def execute_explicit(self, **kwargs):
         from app.ai.model_policy import get_model_name_for_tier
 
@@ -389,9 +432,14 @@ def serve(port: int, phase: str, stage_budget: str | None = None, stage_sha256: 
     from app.ai.providers.openai.client import OpenAIService
     from app.ai.providers.openai.profile_execution import ProfileExecutor
     from app.ai.providers.openai.speech import OpenAISpeechService
-    from app.api.dependencies import get_model_execution_provider, get_speech_execution_provider
+    from app.api.dependencies import (
+        get_model_execution_provider,
+        get_speech_execution_provider,
+        get_translation_service,
+    )
     from app.api.internal.model_profile_execution import get_profile_executor
     from app.core.config import settings
+    from app.features.translation.service import TranslationService
     from app.main import app
 
     # 이 로컬 프로세스에만 별도 키를 적용한다. env/운영 설정 파일은 수정하지 않는다.
@@ -424,6 +472,9 @@ def serve(port: int, phase: str, stage_budget: str | None = None, stage_sha256: 
     app.dependency_overrides[get_profile_executor] = lambda: profile
     app.dependency_overrides[get_model_execution_provider] = lambda: legacy
     app.dependency_overrides[get_speech_execution_provider] = lambda: speech
+    # 공개 목차 경로를 열기 전에 반드시 예약 wrapper를 연결한다.
+    translation = TranslationService(provider=legacy)
+    app.dependency_overrides[get_translation_service] = lambda: translation
     app.add_middleware(LegacyChildTraceMiddleware)
 
     @app.middleware("http")
@@ -450,6 +501,7 @@ def serve(port: int, phase: str, stage_budget: str | None = None, stage_sha256: 
             ("POST", "/internal/v1/model/execute-profile"),
             ("POST", "/internal/v1/model/execute-profile-stream"),
             ("POST", "/internal/v1/speech/synthesize"),
+            ("POST", "/api/v1/translate/batch"),
             ("GET", "/"),
         }:
             return JSONResponse(status_code=404, content={"code": "QA_ROUTE_DISABLED"})

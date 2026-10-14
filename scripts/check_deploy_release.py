@@ -70,6 +70,8 @@ if args[0] == "rename":
     end()
 if args[0] == "run":
     if fault == "run": end(11)
+    assert args[args.index("--env") + 1] == "AI_VOICE_STT_PROVIDER=openai"
+    assert "AI_VOICE_REALTIME_PREVIEW_ENABLED=true" in args
     target = args[args.index("--name") + 1]
     state[target] = {"running": True, "sha": sha, "env": "new-env"}
     end(0, "new-container-id")
@@ -81,6 +83,9 @@ if args[0] == "rm":
     state.pop(args[-1], None)
     end()
 if args[0] == "logs": end(0, "simulated log")
+if args[0] == "exec":
+    assert args[1:] == [container, "python", "scripts/check_voice_release.py"]
+    end(1 if fault == "voice_readiness" else 0, "verified" if fault != "voice_readiness" else "")
 end(99, "unsupported probe call: " + repr(args))
 """
 
@@ -97,6 +102,7 @@ def main() -> None:
         for name in (
             "checkout",
             "environment",
+            "voice_environment",
             "network",
             "build",
             "stop",
@@ -104,6 +110,7 @@ def main() -> None:
             "run",
             "revision",
             "health",
+            "voice_readiness",
             "success",
         )
     ]
@@ -144,7 +151,14 @@ def main() -> None:
                 "DEPLOY_ENV_B64": (
                     "%%%bad-base64"
                     if fault == "environment"
-                    else base64.b64encode(b"FAKE=probe\n").decode()
+                    else base64.b64encode(
+                        b"FAKE=probe\n" if fault == "voice_environment"
+                        else (
+                            b"FAKE=probe\nOPENAI_API_KEY=synthetic\n"
+                            b"AI_VOICE_STT_PROVIDER=faster-whisper\n"
+                            b"AI_VOICE_REALTIME_PREVIEW_ENABLED=false\n"
+                        )
+                    ).decode()
                 ),
                 "DEPLOY_HEALTH_ATTEMPTS": "2",
                 "DEPLOY_HEALTH_DELAY_SECONDS": "0",
@@ -188,7 +202,7 @@ def main() -> None:
                     assert "CRITICAL" in process.stderr and after[NAME]["env"] == "old-env"
                 else:
                     assert after == original, (fault, original, after, process.stderr)
-                if fault in ("checkout", "environment", "network", "build"):
+                if fault in ("checkout", "environment", "voice_environment", "network", "build"):
                     assert not any(call[:2] == ["docker", "stop"] for call in calls), (fault, calls)
             results.append(
                 {

@@ -124,6 +124,15 @@ def build_openai_text_config(
 
     normalized_schema = normalize_openai_response_schema(schema)
     assert normalized_schema is not None
+    # 기존 번역 서비스는 배열을 주고받지만 OpenAI 전송 schema의 루트는 object여야 한다.
+    # 내부 전송에만 감싸며 호출자의 schema와 배열 요소 조건은 변경하지 않는다.
+    if normalized_schema.get("type") == "array":
+        normalized_schema = {
+            "type": "object",
+            "properties": {"items": normalized_schema},
+            "required": ["items"],
+            "additionalProperties": False,
+        }
     config["format"] = {
         "type": "json_schema",
         "name": schema_name(type_name),

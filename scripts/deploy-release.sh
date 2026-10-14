@@ -9,6 +9,10 @@ SHA="${1:?Pass the exact release commit SHA}"
 : "${DEPLOY_ENV_B64:?Pass a base64 encoded environment file}"
 IMAGE="translacat-ai:$SHA"
 CONTAINER="fastapi-app"
+# 운영에서 승인·검증한 인식 경로는 저장소 정책으로 유지한다.
+# 비밀 환경 파일에서 누락되거나 오래된 값이 있어도 CPU 인식으로 되돌아가지 않는다.
+VOICE_STT_PROVIDER="openai"
+VOICE_REALTIME_PREVIEW_ENABLED="true"
 BACKUP="${CONTAINER}-rollback-$(date -u +%Y%m%dT%H%M%S)-$$"
 ENV_FILE="$(mktemp .deploy-env.XXXXXX)"
 HAD_PREVIOUS=false
@@ -48,6 +52,10 @@ trap 'rollback 143' TERM
 
 printf '%s' "$DEPLOY_ENV_B64" | base64 --decode > "$ENV_FILE"
 test -s "$ENV_FILE"
+grep -Eq '^OPENAI_API_KEY=[^[:space:]]+' "$ENV_FILE" || {
+    echo "Production Voice requires a configured OpenAI credential" >&2
+    false
+}
 docker network inspect translacat-network >/dev/null 2>&1 || docker network create translacat-network
 # All potentially destructive steps are after a successful immutable-tag build.
 docker build --label "org.opencontainers.image.revision=$SHA" -t "$IMAGE" .
@@ -63,6 +71,8 @@ fi
 REPLACEMENT_ATTEMPTED=true
 docker run -d --name "$CONTAINER" --restart unless-stopped \
     --network translacat-network --env-file "$ENV_FILE" \
+    --env "AI_VOICE_STT_PROVIDER=$VOICE_STT_PROVIDER" \
+    --env "AI_VOICE_REALTIME_PREVIEW_ENABLED=$VOICE_REALTIME_PREVIEW_ENABLED" \
     -v translacat-ai-model-cache:/root/.cache/huggingface -p 8000:8000 "$IMAGE"
 
 actual_revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CONTAINER")"
@@ -74,6 +84,8 @@ DELAY="${DEPLOY_HEALTH_DELAY_SECONDS:-5}"
 for ((attempt = 1; attempt <= ATTEMPTS; attempt++)); do
     status="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null || true)"
     if [[ "$status" == "healthy" ]]; then
+        # 일반 health는 CPU 인식도 정상으로 본다. 실제 모델까지 확인한 뒤 배포 성공으로 판정한다.
+        docker exec "$CONTAINER" python scripts/check_voice_release.py
         echo "Released $SHA as $CONTAINER."
         if [ "$BACKED_UP" = true ]; then
             echo "Rollback container retained (stopped): $BACKUP"

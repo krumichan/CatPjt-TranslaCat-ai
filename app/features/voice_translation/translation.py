@@ -147,14 +147,18 @@ class VoiceTranslationService:
 
         translated_text = provider_result.translated_text.strip()
         self._validate_plain_text(translated_text)
-        reading_tokens, warnings = self._validate_reading_tokens(
-            source_text=source_text,
-            source_language=source_language,
-            tokens=[
-                VoiceReadingToken(surface=token.surface, reading=token.reading)
-                for token in provider_result.source_reading_tokens
-            ],
-        )
+        # 읽기를 생성하지 않는 실시간 공급자의 빈 목록은 정상이다. 기존 읽기 검사는 유지한다.
+        reading_tokens: list[VoiceReadingToken] = []
+        warnings: list[VoiceWarning] = []
+        if getattr(self.provider, "generates_source_reading_tokens", True):
+            reading_tokens, warnings = self._validate_reading_tokens(
+                source_text=source_text,
+                source_language=source_language,
+                tokens=[
+                    VoiceReadingToken(surface=token.surface, reading=token.reading)
+                    for token in provider_result.source_reading_tokens
+                ],
+            )
         latency_ms = max(0, int((time.perf_counter() - started) * 1000))
         return VoiceTranslationResult(
             translated_text=translated_text,

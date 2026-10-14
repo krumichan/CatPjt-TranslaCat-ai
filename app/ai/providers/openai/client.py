@@ -294,6 +294,19 @@ class OpenAIService:
             )
             data = decode_response(response, structured=schema is not None)
 
+            # 일반 번역의 최상위 배열은 provider 전송용 object에서만 꺼낸다.
+            # LL/CHAT의 명시 schema 경로와 기존 object 응답은 건드리지 않는다.
+            if schema is not None and schema.get("type") in ("ARRAY", "array"):
+                if (
+                    not isinstance(data, dict)
+                    or set(data) != {"items"}
+                    or not isinstance(data["items"], list)
+                ):
+                    raise OpenAIProviderResponseError(
+                        "OpenAI array envelope is invalid", reason_code="ARRAY_ENVELOPE_INVALID"
+                    )
+                data = data["items"]
+
             usage = getattr(response, "usage", None)
             incomplete = getattr(response, "incomplete_details", None)
             incomplete_reason = (
