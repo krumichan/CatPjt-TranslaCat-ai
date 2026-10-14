@@ -84,6 +84,9 @@ if args[0] == "rm":
     end()
 if args[0] == "logs": end(0, "simulated log")
 if args[0] == "exec":
+    if args[1:] == ["-i", container, "python", "-", "--require-idle"]:
+        assert "def verify_voice_idle" in sys.stdin.read()
+        end(1 if fault in ("voice_busy", "voice_state_unavailable") else 0)
     assert args[1:] == [container, "python", "scripts/check_voice_release.py"]
     end(1 if fault == "voice_readiness" else 0, "verified" if fault != "voice_readiness" else "")
 end(99, "unsupported probe call: " + repr(args))
@@ -105,6 +108,8 @@ def main() -> None:
             "voice_environment",
             "network",
             "build",
+            "voice_busy",
+            "voice_state_unavailable",
             "stop",
             "rename",
             "run",
@@ -131,6 +136,11 @@ def main() -> None:
             )
             (root / "state.json").write_text(json.dumps(original))
             (root / "calls.jsonl").write_text("")
+            (root / "scripts").mkdir()
+            shutil.copyfile(
+                ROOT / "scripts" / "check_voice_release.py",
+                root / "scripts" / "check_voice_release.py",
+            )
             for command in ("git", "docker", "curl", "sleep"):
                 executable = bins / command
                 executable.write_text(
@@ -202,8 +212,12 @@ def main() -> None:
                     assert "CRITICAL" in process.stderr and after[NAME]["env"] == "old-env"
                 else:
                     assert after == original, (fault, original, after, process.stderr)
-                if fault in ("checkout", "environment", "voice_environment", "network", "build"):
+                if fault in ("checkout", "environment", "voice_environment", "network", "build",
+                             "voice_busy", "voice_state_unavailable"):
                     assert not any(call[:2] == ["docker", "stop"] for call in calls), (fault, calls)
+                if fault in ("voice_busy", "voice_state_unavailable"):
+                    assert not any(call[0] == "docker" and call[1] in
+                                   {"stop", "rename", "run", "rm", "start"} for call in calls)
             results.append(
                 {
                     "fault": fault,

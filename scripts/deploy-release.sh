@@ -61,8 +61,13 @@ docker network inspect translacat-network >/dev/null 2>&1 || docker network crea
 docker build --label "org.opencontainers.image.revision=$SHA" -t "$IMAGE" .
 
 if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
-    HAD_PREVIOUS=true
     PREVIOUS_RUNNING="$(docker inspect --format '{{.State.Running}}' "$CONTAINER")"
+    if [ "$PREVIOUS_RUNNING" = true ]; then
+        # 재생 중인 Voice가 있거나 상태 확인에 실패하면 중지 전에 배포를 실패시킨다.
+        # 이전 이미지에도 최신 검사 코드를 stdin으로 전달하며 비밀 값은 컨테이너 안에서만 읽는다.
+        docker exec -i "$CONTAINER" python - --require-idle < scripts/check_voice_release.py
+    fi
+    HAD_PREVIOUS=true
     docker stop --time 30 "$CONTAINER"
     docker rename "$CONTAINER" "$BACKUP"
     BACKED_UP=true
