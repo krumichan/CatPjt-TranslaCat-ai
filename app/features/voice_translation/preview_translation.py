@@ -18,6 +18,8 @@ class _PreviewTranslationPayload(BaseModel):
 class OpenAIVoicePreviewTranslationProvider:
     """임시 번역만 생성하며 확정 번역의 읽기 토큰 생성과 예산을 분리한다."""
 
+    generates_source_reading_tokens = False
+
     def __init__(self, provider: StructuredTextGenerationProvider) -> None:
         self._provider = provider
 
