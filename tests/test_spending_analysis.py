@@ -293,7 +293,7 @@ async def test_incidental_medical_location_and_car_rental_are_not_protected_cost
     assert len(result.findings) == 1
 
 
-@pytest.mark.parametrize("token", ["refId: tx-1", "storeName", "coverage.isPartial=true"])
+@pytest.mark.parametrize("token", ["storeName", "coverage.isPartial=true"])
 @pytest.mark.asyncio
 async def test_internal_metadata_cannot_leak_into_visible_analysis(token):
     # 준비
@@ -307,6 +307,31 @@ async def test_internal_metadata_cannot_leak_into_visible_analysis(token):
         await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(request_data()))
     assert error.value.status_code == 502
     provider.call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_valid_inline_evidence_is_shown_as_actual_dates_and_unknown_evidence_is_rejected():
+    # 준비: 공개 화면에는 내부 인용 번호 대신 이미 연결된 거래 날짜를 표시한다.
+    output = response_data()
+    output["findings"][0]["reason"] += " (증거: refIds: tx-1, tx-2). tx-1과 tx-2를 비교할 수 있습니다."
+    provider = AsyncMock()
+    provider.call.return_value = output
+    request = SpendingAnalysisRequest.model_validate(request_data())
+
+    # 실행
+    result = await SpendingAnalysisService(provider).analyze(request)
+
+    # 검증: 실제 근거의 날짜만 보이고 참조 배열은 그대로 유지한다.
+    assert "2026-10-03, 2026-10-05" in result.findings[0].reason
+    assert "tx-" not in result.findings[0].reason
+    assert "refIds" not in result.findings[0].reason
+    assert result.findings[0].evidenceTransactionRefs == ["tx-1", "tx-2"]
+
+    # 실행 / 검증: 없는 인용을 날짜로 보정하거나 다른 거래에 연결하지 않는다.
+    output["findings"][0]["reason"] += " tx-999"
+    with pytest.raises(HTTPException) as error:
+        await SpendingAnalysisService(provider).analyze(request)
+    assert error.value.status_code == 502
 
 
 @pytest.mark.asyncio
@@ -328,3 +353,78 @@ async def test_a_duplicate_charge_claim_requires_same_date_title_and_amount():
     data["transactions"][1]["date"] = "2026-10-04"
     with pytest.raises(HTTPException):
         await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+
+
+@pytest.mark.parametrize("comment", [None, "의료비는 꼭 필요한 지출입니다."])
+@pytest.mark.asyncio
+async def test_a_missing_item_purpose_is_not_a_single_purchase_review_reason(comment):
+    # 준비: 메모 없음·용도 불명만으로 만든 환불/예산 조언은 개선 카드로 보이지 않는다.
+    data = request_data()
+    data["transactions"] = [data["transactions"][0]]
+    data["transactions"][0].update(title="백화점 결제", storeName="백화점", memo=None)
+    data.update(transactionCount=1, totalExpense="6000", comment=comment)
+    data["coverage"].update(analyzedTransactionCount=1, totalTransactionCount=1)
+    output = response_data()
+    output["findings"][0].update(title="백화점 결제 용도 확인", reason="백화점 결제의 품목과 구매 목적이 기록되어 있지 않습니다. 불필요한 구매인지 알 수 없지만 영수증과 환불 가능 여부를 확인하고 예산을 정해 보세요.", reviewPattern="ITEM_REVIEW", evidenceTransactionRefs=["tx-1"])
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행
+    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+
+    # 검증: 무관한 코멘트도 구매 목적의 근거가 되지 않는다.
+    assert result.findings == []
+    assert "정보가 부족" in result.summary
+    assert "환불" not in result.summary
+
+
+@pytest.mark.parametrize("locale", ["ko", "ja", "en"])
+@pytest.mark.asyncio
+async def test_private_resolution_labels_never_appear_in_the_public_summary(locale):
+    # 준비: 후보가 없는 응답도 내부 분류값이 아니라 사용자 언어로 표시한다.
+    data = request_data()
+    data.update(locale=locale, comment="두 번째 이어폰은 선물이고 그 밖의 소비도 필요한 상황이었습니다.")
+    provider = AsyncMock()
+    provider.call.return_value = {"summary": "입력하신 상황에 따라 EXPLAINED_BY_COMMENT로 분류했습니다.", "findings": []}
+
+    # 실행
+    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+
+    # 검증: 0개 후보라는 판단은 유지하며 내부 표시는 제거한다.
+    assert result.findings == []
+    assert "EXPLAINED_BY_COMMENT" not in result.summary
+    assert "0" in result.summary
+
+
+@pytest.mark.parametrize("placement", ["candidate", "summary"])
+@pytest.mark.asyncio
+async def test_a_missing_user_comment_cannot_be_claimed_as_resolving_a_concern(placement):
+    # 준비: 실제로 제공하지 않은 코멘트를 반영했다고 표시하지 않는다.
+    output = response_data()
+    if placement == "candidate":
+        output["findings"][0]["reviewDisposition"] = "EXPLAINED_BY_COMMENT"
+    else:
+        output["summary"] = "EXPLAINED_BY_COMMENT로 처리할 항목입니다."
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행 / 검증
+    with pytest.raises(HTTPException) as error:
+        await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(request_data()))
+    assert error.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_an_actual_merchant_named_review_is_not_rejected_as_an_internal_label():
+    # 준비: 일반 영단어인 실제 상호를 내부 분류용 식별자와 혼동하지 않는다.
+    data = request_data()
+    for item in data["transactions"]:
+        item.update(title="여름 원피스", storeName="REVIEW", memo="여름 원피스 한 벌")
+    output = response_data()
+    output["findings"][0].update(title="REVIEW 원피스 구매 확인", reason="REVIEW에서 여름 원피스가 짧은 기간에 두 번 구매되었습니다. 각각 다른 용도로 필요한 구매였는지 확인하면 다음 구매 시 유사한 물품의 중복을 줄이는 데 도움이 될 수 있습니다.")
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행 / 검증
+    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+    assert "REVIEW" in result.findings[0].title

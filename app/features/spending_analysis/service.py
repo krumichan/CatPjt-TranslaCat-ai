@@ -18,6 +18,10 @@ from app.schemas.spending_analysis import (
 )
 
 TASK_NAME = "ACCOUNT_BOOK_SPENDING_ANALYSIS"
+_ANONYMOUS_REF = r"(?<![A-Za-z0-9_])tx-\d+(?![A-Za-z0-9_])"
+_INTERNAL_CLASSIFICATION = r"(?<![A-Za-z0-9_])(?:EXPLAINED_BY_COMMENT|NECESSARY|UNSUPPORTED|REVIEW|REPEAT_PURCHASE|REPEATED_MEALS|DUPLICATE_CHARGE|ITEM_REVIEW|FIXED_COST)(?![A-Za-z0-9_])"
+_PRIVATE_ENUM = r"(?<![A-Za-z0-9_])(?:EXPLAINED_BY_COMMENT|REPEAT_PURCHASE|REPEATED_MEALS|DUPLICATE_CHARGE|ITEM_REVIEW|FIXED_COST)(?![A-Za-z0-9_])"
+_INTERNAL_FIELD = r"(?<![A-Za-z0-9_])(?:refIds?|storeName|sourceType|reviewDisposition|reviewPattern)(?![A-Za-z0-9_])|coverage\."
 
 
 def _normalized(value: str) -> str:
@@ -48,14 +52,45 @@ def _duplicate_charge(transactions: list[AnalysisTransaction]) -> bool:
     )
 
 
+def _display_citations(text: str | None, allowed: set[str], source: dict[str, AnalysisTransaction], locale: str) -> str | None:
+    if text is None:
+        return None
+
+    # 모델이 본문에도 인용한 익명 참조를 같은 근거 거래의 실제 날짜로 표시한다.
+    # 허용된 근거 밖의 참조를 연결하거나 새로운 사실을 만들지는 않는다.
+    def replace(match: re.Match[str]) -> str:
+        ref = match.group(0)
+        if ref not in allowed or ref not in source:
+            raise ValueError("Narrative citation must be part of the finding evidence")
+        return source[ref].date.isoformat()
+
+    rendered = re.sub(_ANONYMOUS_REF, replace, text)
+    label = {"ko": "거래", "ja": "取引", "en": "transactions"}[locale]
+    return re.sub(r"\brefIds?\s*[:=]\s*", label + ": ", rendered)
+
+
+def _has_purchase_context(transaction: AnalysisTransaction, comment: str | None) -> bool:
+    if transaction.memo and transaction.memo.strip():
+        return True
+    title = _normalized(transaction.title)
+    if re.search(r"충동|미사용|중복 구매|衝動|未使用|\b(?:unused|impulse|duplicate purchase)\b", title):
+        return True
+    context = _normalized(comment or "")
+    anchors = (transaction.title, transaction.storeName, transaction.date.isoformat())
+    return any(anchor and len(_normalized(anchor)) >= 2 and _normalized(anchor) in context for anchor in anchors)
+
+
 def finalize_review(draft: SpendingAnalysisDraft, request: SpendingAnalysisRequest) -> SpendingAnalysisResponse:
     public = [SpendingAnalysisFinding.model_validate(item.model_dump(exclude={"reviewDisposition", "reviewPattern"})) for item in draft.findings]
     validate_grounding(SpendingAnalysisResponse(summary=draft.summary, findings=public), request)
     source = {item.refId: item for item in request.transactions}
     findings = []
+    insufficient_detail = False
 
     # 상황으로 설명된 구매·필수 지출·근거 없는 확인 메모는 개선 카드로 노출하지 않는다.
     for candidate, finding in zip(draft.findings, public, strict=True):
+        if candidate.reviewDisposition == "EXPLAINED_BY_COMMENT" and not request.comment:
+            raise ValueError("A comment resolution requires an actual user comment")
         if candidate.reviewDisposition != "REVIEW":
             continue
         evidence = [source[ref] for ref in candidate.evidenceTransactionRefs]
@@ -65,17 +100,32 @@ def finalize_review(draft: SpendingAnalysisDraft, request: SpendingAnalysisReque
             raise ValueError("Duplicate-charge claims require matching date, title and amount")
         if any(_essential_expense(item) for item in evidence) and candidate.reviewPattern != "DUPLICATE_CHARGE":
             continue
-        findings.append(finding)
+        if candidate.reviewPattern == "ITEM_REVIEW" and len(evidence) == 1 and not _has_purchase_context(evidence[0], request.comment):
+            # 한 건의 금액과 점포명, 품목 불명만으로 환불·절감 후보를 만들지 않는다.
+            insufficient_detail = True
+            continue
+        fields = finding.model_dump()
+        for field in ("title", "reason", "action", "contextQuestion", "uncertainty"):
+            fields[field] = _display_citations(fields[field], set(candidate.evidenceTransactionRefs), source, request.locale)
+        findings.append(SpendingAnalysisFinding.model_validate(fields))
 
     summary = draft.summary
-    if len(findings) != len(draft.findings):
+    if "EXPLAINED_BY_COMMENT" in summary and not request.comment:
+        raise ValueError("A comment resolution requires an actual user comment")
+    internal_summary = bool(re.search(_INTERNAL_CLASSIFICATION, summary))
+    if len(findings) != len(draft.findings) or internal_summary:
         # 제외한 후보가 요약에 다시 '절감 대상'으로 남지 않도록 정직한 범위 설명을 쓴다.
-        summaries = {
+        contextual_summaries = {
             "ko": f"추가 설명과 거래 근거를 반영해 검토할 항목 {len(findings)}개를 정리했습니다. 설명된 구매와 일반적인 필수 지출은 절감 대상으로 분류하지 않았습니다.",
             "ja": f"補足と取引根拠を反映し、確認する項目を{len(findings)}件に整理しました。説明済みの購入や通常の必要支出は削減対象にしていません。",
             "en": f"After considering your context and the transaction evidence, {len(findings)} items remain worth reviewing. Explained purchases and routine essential costs were excluded.",
         }
-        summary = summaries[request.locale]
+        record_summaries = {
+            "ko": f"제공된 거래 근거를 바탕으로 검토할 항목 {len(findings)}개를 정리했습니다. 근거가 부족한 권고나 일반적인 필수 지출은 절감 대상으로 분류하지 않았습니다.",
+            "ja": f"取引の根拠に基づき、確認する項目を{len(findings)}件に整理しました。裏付けのない提案や通常の必要支出は削減対象にしていません。",
+            "en": f"The supplied transaction evidence identifies {len(findings)} items worth reviewing. Unsupported suggestions and routine essential costs were excluded.",
+        }
+        summary = (contextual_summaries if request.comment else record_summaries)[request.locale]
         if request.coverage.isPartial:
             summaries = {
                 "ko": "전체 거래 중 일부 표본을 살펴본 분석입니다. ",
@@ -84,9 +134,19 @@ def finalize_review(draft: SpendingAnalysisDraft, request: SpendingAnalysisReque
             }
             summary = summaries[request.locale] + summary
 
+    if insufficient_detail:
+        notices = {
+            "ko": " 일부 단일 거래는 품목·구매 목적 정보가 부족해 불필요한 지출로 판단하지 않았습니다. 해당 거래의 영수증 메모나 추가 설명을 넣으면 더 구체적으로 살펴볼 수 있습니다.",
+            "ja": " 単独の取引には品目・購入目的が不明なものがあり、不要な支出とは判断していません。レシートのメモや補足があれば具体的に確認できます。",
+            "en": " Some individual purchases lack item or purpose details, so they were not judged unnecessary. Add receipt notes or context about those purchases for a more specific review.",
+        }
+        summary += notices[request.locale]
+
     # 익명 참조는 연결 배열 안에서만 사용하고 사용자에게 내부 필드명을 노출하지 않는다.
+    summary = _display_citations(summary, set(source), source, request.locale)
+    assert summary is not None
     text = " ".join([summary, *(" ".join(filter(None, (item.title, item.reason, item.action, item.contextQuestion, item.uncertainty))) for item in findings)])
-    if re.search(r"\btx-\d+\b|\brefIds?\b|\bstoreName\b|\bsourceType\b|\breviewDisposition\b|\breviewPattern\b|\bFIXED_COST\b|coverage\.", text):
+    if re.search(f"{_ANONYMOUS_REF}|{_INTERNAL_FIELD}|{_PRIVATE_ENUM}", text):
         raise ValueError("Internal identifiers must not appear in user-facing analysis")
     return SpendingAnalysisResponse(summary=summary, findings=findings)
 
