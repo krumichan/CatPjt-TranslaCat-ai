@@ -5,6 +5,7 @@ from app.ai.provider_factory import (
 from app.ai.providers.openai.client import OpenAIService
 from app.core.config import settings
 from app.features.receipt.service import ReceiptAnalysisService
+from app.features.spending_analysis.service import SpendingAnalysisService
 from app.features.speech_to_text import FasterWhisperRuntime
 from app.features.speech_to_text.runtime_policy import speaking_runtime
 from app.features.translation.service import TranslationService
@@ -22,6 +23,7 @@ from app.services.stt_service import STTService
 
 _ai_provider = create_text_generation_provider()
 _model_execution_provider = OpenAIService()
+_spending_analysis_service = SpendingAnalysisService(provider=_model_execution_provider)
 _speech_provider = create_speech_synthesis_provider()
 
 
@@ -116,6 +118,10 @@ def get_ocr_service() -> OCRService:
 
 def get_receipt_analysis_service() -> ReceiptAnalysisService:
     return _receipt_analysis_service
+
+
+def get_spending_analysis_service() -> SpendingAnalysisService:
+    return _spending_analysis_service
 
 
 def get_voice_translation_service() -> VoiceTranslationService:

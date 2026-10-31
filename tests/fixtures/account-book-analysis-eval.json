@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Deterministic grounding and context-transport fixtures plus a manual semantic-quality rubric. Fake provider results do not establish live model quality.",
+  "cases": [
+    {
+      "id": "rent-largest-subscription-duplicate",
+      "request": {
+        "periodType": "MONTHLY", "year": 2026, "month": 10, "locale": "ko",
+        "currencyCode": "JPY", "decimalPlaces": 0,
+        "periodStart": "2026-10-01", "periodEndExclusive": "2026-11-01",
+        "totalExpense": "103960", "transactionCount": 3,
+        "coverage": {"analyzedTransactionCount": 3, "totalTransactionCount": 3, "isPartial": false, "reason": null},
+        "previousPeriod": {"periodStart": "2026-09-01", "periodEndExclusive": "2026-10-01", "totalExpense": "101980", "transactionCount": 2, "isComparable": false},
+        "comment": null,
+        "transactions": [
+          {"refId": "tx-1", "date": "2026-10-01", "title": "월세", "storeName": "임대인", "category": "주거", "memo": "매월 주거비", "amount": "100000", "sourceType": "FIXED_COST"},
+          {"refId": "tx-2", "date": "2026-10-03", "title": "영상 구독 베이직", "storeName": "StreamingCo", "category": "생활", "memo": "개인 계정", "amount": "1980", "sourceType": null},
+          {"refId": "tx-3", "date": "2026-10-04", "title": "영상 구독 베이직", "storeName": "StreamingCo", "category": "생활", "memo": "보조 계정", "amount": "1980", "sourceType": null}
+        ]
+      },
+      "response": {
+        "summary": "가장 큰 지출인 월세를 금액만으로 낭비라고 판단하지 않았습니다. 같은 구독 상품의 중복 이용 여부를 확인할 수 있습니다.",
+        "findings": [{
+          "title": "영상 구독 베이직 중복 이용 확인",
+          "reason": "영상 구독 베이직이 이틀 사이 개인 계정과 보조 계정으로 각각 결제되었습니다. 같은 용도로 사용한다면 중복일 수 있으나 두 계정이 모두 필요한지는 기록만으로 확인할 수 없습니다.",
+          "action": "두 계정의 실제 이용자와 이용 기록을 확인하고 필요 없는 계정이 있을 때만 다음 결제 전에 해지하세요.",
+          "contextQuestion": "두 구독 계정을 서로 다른 사람이 사용하나요?",
+          "uncertainty": "두 계정이 별도 용도로 필요할 수 있습니다.",
+          "evidenceTransactionRefs": ["tx-2", "tx-3"]
+        }]
+      },
+      "manualQualityChecks": ["Do not rank rent as waste because it has the largest share.", "Explain the repeated named subscription and its dates rather than the 생활 category total.", "Treat separate required accounts as a possible explanation; do not claim the entire cited amount is savings."]
+    },
+    {
+      "id": "repeated-headphones-purpose-unknown",
+      "request": {
+        "periodType": "MONTHLY", "year": 2026, "month": 10, "locale": "ko",
+        "currencyCode": "JPY", "decimalPlaces": 0,
+        "periodStart": "2026-10-01", "periodEndExclusive": "2026-11-01",
+        "totalExpense": "53600", "transactionCount": 2,
+        "coverage": {"analyzedTransactionCount": 2, "totalTransactionCount": 2, "isPartial": false, "reason": null},
+        "previousPeriod": null, "comment": null,
+        "transactions": [
+          {"refId": "tx-1", "date": "2026-10-05", "title": "무선 헤드폰", "storeName": "전자상가", "category": "쇼핑", "memo": null, "amount": "26800", "sourceType": null},
+          {"refId": "tx-2", "date": "2026-10-07", "title": "무선 헤드폰", "storeName": "전자상가", "category": "쇼핑", "memo": null, "amount": "26800", "sourceType": null}
+        ]
+      },
+      "response": {
+        "summary": "무선 헤드폰 두 건의 구매 목적을 확인하면 추가 구매를 줄일 여지가 있는지 판단할 수 있습니다.",
+        "findings": [{
+          "title": "무선 헤드폰 두 건의 구매 목적 확인",
+          "reason": "무선 헤드폰을 같은 매장에서 이틀 간격으로 두 번 구매했습니다. 같은 사용자를 위한 동일 용도 구매라면 겹칠 수 있지만 선물이나 서로 다른 사용자의 물품일 가능성도 있습니다.",
+          "action": "각 헤드폰의 사용자와 용도를 확인하고 중복된 개인용 구매라면 다음 유사 구매 전에 보유 물품을 확인하세요.",
+          "contextQuestion": "각 헤드폰은 누가 어떤 용도로 사용하나요?",
+          "uncertainty": "제품명과 결제 금액만으로 중복 구매를 확정할 수 없습니다.",
+          "evidenceTransactionRefs": ["tx-1", "tx-2"]
+        }]
+      },
+      "manualQualityChecks": ["State the specific repeated purchase, not merely 쇼핑 is high.", "Ask about purpose before declaring either purchase unnecessary.", "Do not invent the exact model, specifications, or an ability to refund."]
+    },
+    {
+      "id": "headphone-gift-comment-reanalysis",
+      "inheritsRequestFrom": "repeated-headphones-purpose-unknown",
+      "requestOverrides": {"comment": "두 헤드폰은 부모님 두 분께 각각 드린 생일 선물입니다. 제 개인용으로 중복 구매한 것이 아닙니다."},
+      "response": {
+        "summary": "추가 설명에 따르면 두 헤드폰은 서로 다른 수령인에게 드린 선물입니다. 이번 기록만으로 불필요한 중복 지출이라고 판단할 근거가 없습니다.",
+        "findings": []
+      },
+      "manualQualityChecks": ["Revise the earlier duplicate-purchase concern using the supplied purpose.", "Do not keep the same cancel-or-refund recommendation after accepting separate recipients.", "Do not invent unrelated savings targets to fill the findings list."]
+    },
+    {
+      "id": "necessary-medical-and-fixed-housing",
+      "request": {
+        "periodType": "MONTHLY", "year": 2026, "month": 10, "locale": "ko",
+        "currencyCode": "JPY", "decimalPlaces": 0,
+        "periodStart": "2026-10-01", "periodEndExclusive": "2026-11-01",
+        "totalExpense": "129000", "transactionCount": 3,
+        "coverage": {"analyzedTransactionCount": 3, "totalTransactionCount": 3, "isPartial": false, "reason": null},
+        "previousPeriod": null, "comment": "정기 진료와 처방약은 치료에 필요한 지출입니다.",
+        "transactions": [
+          {"refId": "tx-1", "date": "2026-10-01", "title": "월세", "storeName": "임대인", "category": "주거", "memo": "기본 주거비", "amount": "100000", "sourceType": "FIXED_COST"},
+          {"refId": "tx-2", "date": "2026-10-12", "title": "정기 진료", "storeName": "동네 병원", "category": "의료", "memo": "정기 치료", "amount": "17000", "sourceType": null},
+          {"refId": "tx-3", "date": "2026-10-12", "title": "처방약", "storeName": "약국", "category": "의료", "memo": "진료 후 처방", "amount": "12000", "sourceType": null}
+        ]
+      },
+      "response": {"summary": "현재 거래와 추가 설명만으로 줄여야 할 불필요한 지출을 특정할 근거가 부족합니다. 필요한 진료나 처방약을 임의로 줄이는 제안은 하지 않았습니다.", "findings": []},
+      "manualQualityChecks": ["Do not recommend stopping treatment or reducing prescribed medication.", "Do not equate fixed housing or necessary care with waste based on amount or recurrence.", "Allow no findings when the available data does not support an avoidable purchase."]
+    },
+    {
+      "id": "repeated-groceries-different-needs",
+      "request": {
+        "periodType": "MONTHLY", "year": 2026, "month": 10, "locale": "ko",
+        "currencyCode": "JPY", "decimalPlaces": 0,
+        "periodStart": "2026-10-01", "periodEndExclusive": "2026-11-01",
+        "totalExpense": "14000", "transactionCount": 2,
+        "coverage": {"analyzedTransactionCount": 2, "totalTransactionCount": 2, "isPartial": false, "reason": null},
+        "previousPeriod": null, "comment": null,
+        "transactions": [
+          {"refId": "tx-1", "date": "2026-10-05", "title": "마트 장보기", "storeName": "동네 마트", "category": "식비", "memo": "6일분 신선식품", "amount": "6800", "sourceType": null},
+          {"refId": "tx-2", "date": "2026-10-11", "title": "마트 장보기", "storeName": "동네 마트", "category": "식비", "memo": "가족 식사 재료", "amount": "7200", "sourceType": null}
+        ]
+      },
+      "response": {"summary": "서로 다른 시점의 장보기 기록만으로 동일 상품의 불필요한 중복 구매를 확인할 수 없습니다. 구체적인 품목과 남은 식재료 정보가 있으면 더 자세히 살펴볼 수 있습니다.", "findings": []},
+      "manualQualityChecks": ["Repeated merchant or category alone is not proof of duplicate items.", "Do not invent receipt line items absent from title and memo.", "Do not claim spoilage or unused stock without evidence."]
+    },
+    {
+      "id": "incomplete-year-not-comparable",
+      "request": {
+        "periodType": "YEARLY", "year": 2026, "month": null, "locale": "ko",
+        "currencyCode": "JPY", "decimalPlaces": 0,
+        "periodStart": "2026-01-01", "periodEndExclusive": "2027-01-01",
+        "totalExpense": "14000", "transactionCount": 3,
+        "coverage": {"analyzedTransactionCount": 2, "totalTransactionCount": 3, "isPartial": true, "reason": "TRANSACTION_LIMIT"},
+        "previousPeriod": {"periodStart": "2025-01-01", "periodEndExclusive": "2026-01-01", "totalExpense": "120000", "transactionCount": 24, "isComparable": false},
+        "comment": "올해는 아직 끝나지 않았고 일부 거래만 분석에 포함되었습니다.",
+        "transactions": [
+          {"refId": "tx-1", "date": "2026-02-05", "title": "전시 관람", "storeName": "시립 미술관", "category": "문화", "memo": null, "amount": "6000", "sourceType": null},
+          {"refId": "tx-2", "date": "2026-10-11", "title": "공연 관람", "storeName": "공연장", "category": "문화", "memo": null, "amount": "7000", "sourceType": null}
+        ]
+      },
+      "response": {"summary": "선택한 연도는 진행 중이며 일부 거래만 검토했습니다. 전년도 전체 금액과 단순 비교하거나 표본 밖 구매를 추정해 불필요한 지출로 판단할 근거는 없습니다.", "findings": []},
+      "manualQualityChecks": ["Do not describe an incomplete year's amount as a full-year total.", "Do not compute improvement versus a full prior year when isComparable is false.", "Disclose partial coverage and do not treat sampled transaction amounts as the full expense total."]
+    },
+    {
+      "id": "large-decimal-money-retained",
+      "request": {
+        "periodType": "MONTHLY", "year": 2026, "month": 10, "locale": "ko",
+        "currencyCode": "KWD", "decimalPlaces": 3,
+        "periodStart": "2026-10-01", "periodEndExclusive": "2026-11-01",
+        "totalExpense": "18014398509481986.250", "transactionCount": 2,
+        "coverage": {"analyzedTransactionCount": 2, "totalTransactionCount": 2, "isPartial": false, "reason": null},
+        "previousPeriod": null, "comment": null,
+        "transactions": [
+          {"refId": "tx-1", "date": "2026-10-05", "title": "재료 구매", "storeName": "공급 업체", "category": "업무", "memo": "첫 번째 주문", "amount": "9007199254740993.125", "sourceType": null},
+          {"refId": "tx-2", "date": "2026-10-05", "title": "재료 구매", "storeName": "공급 업체", "category": "업무", "memo": "두 번째 주문", "amount": "9007199254740993.125", "sourceType": null}
+        ]
+      },
+      "response": {
+        "summary": "같은 날 같은 제목의 결제가 있으므로 주문별 용도 확인이 필요합니다. 표시된 결제 합계 전체를 절약 가능 금액으로 보지는 않았습니다.",
+        "findings": [{
+          "title": "재료 구매 두 주문의 용도 확인",
+          "reason": "재료 구매가 같은 날 같은 공급 업체에서 두 번 결제되었습니다. 분할 발주나 서로 다른 생산 용도일 수 있으므로 제목과 금액이 같다는 이유만으로 중복 주문으로 확정할 수 없습니다.",
+          "action": "두 주문의 발주서와 실제 사용 목적을 대조하고 동일 수요에 대한 중복 주문인지 먼저 확인하세요.",
+          "contextQuestion": "두 주문은 서로 다른 생산 계획에 필요한 물량인가요?",
+          "uncertainty": "수량과 주문 명세가 없어 중복 여부를 확정할 수 없습니다.",
+          "evidenceTransactionRefs": ["tx-1", "tx-2"]
+        }]
+      },
+      "manualQualityChecks": ["Preserve decimal strings and currency precision; never convert large money to binary floats.", "Separate evidence spending from a claim of achievable savings.", "Do not invent ordered quantities or unit prices."]
+    }
+  ]
+}

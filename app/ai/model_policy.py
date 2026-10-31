@@ -33,6 +33,7 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "VOICE_TRANSLATION_TEXT": AiTaskModelPolicy(AiModelTier.LUNA, "none", 768),
     "VOICE_TRANSLATION_PREVIEW": AiTaskModelPolicy(AiModelTier.LUNA, "none", 768),
     "RECEIPT_ANALYSIS": AiTaskModelPolicy(AiModelTier.LUNA, "none", 16384),
+    "ACCOUNT_BOOK_SPENDING_ANALYSIS": AiTaskModelPolicy(AiModelTier.MINI, "low", 8192, "medium"),
 }
 
 # Unknown/new tasks fail quality-safe: use Mini until explicitly classified.
