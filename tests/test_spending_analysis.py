@@ -36,6 +36,7 @@ def response_data():
             "action": "두 거래의 구매 목적과 반품 가능 여부를 확인한 뒤 다음 구매 전에 보유 물품을 살펴보세요.",
             "contextQuestion": "두 번째 이어폰은 선물이나 고장 교체용이었나요?", "uncertainty": "거래 기록만으로 구매 목적을 확정할 수 없습니다.",
             "evidenceTransactionRefs": ["tx-1", "tx-2"],
+            "reviewDisposition": "REVIEW", "reviewPattern": "REPEAT_PURCHASE",
         }],
     }
 
@@ -221,3 +222,109 @@ async def test_deadline_bounds_queue_wait_before_another_provider_call():
     provider.call.assert_awaited_once()
     release.set()
     assert (await first).findings
+
+
+@pytest.mark.asyncio
+async def test_explained_gift_and_unsupported_essential_costs_are_not_review_cards():
+    # 준비: 모델이 확인 메모를 채우더라도 설명된 구매·근거 없는 필수 지출을 제외한다.
+    data = request_data()
+    data["comment"] = "이어폰 두 번째는 어머니 선물이며 진료는 꼭 필요합니다."
+    data["transactions"].extend([
+        {"refId": "tx-3", "date": "2026-10-07", "title": "처방약 및 정기 진료", "storeName": "동네 병원", "category": "의료", "memo": "정기 치료", "amount": "500", "sourceType": None},
+        {"refId": "tx-4", "date": "2026-10-01", "title": "월세", "storeName": "임대인", "category": "주거", "memo": None, "amount": "100000", "sourceType": "FIXED_COST"},
+    ])
+    data.update(transactionCount=4, totalExpense="112500")
+    data["coverage"].update(analyzedTransactionCount=4, totalTransactionCount=4)
+    output = response_data()
+    output["findings"][0]["reviewDisposition"] = "EXPLAINED_BY_COMMENT"
+    for ref, title in (("tx-3", "처방약 및 정기 진료"), ("tx-4", "월세")):
+        output["findings"].append({
+            "title": f"{title} 확인", "reason": f"{title} 거래가 기록되어 있습니다. 실제 중복 청구나 잘못된 금액이라는 근거는 없지만 일반적인 비용 확인을 제안하고 있습니다.",
+            "action": "일반적인 비용 확인을 해보세요.", "contextQuestion": None, "uncertainty": None,
+            "evidenceTransactionRefs": [ref], "reviewDisposition": "REVIEW", "reviewPattern": "ITEM_REVIEW",
+        })
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행
+    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+
+    # 검증: 제외한 이어폰을 요약에서 다시 절감 대상으로 부르지 않는다.
+    assert result.findings == []
+    assert "무선 이어폰" not in result.summary
+    assert "필수 지출" in result.summary
+    provider.call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recurring_discretionary_subscriptions_can_still_be_reviewed():
+    # 준비: FIXED_COST 자체를 필수 지출과 동일시하지 않는다.
+    data = request_data()
+    for item in data["transactions"]:
+        item.update(title="영상 구독", category="생활", memo="개인 스트리밍 계정", sourceType="FIXED_COST")
+    output = response_data()
+    output["findings"][0].update(title="영상 구독 중복 확인", reason="영상 구독이 짧은 기간에 두 번 기록되어 같은 계정의 결제인지 확인할 수 있습니다. 가족용 등 별도 용도가 있다면 꼭 불필요하다고 단정할 수는 없습니다.")
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행 / 검증
+    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+    assert len(result.findings) == 1
+    assert "reviewDisposition" not in result.model_dump()["findings"][0]
+
+
+@pytest.mark.parametrize("title,category,memo", [
+    ("이어폰", "쇼핑", "병원에서 근무할 때 쓰려고 구매"),
+    ("Car rent", "Travel", "Rental car for a holiday trip"),
+])
+@pytest.mark.asyncio
+async def test_incidental_medical_location_and_car_rental_are_not_protected_costs(title, category, memo):
+    # 준비: 명확한 치료비·주거비가 아닌 구매를 단어 하나로 제외하지 않는다.
+    data = request_data()
+    for item in data["transactions"]:
+        item.update(title=title, category=category, memo=memo)
+    output = response_data()
+    output["findings"][0].update(title=f"{title} 구매 목적 확인", reason=f"{title} 거래가 짧은 간격으로 두 번 기록되어 있습니다. 실제 같은 용도의 중복 구매인지 각각 별도 용도가 있었는지 확인한 후 다음 소비 계획을 정할 수 있습니다.")
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행 / 검증
+    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+    assert len(result.findings) == 1
+
+
+@pytest.mark.parametrize("token", ["refId: tx-1", "storeName", "coverage.isPartial=true"])
+@pytest.mark.asyncio
+async def test_internal_metadata_cannot_leak_into_visible_analysis(token):
+    # 준비
+    output = response_data()
+    output["findings"][0]["reason"] += f" ({token})"
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행 / 검증
+    with pytest.raises(HTTPException) as error:
+        await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(request_data()))
+    assert error.value.status_code == 502
+    provider.call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_charge_claim_requires_same_date_title_and_amount():
+    # 준비
+    data = request_data()
+    for item in data["transactions"]:
+        item.update(title="定期診療", category="医療", date="2026-10-03")
+    output = response_data()
+    output["findings"][0].update(
+        title="定期診療 중복 청구 확인", reason="定期診療 결제가 같은 날짜와 같은 금액으로 두 번 기록되어 있습니다. 두 기록이 실제 같은 청구의 중복인지 영수증으로 대조할 수 있지만 치료 필요성은 판단하지 않습니다.",
+        action="두 결제 영수증을 대조하고 중복 청구라면 결제처에 확인하세요.", reviewPattern="DUPLICATE_CHARGE",
+    )
+    provider = AsyncMock()
+    provider.call.return_value = output
+
+    # 실행 / 검증
+    assert len((await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))).findings) == 1
+    data["transactions"][1]["date"] = "2026-10-04"
+    with pytest.raises(HTTPException):
+        await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))

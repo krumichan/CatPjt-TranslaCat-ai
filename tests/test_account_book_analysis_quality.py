@@ -36,7 +36,11 @@ class _RecordedProvider:
 
     async def call(self, *, type_name: str, data: str, schema: dict | None = None) -> Any:
         self.calls.append({"type_name": type_name, "data": json.loads(data), "schema": schema})
-        return deepcopy(self.responses[len(self.calls) - 1])
+        response = deepcopy(self.responses[len(self.calls) - 1])
+        for finding in response.get("findings", []):
+            finding.setdefault("reviewDisposition", "REVIEW")
+            finding.setdefault("reviewPattern", "REPEAT_PURCHASE" if len(finding.get("evidenceTransactionRefs", [])) > 1 else "ITEM_REVIEW")
+        return response
 
 
 @pytest.mark.asyncio

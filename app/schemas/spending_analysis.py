@@ -115,3 +115,17 @@ class SpendingAnalysisFinding(AnalysisModel):
 class SpendingAnalysisResponse(AnalysisModel):
     summary: str = Field(min_length=10, max_length=2000)
     findings: list[SpendingAnalysisFinding] = Field(max_length=8)
+
+
+class SpendingAnalysisCandidate(SpendingAnalysisFinding):
+    reviewDisposition: Literal["REVIEW", "EXPLAINED_BY_COMMENT", "NECESSARY", "UNSUPPORTED"] = Field(
+        description="REVIEW only for a concrete unresolved concern. A gift or necessary overtime meal explained by the comment is EXPLAINED_BY_COMMENT. Routine essential care/rent is NECESSARY. Mere generic checks are UNSUPPORTED."
+    )
+    reviewPattern: Literal["REPEAT_PURCHASE", "REPEATED_MEALS", "DUPLICATE_CHARGE", "ITEM_REVIEW"] = Field(
+        description="Use DUPLICATE_CHARGE only for matching amount, date, title in at least two source transactions. ITEM_REVIEW still requires a specific supported concern, not a largest-category or routine check."
+    )
+
+
+class SpendingAnalysisDraft(AnalysisModel):
+    summary: str = Field(min_length=10, max_length=2000)
+    findings: list[SpendingAnalysisCandidate] = Field(max_length=8)
