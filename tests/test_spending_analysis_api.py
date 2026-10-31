@@ -2,6 +2,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -85,3 +86,21 @@ def test_new_route_invalid_input_never_reaches_paid_service(api_client, change):
     # 검증
     assert response.status_code == 422
     service.analyze.assert_not_awaited()
+
+
+def test_startup_prepares_local_sdk_without_a_generation_call(monkeypatch):
+    # 준비: 실제 초기화가 준비 객체 접근까지만 진행되는지 확인한다.
+    import app.api.dependencies as dependencies
+
+    create = AsyncMock()
+    provider = SimpleNamespace(ready=True, client=SimpleNamespace(responses=SimpleNamespace(create=create)))
+    monkeypatch.setattr(dependencies, "_model_execution_provider", provider)
+
+    # 실행
+    dependencies.prepare_spending_analysis_provider()
+
+    # 검증
+    create.assert_not_called()
+    provider.ready = False
+    provider.client = None
+    dependencies.prepare_spending_analysis_provider()

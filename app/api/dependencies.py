@@ -124,6 +124,13 @@ def get_spending_analysis_service() -> SpendingAnalysisService:
     return _spending_analysis_service
 
 
+def prepare_spending_analysis_provider() -> None:
+    # 인증서·SDK 모듈의 최초 로컬 초기화를 사용자 분석 deadline 전에 끝낸다.
+    # client/responses 준비만 하며 외부 요청이나 유료 생성은 실행하지 않는다.
+    if _model_execution_provider.ready:
+        _ = _model_execution_provider.client.responses
+
+
 def get_voice_translation_service() -> VoiceTranslationService:
     return _voice_translation_service
 

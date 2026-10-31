@@ -15,6 +15,7 @@ from app.api.dependencies import (
     get_voice_stream_service,
     get_voice_stt_provider,
     get_voice_translation_service,
+    prepare_spending_analysis_provider,
 )
 from app.api.internal import internal_router
 from app.api.internal.speech_transcription import get_speech_evidence_runtime
@@ -45,6 +46,8 @@ async def lifespan(app: FastAPI):
 
     if settings.OCR_WARM_UP and not settings.RECEIPT_VISION_DISABLE_OCR_WARMUP:
         await get_ocr_service().warm_up()
+
+    prepare_spending_analysis_provider()
 
     try:
         yield
