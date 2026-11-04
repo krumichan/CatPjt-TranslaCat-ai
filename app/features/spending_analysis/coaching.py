@@ -155,7 +155,8 @@ def expand_draft(draft: CoachingDraft, request: SpendingAnalysisRequest) -> Coac
             note = purchase_note(item)
             merchant = unicodedata.normalize("NFKC", item.storeName or item.title).casefold().strip()
             groups[(merchant, item.category, note, item.title if has_item_detail(item) else "")].append(item)
-        for grouped in groups.values(): result[grouped[0].refId] = [item.refId for item in grouped]
+        for grouped in groups.values():
+            result[grouped[0].refId] = [item.refId for item in grouped]
         return result
     current, historical = mapping(request.transactions), mapping(request.historicalTransactions)
     findings = []
@@ -164,9 +165,12 @@ def expand_draft(draft: CoachingDraft, request: SpendingAnalysisRequest) -> Coac
         # 본문에만 적힌 유효한 구매 인용도 열어볼 수 있게 연결한다. 절감 대상에는 추가하지 않는다.
         narrative = " ".join((item.title, item.observation, item.opinion, item.action, item.assumption))
         for ref in re.findall(PURCHASE_REF, narrative):
-            if ref in current and ref not in evidence_units: evidence_units.append(ref)
-            elif ref in historical and ref not in historical_units: historical_units.append(ref)
-            elif ref not in current and ref not in historical: raise ValueError("Unknown narrative purchase unit")
+            if ref in current and ref not in evidence_units:
+                evidence_units.append(ref)
+            elif ref in historical and ref not in historical_units:
+                historical_units.append(ref)
+            elif ref not in current and ref not in historical:
+                raise ValueError("Unknown narrative purchase unit")
         if any(ref not in current for ref in evidence_units + item.targetRefs) or any(ref not in historical for ref in historical_units):
             raise ValueError("Unknown purchase unit")
         # 모델에는 짧은 묶음 참조만, 공개 결과에는 원본 거래 전체를 연결한다.
@@ -186,7 +190,8 @@ def coaching_schema(payload: dict, *, review: bool = False) -> dict:
     fields["evidenceRefs"]["items"]["enum"] = current
     fields["targetRefs"]["items"]["enum"] = current
     fields["historicalRefs"]["items"]["enum"] = history or ["NO_HISTORICAL_EVIDENCE"]
-    if not history: fields["historicalRefs"]["maxItems"] = 0
+    if not history:
+        fields["historicalRefs"]["maxItems"] = 0
     schema["properties"]["findings"]["maxItems"] = payload["maxFindings"]
     return schema
 
@@ -216,7 +221,8 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
                 raise ValueError("Narrative cites unrelated evidence")
             return all_source[ref].date.isoformat()
         # 연결된 원문을 먼저 검증한 후, 본문의 순수 참조 목록은 거래 버튼으로 대신한다.
-        for match in re.finditer(PURCHASE_REF, text): replace(match)
+        for match in re.finditer(PURCHASE_REF, text):
+            replace(match)
         text = re.sub(r"\((?:(?:예|근거|거래)[:：]?\s*)?tx-\d+(?:\s*[,、~–]\s*tx-\d+)*\)", "", text)
         rendered = re.sub(PURCHASE_REF, replace, text)
         names = {"ko": "선택 구매 조정 가정", "ja": "選択的購入の調整仮定", "en": "hypothetical purchase adjustment"}
