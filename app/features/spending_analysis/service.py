@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
+import json
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -15,7 +16,9 @@ from app.schemas.spending_analysis import (
     SpendingAnalysisFinding,
     SpendingAnalysisRequest,
     SpendingAnalysisResponse,
+    CoachingDraft,
 )
+from app.features.spending_analysis.coaching import coaching_schema, expand_draft, finalize_coaching, prepare_coaching_payload, review_payload
 
 TASK_NAME = "ACCOUNT_BOOK_SPENDING_ANALYSIS"
 _ANONYMOUS_REF = r"(?<![A-Za-z0-9_])tx-\d+(?![A-Za-z0-9_])"
@@ -182,12 +185,16 @@ class SpendingAnalysisService:
         self,
         provider: TextGenerationProvider,
         *,
-        timeout_seconds: float = 70.0,
+        timeout_seconds: float = 240.0,
         max_concurrency: int = 2,
+        semantic_review: bool = True,
+        max_findings: int = 2,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = timeout_seconds
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self.semantic_review = semantic_review
+        self.max_findings = max_findings
 
     async def analyze(self, request: SpendingAnalysisRequest) -> SpendingAnalysisResponse:
         # 빈 기간은 외부로 보내지 않는다. 표본 범위와 금액은 입력 schema에서 검증한다.
@@ -198,8 +205,9 @@ class SpendingAnalysisService:
                 "en": "There are no expense transactions to analyze in this period.",
             }
             return SpendingAnalysisResponse(summary=summaries[request.locale], findings=[])
-        payload = request.model_dump_json()
-        if len(payload) > 350_000:
+        context = prepare_coaching_payload(request, self.max_findings)
+        payload = json.dumps(context, ensure_ascii=False)
+        if len(payload) > 2_000_000:
             raise HTTPException(status_code=413, detail={"code": "SPENDING_ANALYSIS_INPUT_TOO_LARGE"})
 
         # 대기를 포함한 단일 deadline이며 외부 호출·검증 실패를 자동 재생성하지 않는다.
@@ -208,9 +216,21 @@ class SpendingAnalysisService:
                 result = await self.provider.call(
                     type_name=TASK_NAME,
                     data=payload,
-                    schema=SpendingAnalysisDraft.model_json_schema(),
+                    schema=coaching_schema(context),
                 )
-            return finalize_review(SpendingAnalysisDraft.model_validate(result), request)
+                # 기존 공급자 응답/fixture는 공개 v2 형식을 읽을 수 있게 유지한다.
+                # 실제 v3 호출의 Structured Outputs는 CoachingDraft 계약을 사용한다.
+                if "policyVersion" not in result:
+                    return finalize_review(SpendingAnalysisDraft.model_validate(result), request)
+                draft = CoachingDraft.model_validate(result)
+                if self.semantic_review:
+                    review_context = review_payload(draft, context)
+                    revised = await self.provider.call(type_name="ACCOUNT_BOOK_SPENDING_REVIEW",
+                        data=json.dumps(review_context, ensure_ascii=False), schema=coaching_schema(review_context, review=True))
+                    draft = CoachingDraft.model_validate(revised)
+                if len(draft.findings) > self.max_findings:
+                    raise ValueError("Too many coaching findings")
+                return finalize_coaching(expand_draft(draft, request), request)
         except TimeoutError as exc:
             raise HTTPException(
                 status_code=504, detail={"code": "SPENDING_ANALYSIS_TIMEOUT"}
