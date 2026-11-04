@@ -276,7 +276,9 @@ class OpenAIService:
             # Reading Sol/high may legitimately take longer than the generic
             # Luna deadline. The service's 80s boundary remains authoritative.
             client = (
-                self.client.with_options(
+                self.client.with_options(timeout=150.0)
+                if type_name in {"ACCOUNT_BOOK_SPENDING_ANALYSIS", "ACCOUNT_BOOK_SPENDING_REVIEW"}
+                else self.client.with_options(
                     timeout=max(85.0, settings.OPENAI_REQUEST_TIMEOUT_SECONDS),
                 )
                 if model == "gpt-5.6-sol"

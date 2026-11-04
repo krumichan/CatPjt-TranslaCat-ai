@@ -11,6 +11,7 @@ class AiModelTier(str, Enum):
     LUNA = "LUNA"
     MINI = "MINI"
     SOL = "SOL"
+    SPENDING_COACH = "SPENDING_COACH"
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,9 @@ _TASK_POLICIES: dict[str, AiTaskModelPolicy] = {
     "VOICE_TRANSLATION_TEXT": AiTaskModelPolicy(AiModelTier.LUNA, "none", 768),
     "VOICE_TRANSLATION_PREVIEW": AiTaskModelPolicy(AiModelTier.LUNA, "none", 768),
     "RECEIPT_ANALYSIS": AiTaskModelPolicy(AiModelTier.LUNA, "none", 16384),
-    "ACCOUNT_BOOK_SPENDING_ANALYSIS": AiTaskModelPolicy(AiModelTier.MINI, "low", 8192, "medium"),
+    # 구매 역할·과거 맥락을 해석하는 가계부 분석만 강화한다. 다른 작업의 모델은 유지한다.
+    "ACCOUNT_BOOK_SPENDING_ANALYSIS": AiTaskModelPolicy(AiModelTier.SPENDING_COACH, "medium", 12288, "medium"),
+    "ACCOUNT_BOOK_SPENDING_REVIEW": AiTaskModelPolicy(AiModelTier.SPENDING_COACH, "medium", 12288, "medium"),
 }
 
 # Unknown/new tasks fail quality-safe: use Mini until explicitly classified.
@@ -53,6 +56,8 @@ def get_model_name_for_tier(tier: AiModelTier) -> str:
         return settings.OPENAI_MODEL_MINI
     if tier == AiModelTier.SOL:
         return "gpt-5.6-sol"
+    if tier == AiModelTier.SPENDING_COACH:
+        return "gpt-6.1-sol"
     raise ValueError(f"Unsupported AI model tier: {tier}")
 
 
