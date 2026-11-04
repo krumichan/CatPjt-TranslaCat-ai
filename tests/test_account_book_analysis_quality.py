@@ -10,7 +10,10 @@ from fastapi import HTTPException
 
 from app.ai.ports import TextGenerationProvider
 from app.features.spending_analysis.service import SpendingAnalysisService
-from app.schemas.spending_analysis import SpendingAnalysisRequest
+from app.schemas.spending_analysis import (
+    SpendingAnalysisRequest,
+    SpendingAnalysisResponse,
+)
 
 
 _FIXTURE_PATH = Path(__file__).parent / "fixtures" / "account-book-analysis-eval.json"
@@ -25,6 +28,39 @@ def _request(case_id: str) -> dict[str, Any]:
     inherited = _request(case["inheritsRequestFrom"])
     inherited.update(deepcopy(case["requestOverrides"]))
     return inherited
+
+
+def _expected_corpus_purchase_units(
+    case_id: str, source: dict[str, Any]
+) -> list[dict[str, Any]]:
+    # 이 코퍼스의 일반 메모는 원문을 유지하고, 목적이 같은 두 헤드폰만 묶는다.
+    # 운영 코드의 묶음 함수를 기대값 생성에 사용하지 않는다.
+    units = [
+        {
+            "refId": item["refId"],
+            "date": item["date"],
+            "title": item["title"],
+            "storeName": item["storeName"],
+            "category": item["category"],
+            "memo": item["memo"] or "",
+            "amount": item["amount"],
+            "transactionCount": 1,
+            "dates": [item["date"]],
+            "purposeKnown": bool(item["memo"]),
+        }
+        for item in source["transactions"]
+    ]
+    if case_id in {
+        "repeated-headphones-purpose-unknown",
+        "headphone-gift-comment-reanalysis",
+    }:
+        return [{
+            **units[0],
+            "amount": "53600",
+            "transactionCount": 2,
+            "dates": ["2026-10-05", "2026-10-07"],
+        }]
+    return units
 
 
 class _RecordedProvider:
@@ -49,19 +85,33 @@ async def test_quality_corpus_preserves_purchase_level_evidence_and_context(case
     # 준비: 바람직한 예시 응답은 수동 품질 기준이며 실제 모델의 의미 판단을 입증하지 않는다.
     case = _CASES[case_id]
     request = SpendingAnalysisRequest.model_validate(_request(case_id))
+    original_request = request.model_dump(mode="json")
+    expected_response = SpendingAnalysisResponse.model_validate(case["response"])
     provider = _RecordedProvider(case["response"])
     service = SpendingAnalysisService(cast(TextGenerationProvider, provider))
 
     # 실행
     response = await service.analyze(request)
 
-    # 검증: 카테고리 집계로 축약하지 않고 실제 거래 제목·메모·문맥을 그대로 전달한다.
-    assert response.model_dump(mode="json") == case["response"]
+    # 검증: 기존 기록의 문구·근거는 유지하고 새 선택 필드의 기본값만 같은 스키마로 비교한다.
+    assert response.model_dump(mode="json") == expected_response.model_dump(mode="json")
+    assert response.policyVersion == "legacy-v2"
+    assert response.savings is None
     assert len(provider.calls) == 1
     assert provider.calls[0]["type_name"] == "ACCOUNT_BOOK_SPENDING_ANALYSIS"
-    assert provider.calls[0]["data"] == request.model_dump(mode="json")
-    assert provider.calls[0]["schema"]["properties"]["findings"]["maxItems"] == 8
-    assert all(isinstance(item["amount"], str) for item in provider.calls[0]["data"]["transactions"])
+
+    # 검증: v4 입력은 구매 묶음이어도 상품·메모·모든 구매일·건수·정확한 금액을 보존한다.
+    sent = provider.calls[0]["data"]
+    metadata = original_request.keys() - {"transactions", "historicalTransactions"}
+    assert {key: sent[key] for key in metadata} == {
+        key: original_request[key] for key in metadata
+    }
+    assert sent["transactions"] == _expected_corpus_purchase_units(case_id, original_request)
+    assert sent["historicalTransactions"] == original_request["historicalTransactions"] == []
+    assert request.model_dump(mode="json") == original_request
+    assert provider.calls[0]["schema"]["properties"]["findings"]["maxItems"] == 2
+    assert provider.calls[0]["schema"]["properties"]["policyVersion"]["const"] == "purchase-context-v4"
+    assert all(isinstance(item["amount"], str) for item in sent["transactions"])
 
 
 @pytest.mark.asyncio
