@@ -23,7 +23,8 @@ async def test_real_provider_adapter_resolves_generation_and_review_before_sdk_r
     draft = coaching()
     sdk_response = SimpleNamespace(
         status="completed", output=[], output_text=json.dumps(draft, ensure_ascii=False),
-        usage=SimpleNamespace(input_tokens=10, output_tokens=10), model="gpt-6.1-sol", incomplete_details=None,
+        usage=SimpleNamespace(input_tokens=10, output_tokens=10),
+        model="gpt-6.1-sol", incomplete_details=None,
     )
     create = AsyncMock(side_effect=[sdk_response, sdk_response])
     sdk = SimpleNamespace(responses=SimpleNamespace(create=create))
@@ -32,7 +33,9 @@ async def test_real_provider_adapter_resolves_generation_and_review_before_sdk_r
     provider._client = sdk
 
     # 실행: 각 stage의 registry/model/schema/decoder를 실제로 통과한다. 외부 호출은 없다.
-    result = await SpendingAnalysisService(provider).analyze(SpendingAnalysisRequest.model_validate(data))
+    result = await SpendingAnalysisService(provider).analyze(
+        SpendingAnalysisRequest.model_validate(data)
+    )
 
     # 검증: 검토 작업 등록이 빠지면 두 번째 SDK 요청 전에 HTTP400으로 이 검사가 실패한다.
     assert create.await_count == 2
@@ -43,6 +46,16 @@ async def test_real_provider_adapter_resolves_generation_and_review_before_sdk_r
     for call in (first, second):
         assert call["model"] == "gpt-6.1-sol"
         assert call["store"] is False
-        assert call["text"]["format"]["strict"] is True
+        wire = call["text"]["format"]
+        # 이 등록 수정에서는 기존 adapter의 schema 전송 모드를 바꾸지 않는다.
+        assert wire["type"] == "json_schema"
+        assert wire["strict"] is False
+        assert wire["schema"]["properties"]["policyVersion"]["const"] == "purchase-context-v4"
+        assert wire["schema"]["properties"]["findings"]["maxItems"] == 2
+        refs = (
+            wire["schema"]["$defs"]["CoachingFinding"]["properties"]
+            ["evidenceRefs"]["items"]["enum"]
+        )
+        assert refs == ["tx-1", "tx-2"]
     assert result.policyVersion == "purchase-context-v4"
     assert result.findings
