@@ -1,26 +1,77 @@
 from __future__ import annotations
 
 import asyncio
-import re
-import unicodedata
 import json
+import logging
+import re
+import time
+import unicodedata
 from decimal import Decimal
 
 from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.ai.ports import TextGenerationProvider
+from app.features.spending_analysis.coaching import (
+    coaching_schema,
+    expand_draft,
+    finalize_coaching,
+    prepare_coaching_payload,
+    review_payload,
+)
 from app.schemas.spending_analysis import (
     AnalysisTransaction,
+    CoachingDraft,
     SpendingAnalysisDraft,
     SpendingAnalysisFinding,
     SpendingAnalysisRequest,
     SpendingAnalysisResponse,
-    CoachingDraft,
 )
-from app.features.spending_analysis.coaching import coaching_schema, expand_draft, finalize_coaching, prepare_coaching_payload, review_payload
 
 TASK_NAME = "ACCOUNT_BOOK_SPENDING_ANALYSIS"
+logger = logging.getLogger(__name__)
+_QUALITY_CODES = {
+    "Unknown narrative purchase unit": "UNKNOWN_NARRATIVE_REFERENCE",
+    "Unknown purchase unit": "UNKNOWN_PURCHASE_REFERENCE",
+    "Narrative cites unrelated evidence": "UNRELATED_NARRATIVE_REFERENCE",
+    "Unknown or duplicate current evidence": "INVALID_CURRENT_EVIDENCE",
+    "Unknown or duplicate historical evidence": "INVALID_HISTORICAL_EVIDENCE",
+    "Savings targets must belong to current evidence": "INVALID_SAVINGS_TARGET",
+    "Overlapping recommendation scope": "OVERLAPPING_RECOMMENDATIONS",
+    "Concrete purchase anchor is missing": "MISSING_PURCHASE_ANCHOR",
+    "Coaching must not end in questions": "QUESTION_IN_COACHING",
+    "Too many coaching findings": "TOO_MANY_FINDINGS",
+}
+_SCHEMA_ERROR_TYPES = {
+    "missing", "string_too_short", "string_too_long", "list_too_short", "list_too_long",
+    "too_short", "too_long", "literal_error", "extra_forbidden", "string_type", "list_type",
+    "model_type", "value_error",
+}
+
+
+def _log_failure(stage: str, code: str, started: float, error: Exception, status: int) -> None:
+    # 메시지·입력·외부 응답·traceback을 제외하고 고정 코드와 스키마 오류 종류만 기록한다.
+    types: list[str] = []
+    if isinstance(error, ValidationError):
+        types = sorted({
+            item["type"] if item["type"] in _SCHEMA_ERROR_TYPES else "schema_error"
+            for item in error.errors(include_input=False, include_context=False, include_url=False)
+        })
+    logger.warning(
+        "Spending analysis failed: stage=%s code=%s status=%d "
+        "elapsed_ms=%d exception_type=%s validation_types=%s",
+        stage, code, status, round((time.monotonic() - started) * 1000), type(error).__name__, types,
+    )
+
+
+def _enum_count(value: object) -> int:
+    if isinstance(value, dict):
+        return len(value.get("enum", [])) + sum(
+            _enum_count(item) for key, item in value.items() if key != "enum"
+        )
+    if isinstance(value, list):
+        return sum(_enum_count(item) for item in value)
+    return 0
 _ANONYMOUS_REF = r"(?<![A-Za-z0-9_])tx-\d+(?![A-Za-z0-9_])"
 _INTERNAL_CLASSIFICATION = r"(?<![A-Za-z0-9_])(?:EXPLAINED_BY_COMMENT|NECESSARY|UNSUPPORTED|REVIEW|REPEAT_PURCHASE|REPEATED_MEALS|DUPLICATE_CHARGE|ITEM_REVIEW|FIXED_COST)(?![A-Za-z0-9_])"
 _PRIVATE_ENUM = r"(?<![A-Za-z0-9_])(?:EXPLAINED_BY_COMMENT|REPEAT_PURCHASE|REPEATED_MEALS|DUPLICATE_CHARGE|ITEM_REVIEW|FIXED_COST)(?![A-Za-z0-9_])"
@@ -205,44 +256,74 @@ class SpendingAnalysisService:
                 "en": "There are no expense transactions to analyze in this period.",
             }
             return SpendingAnalysisResponse(summary=summaries[request.locale], findings=[])
-        context = prepare_coaching_payload(request, self.max_findings)
-        payload = json.dumps(context, ensure_ascii=False)
+        started = time.monotonic()
+        stage = "PREPARE_CONTEXT"
+        try:
+            context = prepare_coaching_payload(request, self.max_findings)
+            payload = json.dumps(context, ensure_ascii=False)
+        except Exception as exc:
+            _log_failure(stage, "CONTEXT_PREPARATION", started, exc, 500)
+            raise
         if len(payload) > 2_000_000:
             raise HTTPException(status_code=413, detail={"code": "SPENDING_ANALYSIS_INPUT_TOO_LARGE"})
 
         # 대기를 포함한 단일 deadline이며 외부 호출·검증 실패를 자동 재생성하지 않는다.
+        stage = "WAIT_SLOT"
         try:
             async with asyncio.timeout(self.timeout_seconds), self._semaphore:
+                stage = "PREPARE_SCHEMA"
+                schema = coaching_schema(context)
+                logger.info(
+                    "Spending analysis prepared: current_units=%d historical_units=%d schema_enum_values=%d",
+                    len(context["transactions"]), len(context["historicalTransactions"]), _enum_count(schema),
+                )
+                stage = "GENERATE"
                 result = await self.provider.call(
                     type_name=TASK_NAME,
                     data=payload,
-                    schema=coaching_schema(context),
+                    schema=schema,
                 )
                 # 기존 공급자 응답/fixture는 공개 v2 형식을 읽을 수 있게 유지한다.
                 # 실제 v3 호출의 Structured Outputs는 CoachingDraft 계약을 사용한다.
+                stage = "VALIDATE_DRAFT"
                 if "policyVersion" not in result:
+                    stage = "FINALIZE_LEGACY"
                     return finalize_review(SpendingAnalysisDraft.model_validate(result), request)
                 draft = CoachingDraft.model_validate(result)
                 if self.semantic_review:
+                    stage = "PREPARE_REVIEW"
                     review_context = review_payload(draft, context)
+                    review_data = json.dumps(review_context, ensure_ascii=False)
+                    review_schema = coaching_schema(review_context, review=True)
+                    stage = "REVIEW"
                     revised = await self.provider.call(type_name="ACCOUNT_BOOK_SPENDING_REVIEW",
-                        data=json.dumps(review_context, ensure_ascii=False), schema=coaching_schema(review_context, review=True))
+                        data=review_data, schema=review_schema)
+                    stage = "VALIDATE_REVIEW"
                     draft = CoachingDraft.model_validate(revised)
+                stage = "FINALIZE"
                 if len(draft.findings) > self.max_findings:
                     raise ValueError("Too many coaching findings")
                 return finalize_coaching(expand_draft(draft, request), request)
         except TimeoutError as exc:
+            _log_failure(stage, "TIMEOUT", started, exc, 504)
             raise HTTPException(
                 status_code=504, detail={"code": "SPENDING_ANALYSIS_TIMEOUT"}
             ) from exc
         except (ValidationError, ValueError) as exc:
+            code = (
+                "SCHEMA_VALIDATION" if isinstance(exc, ValidationError)
+                else _QUALITY_CODES.get(str(exc), "VALUE_VALIDATION")
+            )
+            _log_failure(stage, code, started, exc, 502)
             raise HTTPException(
                 status_code=502, detail={"code": "SPENDING_ANALYSIS_INVALID_RESPONSE"}
             ) from exc
-        except HTTPException:
+        except HTTPException as exc:
+            _log_failure(stage, "UPSTREAM_HTTP", started, exc, exc.status_code)
             raise
         except Exception as exc:
             # 입력·코멘트·외부 응답 원문을 오류 본문이나 로그에 남기지 않는다.
+            _log_failure(stage, "UNAVAILABLE", started, exc, 503)
             raise HTTPException(
                 status_code=503, detail={"code": "SPENDING_ANALYSIS_UNAVAILABLE"}
             ) from exc
