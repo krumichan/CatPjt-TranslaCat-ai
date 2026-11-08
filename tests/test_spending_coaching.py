@@ -13,7 +13,7 @@ from tests.test_spending_analysis import request_data
 
 
 def coaching():
-    return {"policyVersion": "purchase-context-v4", "summary": "이번 기간에는 역할이 가까운 물건의 구매가 이어졌습니다. 기본 사용 목적은 유지하되 같은 역할의 추가 선택을 조정하면 지출을 줄일 여지가 있습니다.",
+    return {"policyVersion": "purchase-context-v5", "summary": "이번 기간에는 역할이 가까운 물건의 구매가 이어졌습니다. 기본 사용 목적은 유지하되 같은 역할의 추가 선택을 조정하면 지출을 줄일 여지가 있습니다.",
         "findings": [{"title": "무선 이어폰의 추가 선택 조정", "observation": "무선 이어폰 구매가 서로 다른 날 기록되어 같은 역할에 비용이 배정된 사실을 볼 수 있습니다.",
             "opinion": "다른 사람의 선물이나 고장 교체가 아니라면 같은 용도의 추가 선택을 줄일 여지가 있습니다.",
             "action": "다음 구매에서는 먼저 현재 사용할 제품을 정하고, 같은 상황에 쓸 다른 제품은 실제 사용 후 선택합니다.",

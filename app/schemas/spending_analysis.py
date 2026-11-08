@@ -8,6 +8,11 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+MAX_ANALYSIS_FINDINGS = 8
+MIN_OBSERVATION_LENGTH = 40
+TRANSACTION_REF_PATTERN = r"^tx-[1-9]\d{0,8}$"
+
+
 class AnalysisModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -28,7 +33,7 @@ class PreviousAnalysisPeriod(AnalysisModel):
 
 
 class AnalysisTransaction(AnalysisModel):
-    refId: str = Field(pattern=r"^tx-[1-9]\d{0,8}$")
+    refId: str = Field(pattern=TRANSACTION_REF_PATTERN)
     date: date
     title: str = Field(min_length=1, max_length=1000)
     storeName: str | None = Field(max_length=1000)
@@ -134,7 +139,7 @@ class SpendingAnalysisRequest(AnalysisModel):
 
 class SpendingAnalysisFinding(AnalysisModel):
     title: str = Field(min_length=3, max_length=160)
-    reason: str = Field(min_length=40, max_length=2000)
+    reason: str = Field(min_length=MIN_OBSERVATION_LENGTH, max_length=2000)
     action: str = Field(min_length=10, max_length=1200)
     contextQuestion: str | None = Field(max_length=500)
     uncertainty: str | None = Field(max_length=500)
@@ -147,7 +152,7 @@ class SpendingAnalysisFinding(AnalysisModel):
 
 class SpendingAnalysisResponse(AnalysisModel):
     summary: str = Field(min_length=10, max_length=2000)
-    findings: list[SpendingAnalysisFinding] = Field(max_length=8)
+    findings: list[SpendingAnalysisFinding] = Field(max_length=MAX_ANALYSIS_FINDINGS)
     policyVersion: str = "legacy-v2"
     savings: "SavingsScenario | None" = None
 
@@ -169,7 +174,7 @@ class SavingsScenario(AnalysisModel):
 
 class CoachingFinding(AnalysisModel):
     title: str = Field(min_length=3, max_length=160)
-    observation: str = Field(min_length=40, max_length=1400)
+    observation: str = Field(min_length=MIN_OBSERVATION_LENGTH, max_length=1400)
     opinion: str = Field(min_length=20, max_length=1200)
     action: str = Field(min_length=20, max_length=1200)
     assumption: str = Field(min_length=10, max_length=500)
@@ -180,9 +185,9 @@ class CoachingFinding(AnalysisModel):
 
 
 class CoachingDraft(AnalysisModel):
-    policyVersion: Literal["purchase-context-v4"]
+    policyVersion: Literal["purchase-context-v5"]
     summary: str = Field(min_length=50, max_length=2000)
-    findings: list[CoachingFinding] = Field(max_length=2)
+    findings: list[CoachingFinding] = Field(max_length=MAX_ANALYSIS_FINDINGS)
 
 
 class SpendingAnalysisCandidate(SpendingAnalysisFinding):
@@ -196,4 +201,4 @@ class SpendingAnalysisCandidate(SpendingAnalysisFinding):
 
 class SpendingAnalysisDraft(AnalysisModel):
     summary: str = Field(min_length=10, max_length=2000)
-    findings: list[SpendingAnalysisCandidate] = Field(max_length=8)
+    findings: list[SpendingAnalysisCandidate] = Field(max_length=MAX_ANALYSIS_FINDINGS)

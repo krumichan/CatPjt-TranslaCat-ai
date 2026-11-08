@@ -239,7 +239,7 @@ class SpendingAnalysisService:
         timeout_seconds: float = 240.0,
         max_concurrency: int = 2,
         semantic_review: bool = True,
-        max_findings: int = 2,
+        max_findings: int | None = None,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = timeout_seconds
@@ -284,12 +284,13 @@ class SpendingAnalysisService:
                     schema=schema,
                 )
                 # 기존 공급자 응답/fixture는 공개 v2 형식을 읽을 수 있게 유지한다.
-                # 실제 v3 호출의 Structured Outputs는 CoachingDraft 계약을 사용한다.
+                # 실제 모델 호출의 Structured Outputs는 CoachingDraft 계약을 사용한다.
                 stage = "VALIDATE_DRAFT"
                 if "policyVersion" not in result:
                     stage = "FINALIZE_LEGACY"
                     return finalize_review(SpendingAnalysisDraft.model_validate(result), request)
                 draft = CoachingDraft.model_validate(result)
+                visible_history_refs = None
                 if self.semantic_review:
                     stage = "PREPARE_REVIEW"
                     review_context = review_payload(draft, context)
@@ -300,10 +301,15 @@ class SpendingAnalysisService:
                         data=review_data, schema=review_schema)
                     stage = "VALIDATE_REVIEW"
                     draft = CoachingDraft.model_validate(revised)
+                    visible_history_refs = {
+                        item["refId"] for item in review_context["historicalEvidence"]
+                    }
                 stage = "FINALIZE"
-                if len(draft.findings) > self.max_findings:
+                if len(draft.findings) > context["maxFindings"]:
                     raise ValueError("Too many coaching findings")
-                return finalize_coaching(expand_draft(draft, request), request)
+                # 검토에 제공하지 않은 과거 참조는 원장에 실제 존재하더라도 근거로 쓸 수 없다.
+                expanded = expand_draft(draft, request, visible_history_refs)
+                return finalize_coaching(expanded, request)
         except TimeoutError as exc:
             _log_failure(stage, "TIMEOUT", started, exc, 504)
             raise HTTPException(

@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 import re
 import unicodedata
 
 from app.schemas.spending_analysis import (
-    AnalysisTransaction, CoachingDraft, SavingsScenario, SpendingAnalysisFinding,
-    SpendingAnalysisRequest, SpendingAnalysisResponse,
+    MAX_ANALYSIS_FINDINGS,
+    MIN_OBSERVATION_LENGTH,
+    TRANSACTION_REF_PATTERN,
+    AnalysisTransaction,
+    CoachingDraft,
+    SavingsScenario,
+    SpendingAnalysisFinding,
+    SpendingAnalysisRequest,
+    SpendingAnalysisResponse,
 )
 
-POLICY_VERSION = "purchase-context-v4"
+POLICY_VERSION = "purchase-context-v5"
+MAX_SCHEMA_ENUM_VALUES = 1000
 PURCHASE_REF = r"(?<![A-Za-z0-9_-])tx-\d+(?![A-Za-z0-9_-])"
 SCENARIOS = {
     "SMALLER_SELECTION": (500, 1500, 0, 3000),
@@ -86,7 +96,57 @@ def combine_scenarios(findings: list[SpendingAnalysisFinding]) -> SavingsScenari
         kind="COMBINED", assumption="DISJOINT_CITED_PURCHASES_ONLY")
 
 
-def prepare_coaching_payload(request: SpendingAnalysisRequest, max_findings: int = 2) -> dict:
+def finding_limit(request: SpendingAnalysisRequest) -> int:
+    start, end = request.periodStart, request.periodEndExclusive
+    months = (end.year - start.year) * 12 + end.month - start.month
+    anniversary = date(end.year, end.month, min(start.day, monthrange(end.year, end.month)[1]))
+    if end < anniversary:
+        months -= 1
+    if months < 3:
+        return 4
+    if months < 6:
+        return 6
+    return MAX_ANALYSIS_FINDINGS
+
+
+def _category_name(transaction: AnalysisTransaction) -> str:
+    name = unicodedata.normalize("NFKC", transaction.category or "").strip()
+    return {"食費": "식비", "ショッピング": "쇼핑", "生活": "생활"}.get(name, name or "미분류")
+
+
+def _spending_areas(request: SpendingAnalysisRequest, units: list[dict]) -> list[dict]:
+    # 구매 묶음이 여러 달에 걸쳐도 월별 금액과 건수는 개별 거래의 실제 날짜로 집계한다.
+    months: dict[str, dict[str, list[AnalysisTransaction]]] = defaultdict(lambda: defaultdict(list))
+    source = {transaction.refId: transaction for transaction in request.transactions}
+    for transaction in request.transactions:
+        months[_category_name(transaction)][transaction.date.isoformat()[:7]].append(transaction)
+
+    # 세부 구매 맥락이 있는 거래를 찾는 색인이다. 절감 가능하다는 판정은 아니다.
+    details: dict[str, list[str]] = defaultdict(list)
+    for unit in units:
+        transaction = source[unit["refId"]]
+        if has_purchase_context(transaction, request.comment) and not protected_cost(transaction):
+            details[_category_name(transaction)].append(transaction.refId)
+
+    with localcontext() as context:
+        context.prec = 80
+        areas = []
+        for name, area_months in months.items():
+            monthly = []
+            for month, items in sorted(area_months.items()):
+                amount = sum((Decimal(item.amount) for item in items), Decimal(0))
+                monthly.append({"month": month, "amount": str(amount), "transactionCount": len(items)})
+            total = sum((Decimal(row["amount"]) for row in monthly), Decimal(0))
+            areas.append({
+                "name": name,
+                "amount": str(total),
+                "months": monthly,
+                "detailRefs": details[name],
+            })
+        return sorted(areas, key=lambda area: (Decimal(area["amount"]).copy_negate(), area["name"]))
+
+
+def prepare_coaching_payload(request: SpendingAnalysisRequest, max_findings: int | None = None) -> dict:
     payload = request.model_dump(mode="json")
     # 거래 원문 대신 동일 금액·날짜·실제 구매 정보를 제공한다. 거래를 샘플링하지 않는다.
     for name in ("transactions", "historicalTransactions"):
@@ -113,14 +173,9 @@ def prepare_coaching_payload(request: SpendingAnalysisRequest, max_findings: int
         if related["transactions"] and sum(len(refs) for refs in related.values()) > 1:
             patterns[role] = related
     payload["purchasePatterns"] = patterns
-    categories: dict[str, Decimal] = defaultdict(Decimal)
-    with localcontext() as context:
-        context.prec = 80
-        for item in request.transactions:
-            category = {"食費": "식비", "ショッピング": "쇼핑", "生活": "생활"}.get(item.category, item.category or "미분류")
-            categories[category] += Decimal(item.amount)
-    payload["categoryTotals"] = [{"name": key, "amount": str(value)} for key, value in sorted(categories.items(), key=lambda pair: -pair[1])]
-    payload["maxFindings"] = max_findings
+    payload["spendingAreas"] = _spending_areas(request, payload["transactions"])
+    limit = finding_limit(request)
+    payload["maxFindings"] = min(limit, max_findings) if max_findings is not None else limit
     payload["estimateScenarios"] = SCENARIOS
     payload["historyMeaning"] = "이전 조언은 실제 실행 기록이 아니다. 이후 지출·코멘트만으로 실천 성공/실패를 확정하지 않는다."
     return payload
@@ -147,7 +202,11 @@ def purchase_units(transactions: list[AnalysisTransaction]) -> list[dict]:
     return units
 
 
-def expand_draft(draft: CoachingDraft, request: SpendingAnalysisRequest) -> CoachingDraft:
+def expand_draft(
+    draft: CoachingDraft,
+    request: SpendingAnalysisRequest,
+    visible_history_refs: set[str] | None = None,
+) -> CoachingDraft:
     def mapping(items: list[AnalysisTransaction]) -> dict[str, list[str]]:
         result = {}
         groups: dict[tuple, list[AnalysisTransaction]] = defaultdict(list)
@@ -159,6 +218,8 @@ def expand_draft(draft: CoachingDraft, request: SpendingAnalysisRequest) -> Coac
             result[grouped[0].refId] = [item.refId for item in grouped]
         return result
     current, historical = mapping(request.transactions), mapping(request.historicalTransactions)
+    if visible_history_refs is not None:
+        historical = {ref: rows for ref, rows in historical.items() if ref in visible_history_refs}
     findings = []
     for item in draft.findings:
         evidence_units, historical_units = list(item.evidenceRefs), list(item.historicalRefs)
@@ -187,9 +248,16 @@ def coaching_schema(payload: dict, *, review: bool = False) -> dict:
     fields = schema["$defs"]["CoachingFinding"]["properties"]
     current = [unit["refId"] for unit in payload["currentTransactions" if review else "transactions"]]
     history = [unit["refId"] for unit in payload["historicalEvidence" if review else "historicalTransactions"]]
-    fields["evidenceRefs"]["items"]["enum"] = current
-    fields["targetRefs"]["items"]["enum"] = current
-    fields["historicalRefs"]["items"]["enum"] = history or ["NO_HISTORICAL_EVIDENCE"]
+    # 긴 기간도 근거를 샘플링하지 않는다. 공급자 enum 한도를 넘으면 형식만 지정하고
+    # 실제 구매 참조의 존재 여부와 현재/과거 구분은 기존 서버 검증에서 확인한다.
+    enum_count = 2 * len(current) + max(1, len(history)) + len(fields["estimateKind"]["enum"])
+    if enum_count <= MAX_SCHEMA_ENUM_VALUES:
+        fields["evidenceRefs"]["items"]["enum"] = current
+        fields["targetRefs"]["items"]["enum"] = current
+        fields["historicalRefs"]["items"]["enum"] = history or ["NO_HISTORICAL_EVIDENCE"]
+    else:
+        for field in ("evidenceRefs", "targetRefs", "historicalRefs"):
+            fields[field]["items"]["pattern"] = TRANSACTION_REF_PATTERN
     if not history:
         fields["historicalRefs"]["maxItems"] = 0
     schema["properties"]["findings"]["maxItems"] = payload["maxFindings"]
@@ -214,7 +282,7 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
     findings: list[SpendingAnalysisFinding] = []
     used: set[str] = set()
 
-    def display(text: str, allowed: set[str]) -> str:
+    def display(text: str, allowed: set[str], *, min_length: int = 0) -> str:
         def replace(match: re.Match[str]) -> str:
             ref = match.group(0)
             if ref not in allowed:
@@ -223,8 +291,16 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
         # 연결된 원문을 먼저 검증한 후, 본문의 순수 참조 목록은 거래 버튼으로 대신한다.
         for match in re.finditer(PURCHASE_REF, text):
             replace(match)
-        text = re.sub(r"\((?:(?:예|근거|거래)[:：]?\s*)?tx-\d+(?:\s*[,、~–]\s*tx-\d+)*\)", "", text)
-        rendered = re.sub(PURCHASE_REF, replace, text)
+        without_citations = re.sub(
+            r"\((?:(?:예|근거|거래)[:：]?\s*)?tx-\d+(?:\s*[,、~–]\s*tx-\d+)*\)",
+            "",
+            text,
+        )
+        rendered = re.sub(PURCHASE_REF, replace, without_citations)
+        if len(rendered.strip()) < min_length:
+            # 인용을 빼면 유효한 짧은 관찰이 사라질 수 있어 확인한 거래일은 남긴다.
+            date_label = {"ko": "거래일", "ja": "取引日", "en": "purchase date"}[request.locale]
+            rendered = re.sub(PURCHASE_REF, lambda match: f"{date_label} {replace(match)}", text)
         names = {"ko": "선택 구매 조정 가정", "ja": "選択的購入の調整仮定", "en": "hypothetical purchase adjustment"}
         return re.sub(r"\b(?:SMALLER_SELECTION|DRINK_REPLACEMENT|SKIP_EXTRA_ITEM)\b", names[request.locale], rendered)
 
@@ -269,7 +345,8 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
         can_estimate = bool(targets) and not request.coverage.isPartial and all(estimate_eligible(transaction, item.estimateKind, request.comment) for transaction in target_transactions)
         allowed = set(refs + history_refs)
         saving = scenario(amount, item.estimateKind, request.decimalPlaces, display(item.assumption, allowed)) if can_estimate else None
-        findings.append(SpendingAnalysisFinding(title=display(item.title, allowed), reason=display(item.observation, allowed),
+        reason = display(item.observation, allowed, min_length=MIN_OBSERVATION_LENGTH)
+        findings.append(SpendingAnalysisFinding(title=display(item.title, allowed), reason=reason,
             opinion=display(item.opinion, allowed), action=display(item.action, allowed), contextQuestion=None,
             uncertainty=display(item.assumption, allowed), evidenceTransactionRefs=refs,
             historicalTransactionRefs=history_refs, savings=saving, savingsTransactionRefs=targets if saving else []))
@@ -278,10 +355,34 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
 
 
 def review_payload(draft: CoachingDraft, payload: dict) -> dict:
-    refs = {ref for finding in draft.findings for ref in finding.evidenceRefs + finding.historicalRefs}
-    return {"draft": draft.model_dump(mode="json"), "comment": payload.get("comment"),
-        "periodStart": payload["periodStart"], "periodEndExclusive": payload["periodEndExclusive"],
-        "categoryTotals": payload["categoryTotals"], "previousAdvice": payload.get("previousAdvice"),
+    # 초안이 인용하지 않은 구매도 검토에서 다시 살펴볼 수 있게 영역별로 표시한다.
+    cited = {ref for finding in draft.findings for ref in finding.evidenceRefs}
+    areas = []
+    for area in payload["spendingAreas"]:
+        areas.append({
+            "name": area["name"],
+            "amount": area["amount"],
+            "months": area["months"],
+            "detailRefsNotCitedByDraft": [ref for ref in area["detailRefs"] if ref not in cited],
+        })
+
+    # 초안의 과거 근거와 알려진 유사 구매 문맥을 함께 제공한다.
+    historical_refs = {ref for finding in draft.findings for ref in finding.historicalRefs}
+    for pattern in payload["purchasePatterns"].values():
+        historical_refs.update(pattern["historicalTransactions"])
+    return {
+        "draft": draft.model_dump(mode="json"),
+        "comment": payload.get("comment"),
+        "locale": payload["locale"],
+        "coverage": payload["coverage"],
+        "periodStart": payload["periodStart"],
+        "periodEndExclusive": payload["periodEndExclusive"],
+        "spendingAreas": areas,
+        "previousAdvice": payload.get("previousAdvice"),
         "currentTransactions": payload["transactions"],
-        "historicalEvidence": [item for item in payload["historicalTransactions"] if item["refId"] in refs],
-        "maxFindings": payload["maxFindings"], "purchasePatterns": payload["purchasePatterns"]}
+        "historicalEvidence": [
+            item for item in payload["historicalTransactions"] if item["refId"] in historical_refs
+        ],
+        "maxFindings": payload["maxFindings"],
+        "purchasePatterns": payload["purchasePatterns"],
+    }

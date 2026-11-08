@@ -100,7 +100,7 @@ async def test_quality_corpus_preserves_purchase_level_evidence_and_context(case
     assert len(provider.calls) == 1
     assert provider.calls[0]["type_name"] == "ACCOUNT_BOOK_SPENDING_ANALYSIS"
 
-    # 검증: v4 입력은 구매 묶음이어도 상품·메모·모든 구매일·건수·정확한 금액을 보존한다.
+    # 검증: 구매 묶음이어도 상품·메모·모든 구매일·건수·정확한 금액을 보존한다.
     sent = provider.calls[0]["data"]
     metadata = original_request.keys() - {"transactions", "historicalTransactions"}
     assert {key: sent[key] for key in metadata} == {
@@ -109,8 +109,9 @@ async def test_quality_corpus_preserves_purchase_level_evidence_and_context(case
     assert sent["transactions"] == _expected_corpus_purchase_units(case_id, original_request)
     assert sent["historicalTransactions"] == original_request["historicalTransactions"] == []
     assert request.model_dump(mode="json") == original_request
-    assert provider.calls[0]["schema"]["properties"]["findings"]["maxItems"] == 2
-    assert provider.calls[0]["schema"]["properties"]["policyVersion"]["const"] == "purchase-context-v4"
+    expected_limit = 8 if request.periodType == "YEARLY" else 4
+    assert provider.calls[0]["schema"]["properties"]["findings"]["maxItems"] == expected_limit
+    assert provider.calls[0]["schema"]["properties"]["policyVersion"]["const"] == "purchase-context-v5"
     assert all(isinstance(item["amount"], str) for item in sent["transactions"])
 
 
