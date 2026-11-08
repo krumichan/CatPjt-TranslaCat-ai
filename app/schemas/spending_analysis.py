@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 MAX_ANALYSIS_FINDINGS = 8
+MAX_ANALYSIS_TRANSACTIONS = 6000
 MIN_OBSERVATION_LENGTH = 40
 TRANSACTION_REF_PATTERN = r"^tx-[1-9]\d{0,8}$"
 
@@ -18,7 +19,7 @@ class AnalysisModel(BaseModel):
 
 
 class AnalysisCoverage(AnalysisModel):
-    analyzedTransactionCount: int = Field(ge=0, le=6000)
+    analyzedTransactionCount: int = Field(ge=0, le=MAX_ANALYSIS_TRANSACTIONS)
     totalTransactionCount: int = Field(ge=0)
     isPartial: bool
     reason: str | None = Field(max_length=1000)
@@ -66,8 +67,8 @@ class SpendingAnalysisRequest(AnalysisModel):
     coverage: AnalysisCoverage
     previousPeriod: PreviousAnalysisPeriod | None
     comment: str | None = Field(max_length=2000)
-    transactions: list[AnalysisTransaction] = Field(max_length=6000)
-    historicalTransactions: list[AnalysisTransaction] = Field(default_factory=list, max_length=6000)
+    transactions: list[AnalysisTransaction] = Field(max_length=MAX_ANALYSIS_TRANSACTIONS)
+    historicalTransactions: list[AnalysisTransaction] = Field(default_factory=list, max_length=MAX_ANALYSIS_TRANSACTIONS)
     previousAdvice: list[str] = Field(default_factory=list, max_length=12)
 
     @model_validator(mode="after")
@@ -143,11 +144,11 @@ class SpendingAnalysisFinding(AnalysisModel):
     action: str = Field(min_length=10, max_length=1200)
     contextQuestion: str | None = Field(max_length=500)
     uncertainty: str | None = Field(max_length=500)
-    evidenceTransactionRefs: list[str] = Field(min_length=1, max_length=6000)
+    evidenceTransactionRefs: list[str] = Field(min_length=1, max_length=MAX_ANALYSIS_TRANSACTIONS)
     opinion: str | None = Field(default=None, max_length=1200)
-    historicalTransactionRefs: list[str] = Field(default_factory=list, max_length=6000)
+    historicalTransactionRefs: list[str] = Field(default_factory=list, max_length=MAX_ANALYSIS_TRANSACTIONS)
     savings: "SavingsScenario | None" = None
-    savingsTransactionRefs: list[str] = Field(default_factory=list, max_length=6000)
+    savingsTransactionRefs: list[str] = Field(default_factory=list, max_length=MAX_ANALYSIS_TRANSACTIONS)
 
 
 class SpendingAnalysisResponse(AnalysisModel):
@@ -178,9 +179,10 @@ class CoachingFinding(AnalysisModel):
     opinion: str = Field(min_length=20, max_length=1200)
     action: str = Field(min_length=20, max_length=1200)
     assumption: str = Field(min_length=10, max_length=500)
-    evidenceRefs: list[str] = Field(min_length=1, max_length=20)
-    targetRefs: list[str] = Field(max_length=20)
-    historicalRefs: list[str] = Field(max_length=30)
+    # 공급자에게는 짧은 인용을 요청하지만, 받은 참조는 원장 크기 안에서 실제 거래와 대조한다.
+    evidenceRefs: list[str] = Field(min_length=1, max_length=MAX_ANALYSIS_TRANSACTIONS)
+    targetRefs: list[str] = Field(max_length=MAX_ANALYSIS_TRANSACTIONS)
+    historicalRefs: list[str] = Field(max_length=MAX_ANALYSIS_TRANSACTIONS)
     estimateKind: Literal["NONE", "SMALLER_SELECTION", "DRINK_REPLACEMENT", "SKIP_EXTRA_ITEM"]
 
 

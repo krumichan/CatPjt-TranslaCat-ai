@@ -40,28 +40,47 @@ _QUALITY_CODES = {
     "Overlapping recommendation scope": "OVERLAPPING_RECOMMENDATIONS",
     "Concrete purchase anchor is missing": "MISSING_PURCHASE_ANCHOR",
     "Coaching must not end in questions": "QUESTION_IN_COACHING",
-    "Too many coaching findings": "TOO_MANY_FINDINGS",
 }
 _SCHEMA_ERROR_TYPES = {
     "missing", "string_too_short", "string_too_long", "list_too_short", "list_too_long",
     "too_short", "too_long", "literal_error", "extra_forbidden", "string_type", "list_type",
     "model_type", "value_error",
 }
+_DRAFT_LIST_FIELDS = {"findings", "evidenceRefs", "targetRefs", "historicalRefs"}
 
 
 def _log_failure(stage: str, code: str, started: float, error: Exception, status: int) -> None:
     # 메시지·입력·외부 응답·traceback을 제외하고 고정 코드와 스키마 오류 종류만 기록한다.
     types: list[str] = []
+    overflow_fields: list[str] = []
     if isinstance(error, ValidationError):
+        errors = error.errors(include_input=False, include_context=False, include_url=False)
         types = sorted({
             item["type"] if item["type"] in _SCHEMA_ERROR_TYPES else "schema_error"
-            for item in error.errors(include_input=False, include_context=False, include_url=False)
+            for item in errors
+        })
+        overflow_fields = sorted({
+            str(item["loc"][-1])
+            for item in errors
+            if item["type"] in {"too_long", "list_too_long"}
+            and item["loc"] and item["loc"][-1] in _DRAFT_LIST_FIELDS
         })
     logger.warning(
         "Spending analysis failed: stage=%s code=%s status=%d "
-        "elapsed_ms=%d exception_type=%s validation_types=%s",
+        "elapsed_ms=%d exception_type=%s validation_types=%s overflow_fields=%s",
         stage, code, status, round((time.monotonic() - started) * 1000), type(error).__name__, types,
+        overflow_fields,
     )
+
+
+def _parse_coaching_draft(result: object, limit: int) -> CoachingDraft:
+    # 모델이 우선순위로 정렬한 상위 제안을 보존한다. 초과 제안은 공개 결과나 합산에 들어가지 않는다.
+    if isinstance(result, dict):
+        findings = result.get("findings")
+        if isinstance(findings, list) and len(findings) > limit:
+            logger.info("Spending analysis limited findings: received=%d limit=%d", len(findings), limit)
+            result = {**result, "findings": findings[:limit]}
+    return CoachingDraft.model_validate(result)
 
 
 def _enum_count(value: object) -> int:
@@ -289,7 +308,8 @@ class SpendingAnalysisService:
                 if "policyVersion" not in result:
                     stage = "FINALIZE_LEGACY"
                     return finalize_review(SpendingAnalysisDraft.model_validate(result), request)
-                draft = CoachingDraft.model_validate(result)
+                limit = context["maxFindings"]
+                draft = _parse_coaching_draft(result, limit)
                 visible_history_refs = None
                 if self.semantic_review:
                     stage = "PREPARE_REVIEW"
@@ -300,13 +320,11 @@ class SpendingAnalysisService:
                     revised = await self.provider.call(type_name="ACCOUNT_BOOK_SPENDING_REVIEW",
                         data=review_data, schema=review_schema)
                     stage = "VALIDATE_REVIEW"
-                    draft = CoachingDraft.model_validate(revised)
+                    draft = _parse_coaching_draft(revised, limit)
                     visible_history_refs = {
                         item["refId"] for item in review_context["historicalEvidence"]
                     }
                 stage = "FINALIZE"
-                if len(draft.findings) > context["maxFindings"]:
-                    raise ValueError("Too many coaching findings")
                 # 검토에 제공하지 않은 과거 참조는 원장에 실제 존재하더라도 근거로 쓸 수 없다.
                 expanded = expand_draft(draft, request, visible_history_refs)
                 return finalize_coaching(expanded, request)

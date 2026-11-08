@@ -246,6 +246,10 @@ def expand_draft(
 def coaching_schema(payload: dict, *, review: bool = False) -> dict:
     schema = CoachingDraft.model_json_schema()
     fields = schema["$defs"]["CoachingFinding"]["properties"]
+    # 모델에 요청하는 간결한 근거 분량과 서버가 실제 원장으로 검증할 수 있는 상한을 분리한다.
+    fields["evidenceRefs"]["maxItems"] = 20
+    fields["targetRefs"]["maxItems"] = 20
+    fields["historicalRefs"]["maxItems"] = 30
     current = [unit["refId"] for unit in payload["currentTransactions" if review else "transactions"]]
     history = [unit["refId"] for unit in payload["historicalEvidence" if review else "historicalTransactions"]]
     # 긴 기간도 근거를 샘플링하지 않는다. 공급자 enum 한도를 넘으면 형식만 지정하고

@@ -16,6 +16,7 @@ Return as many distinct, defensible next decisions as the evidence supports, up 
 Group purchases with the same behavior change into one finding. Prefer distinct behaviors
 across areas and months over several versions of the same advice. One broad category can
 contain several unrelated behaviors. Do not fill unused slots with weak or generic advice.
+Order findings by usefulness, prioritizing well-supported actions that cover distinct choices.
 purchasePatterns is a code-built navigation index of potentially related purchase roles,
 and does not exhaust the possible patterns or prove waste. Inspect actual products and past
 purchase dates. Historical detailTruncated marks shortened marketing
@@ -98,6 +99,7 @@ using detailRefsNotCitedByDraft and currentTransactions to look for defensible c
 draft missed, including in categories it already cites. Add those findings when supported.
 Keep distinct changes across areas and months. Merge variants of the same action. The number
 in the draft is not a limit or a target. Keep a short list when few findings are justified.
+Order the final findings by usefulness, prioritizing distinct and well-supported actions.
 Write an overview of the whole supplied period, including ordinary expenses and distinct
 optional patterns. Disclose if coverage.isPartial. Keep findings concise.
 Keep useful item-specific interpretation. Remove unsupported assertions, not just add caveats.
