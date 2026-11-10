@@ -69,7 +69,7 @@ async def test_generation_failures_keep_public_status_and_redact_exception_messa
 @pytest.mark.parametrize("review", [False, True])
 async def test_draft_and_review_schema_failures_log_only_fixed_validation_types(caplog, review):
     # 준비: 공급자 원문에는 비밀 표식을, summary에는 잘못된 타입을 넣는다.
-    invalid = {"policyVersion": "purchase-context-v5", "summary": {"private": PRIVATE}, "findings": []}
+    invalid = {"policyVersion": "recurring-choice-v6", "summary": {"private": PRIVATE}, "findings": []}
     provider = AsyncMock()
     provider.call.side_effect = [coaching(), invalid] if review else [invalid]
 

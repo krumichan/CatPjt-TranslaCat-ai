@@ -39,7 +39,6 @@ _QUALITY_CODES = {
     "Savings targets must belong to current evidence": "INVALID_SAVINGS_TARGET",
     "Overlapping recommendation scope": "OVERLAPPING_RECOMMENDATIONS",
     "Concrete purchase anchor is missing": "MISSING_PURCHASE_ANCHOR",
-    "Coaching must not end in questions": "QUESTION_IN_COACHING",
 }
 _SCHEMA_ERROR_TYPES = {
     "missing", "string_too_short", "string_too_long", "list_too_short", "list_too_long",

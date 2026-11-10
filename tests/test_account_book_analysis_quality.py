@@ -109,9 +109,8 @@ async def test_quality_corpus_preserves_purchase_level_evidence_and_context(case
     assert sent["transactions"] == _expected_corpus_purchase_units(case_id, original_request)
     assert sent["historicalTransactions"] == original_request["historicalTransactions"] == []
     assert request.model_dump(mode="json") == original_request
-    expected_limit = 8 if request.periodType == "YEARLY" else 4
-    assert provider.calls[0]["schema"]["properties"]["findings"]["maxItems"] == expected_limit
-    assert provider.calls[0]["schema"]["properties"]["policyVersion"]["const"] == "purchase-context-v5"
+    assert provider.calls[0]["schema"]["properties"]["findings"]["maxItems"] == 40
+    assert provider.calls[0]["schema"]["properties"]["policyVersion"]["const"] == "recurring-choice-v6"
     assert all(isinstance(item["amount"], str) for item in sent["transactions"])
 
 

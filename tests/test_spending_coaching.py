@@ -13,7 +13,7 @@ from tests.test_spending_analysis import request_data
 
 
 def coaching():
-    return {"policyVersion": "purchase-context-v5", "summary": "이번 기간에는 역할이 가까운 물건의 구매가 이어졌습니다. 기본 사용 목적은 유지하되 같은 역할의 추가 선택을 조정하면 지출을 줄일 여지가 있습니다.",
+    return {"policyVersion": "recurring-choice-v6", "summary": "이번 기간에는 역할이 가까운 물건의 구매가 이어졌습니다. 기본 사용 목적은 유지하되 같은 역할의 추가 선택을 조정하면 지출을 줄일 여지가 있습니다.",
         "findings": [{"title": "무선 이어폰의 추가 선택 조정", "observation": "무선 이어폰 구매가 서로 다른 날 기록되어 같은 역할에 비용이 배정된 사실을 볼 수 있습니다.",
             "opinion": "다른 사람의 선물이나 고장 교체가 아니라면 같은 용도의 추가 선택을 줄일 여지가 있습니다.",
             "action": "다음 구매에서는 먼저 현재 사용할 제품을 정하고, 같은 상황에 쓸 다른 제품은 실제 사용 후 선택합니다.",
@@ -73,7 +73,7 @@ def test_estimate_and_historical_evidence_are_separate():
     assert result.findings[0].contextQuestion is None
 
 
-@pytest.mark.parametrize("change", ["unknown", "overlap", "future_history", "question"])
+@pytest.mark.parametrize("change", ["unknown", "overlap", "future_history"])
 def test_grounding_and_period_boundaries_are_not_delegated_to_ai(change):
     # 준비
     request = request_data()
@@ -81,7 +81,6 @@ def test_grounding_and_period_boundaries_are_not_delegated_to_ai(change):
     if change == "unknown": draft["findings"][0]["evidenceRefs"] = ["tx-999"]
     if change == "overlap": draft["findings"].append(deepcopy(draft["findings"][0]))
     if change == "future_history": request["historicalTransactions"] = [{**request["transactions"][0], "refId": "tx-100001"}]
-    if change == "question": draft["findings"][0]["action"] += " 선물인지 확인해 주실 수 있나요?"
 
     # 실행 / 검증
     with pytest.raises((ValueError, ValidationError)):
@@ -160,7 +159,7 @@ def test_supporting_context_does_not_inflate_the_savings_basis():
 def test_purchase_grouping_preserves_every_transaction_and_exact_total():
     # 준비: 실제 품목이 같은 반복 구매를 하나의 입력 묶음으로 표현한다.
     data=request_data()
-    data['transactions'][1].update(storeName='Amazon',date='2026-10-03')
+    data['transactions'][1].update(storeName='Amazon')
     request=SpendingAnalysisRequest.model_validate(data)
 
     # 실행
@@ -172,6 +171,7 @@ def test_purchase_grouping_preserves_every_transaction_and_exact_total():
     # 검증
     assert len(payload['transactions'])==1
     assert payload['transactions'][0]['transactionCount']==2
+    assert payload['transactions'][0]['dates']==['2026-10-03','2026-10-05']
     assert payload['transactions'][0]['amount']=='12000'
     assert result.findings[0].savingsTransactionRefs==['tx-1','tx-2']
 

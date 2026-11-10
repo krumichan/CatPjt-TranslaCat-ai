@@ -8,7 +8,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-MAX_ANALYSIS_FINDINGS = 8
+MAX_ANALYSIS_FINDINGS = 40
 MAX_ANALYSIS_TRANSACTIONS = 6000
 MIN_OBSERVATION_LENGTH = 40
 TRANSACTION_REF_PATTERN = r"^tx-[1-9]\d{0,8}$"
@@ -184,10 +184,11 @@ class CoachingFinding(AnalysisModel):
     targetRefs: list[str] = Field(max_length=MAX_ANALYSIS_TRANSACTIONS)
     historicalRefs: list[str] = Field(max_length=MAX_ANALYSIS_TRANSACTIONS)
     estimateKind: Literal["NONE", "SMALLER_SELECTION", "DRINK_REPLACEMENT", "SKIP_EXTRA_ITEM"]
+    essentialAlternativeRef: str | None = Field(default=None, pattern=TRANSACTION_REF_PATTERN)
 
 
 class CoachingDraft(AnalysisModel):
-    policyVersion: Literal["purchase-context-v5"]
+    policyVersion: Literal["recurring-choice-v6"]
     summary: str = Field(min_length=50, max_length=2000)
     findings: list[CoachingFinding] = Field(max_length=MAX_ANALYSIS_FINDINGS)
 
@@ -203,4 +204,4 @@ class SpendingAnalysisCandidate(SpendingAnalysisFinding):
 
 class SpendingAnalysisDraft(AnalysisModel):
     summary: str = Field(min_length=10, max_length=2000)
-    findings: list[SpendingAnalysisCandidate] = Field(max_length=MAX_ANALYSIS_FINDINGS)
+    findings: list[SpendingAnalysisCandidate] = Field(max_length=8)

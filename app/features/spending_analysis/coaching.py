@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from calendar import monthrange
 from collections import defaultdict
-from datetime import date
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 import re
 import unicodedata
@@ -19,9 +17,11 @@ from app.schemas.spending_analysis import (
     SpendingAnalysisResponse,
 )
 
-POLICY_VERSION = "purchase-context-v5"
+POLICY_VERSION = "recurring-choice-v6"
 MAX_SCHEMA_ENUM_VALUES = 1000
 PURCHASE_REF = r"(?<![A-Za-z0-9_-])tx-\d+(?![A-Za-z0-9_-])"
+PREPARED_DRINK = r"カフェラテ|アメリカーノ|ドリップコーヒー|카페라떼|카페 라테|아메리카노|caffè latte|americano"
+DELIVERY = r"배달|配達|デリバリー|Uber Eats|出前館|DoorDash|요기요|쿠팡이츠"
 SCENARIOS = {
     "SMALLER_SELECTION": (500, 1500, 0, 3000),
     "DRINK_REPLACEMENT": (1000, 2000, 5000, 8000),
@@ -48,8 +48,14 @@ def has_item_detail(transaction: AnalysisTransaction) -> bool:
     return bool(memo) and not any(term in memo for term in ("미확인", "실제 이용 차감액", "食品・飲料", "日用品・医薬品"))
 
 
+def _has_explicit_purchase_detail(transaction: AnalysisTransaction) -> bool:
+    named_drink = re.search(PREPARED_DRINK, transaction.title, re.I)
+    accessory = re.search(r"머신|기구|잔|텀블러|器具|マシン|グラス|machine|mug", transaction.title, re.I)
+    return has_item_detail(transaction) or bool(named_drink and not accessory)
+
+
 def has_purchase_context(transaction: AnalysisTransaction, comment: str | None) -> bool:
-    if has_item_detail(transaction):
+    if _has_explicit_purchase_detail(transaction):
         return True
     normalized = unicodedata.normalize("NFKC", comment or "").casefold()
     return any(anchor and len(anchor) >= 2 and unicodedata.normalize("NFKC", anchor).casefold() in normalized
@@ -96,19 +102,6 @@ def combine_scenarios(findings: list[SpendingAnalysisFinding]) -> SavingsScenari
         kind="COMBINED", assumption="DISJOINT_CITED_PURCHASES_ONLY")
 
 
-def finding_limit(request: SpendingAnalysisRequest) -> int:
-    start, end = request.periodStart, request.periodEndExclusive
-    months = (end.year - start.year) * 12 + end.month - start.month
-    anniversary = date(end.year, end.month, min(start.day, monthrange(end.year, end.month)[1]))
-    if end < anniversary:
-        months -= 1
-    if months < 3:
-        return 4
-    if months < 6:
-        return 6
-    return MAX_ANALYSIS_FINDINGS
-
-
 def _category_name(transaction: AnalysisTransaction) -> str:
     name = unicodedata.normalize("NFKC", transaction.category or "").strip()
     return {"食費": "식비", "ショッピング": "쇼핑", "生活": "생활"}.get(name, name or "미분류")
@@ -125,7 +118,7 @@ def _spending_areas(request: SpendingAnalysisRequest, units: list[dict]) -> list
     details: dict[str, list[str]] = defaultdict(list)
     for unit in units:
         transaction = source[unit["refId"]]
-        if has_purchase_context(transaction, request.comment) and not protected_cost(transaction):
+        if has_purchase_context(transaction, request.comment):
             details[_category_name(transaction)].append(transaction.refId)
 
     with localcontext() as context:
@@ -164,33 +157,41 @@ def prepare_coaching_payload(request: SpendingAnalysisRequest, max_findings: int
         "DESK_ACCESSORY": r"マウスパッド|マウスマット|デスクマット",
         "COLLECTIBLE": r"가챠|ガチャ|一番くじ|フィギュア|ぬいぐるみ",
         "PHONE_CASE": r"スマホケース|iPhoneケース",
-        "PREPARED_DRINK": r"COFFEE|CAFF|コーヒー|ラテ|カフェラ|ブレンド|麦茶",
+        "PREPARED_DRINK": PREPARED_DRINK + r"|コーヒー|ラテ|ブレンド|커피|coffee",
+        "MEAL_DELIVERY": DELIVERY,
+        "OPTIONAL_SNACK": r"スナック|デザート|チョコ|お菓子|간식|디저트|초콜릿|snack|dessert",
+        "PAID_SERVICE": r"定期購読|サブスク|月額|구독|정기 결제|subscription",
     }
     for role, expression in roles.items():
         related = {name: [unit["refId"] for unit in payload[name]
                          if re.search(expression, unit["title"] + " " + unit["memo"], re.I)]
                    for name in ("transactions", "historicalTransactions")}
-        if related["transactions"] and sum(len(refs) for refs in related.values()) > 1:
+        matched = set(related["transactions"] + related["historicalTransactions"])
+        dates = {date for name in related for unit in payload[name] if unit["refId"] in matched for date in unit["dates"]}
+        if related["transactions"] and len(dates) > 1:
             patterns[role] = related
     payload["purchasePatterns"] = patterns
     payload["spendingAreas"] = _spending_areas(request, payload["transactions"])
-    limit = finding_limit(request)
-    payload["maxFindings"] = min(limit, max_findings) if max_findings is not None else limit
+    payload["maxFindings"] = min(MAX_ANALYSIS_FINDINGS, max_findings) if max_findings is not None else MAX_ANALYSIS_FINDINGS
     payload["estimateScenarios"] = SCENARIOS
     payload["historyMeaning"] = "이전 조언은 실제 실행 기록이 아니다. 이후 지출·코멘트만으로 실천 성공/실패를 확정하지 않는다."
     return payload
 
 
-def purchase_units(transactions: list[AnalysisTransaction]) -> list[dict]:
+def _purchase_groups(transactions: list[AnalysisTransaction]) -> list[list[AnalysisTransaction]]:
     groups: dict[tuple, list[AnalysisTransaction]] = defaultdict(list)
     for item in transactions:
         note = purchase_note(item)
         merchant = unicodedata.normalize("NFKC", item.storeName or item.title).casefold().strip()
         # 명세용 반복 행은 한 묶음, 실제 품목은 내용이 같은 구매끼리만 묶는다.
-        key = (merchant, item.category, note, item.title if has_item_detail(item) else "")
+        key = (merchant, item.category, note, item.title if _has_explicit_purchase_detail(item) else "")
         groups[key].append(item)
+    return list(groups.values())
+
+
+def purchase_units(transactions: list[AnalysisTransaction]) -> list[dict]:
     units = []
-    for items in groups.values():
+    for items in _purchase_groups(transactions):
         first = items[0]
         with localcontext() as context:
             context.prec = 80
@@ -198,7 +199,7 @@ def purchase_units(transactions: list[AnalysisTransaction]) -> list[dict]:
         units.append({"refId": first.refId, "date": min(item.date for item in items).isoformat(),
             "title": first.title, "storeName": first.storeName, "category": first.category, "memo": purchase_note(first),
             "amount": str(total), "transactionCount": len(items), "dates": sorted({item.date.isoformat() for item in items}),
-            "purposeKnown": has_item_detail(first)})
+            "purposeKnown": _has_explicit_purchase_detail(first)})
     return units
 
 
@@ -208,15 +209,7 @@ def expand_draft(
     visible_history_refs: set[str] | None = None,
 ) -> CoachingDraft:
     def mapping(items: list[AnalysisTransaction]) -> dict[str, list[str]]:
-        result = {}
-        groups: dict[tuple, list[AnalysisTransaction]] = defaultdict(list)
-        for item in items:
-            note = purchase_note(item)
-            merchant = unicodedata.normalize("NFKC", item.storeName or item.title).casefold().strip()
-            groups[(merchant, item.category, note, item.title if has_item_detail(item) else "")].append(item)
-        for grouped in groups.values():
-            result[grouped[0].refId] = [item.refId for item in grouped]
-        return result
+        return {group[0].refId: [item.refId for item in group] for group in _purchase_groups(items)}
     current, historical = mapping(request.transactions), mapping(request.historicalTransactions)
     if visible_history_refs is not None:
         historical = {ref: rows for ref, rows in historical.items() if ref in visible_history_refs}
@@ -275,8 +268,31 @@ def estimate_eligible(transaction: AnalysisTransaction, kind: str, comment: str 
     if kind == "DRINK_REPLACEMENT":
         if re.search(r"天然水|生水|생수|ミネラルウォーター|炭酸水|탄산수|bottled water|mineral water|sparkling water|弁当|トースト|サンド|ボロネーゼ|食事|飲食|定食|パスタ|ラーメン", text, re.I):
             return False
-        return bool(re.search(r"ラテ|コーヒー|ココア|モンスター|麦茶|ブレンド|カフェラ|オーレ|茶|コーラ|ジュース|커피|음료|콜라|주스|coffee|latte|cocoa|cola|soda", text, re.I))
+        return bool(re.search(PREPARED_DRINK + r"|ラテ|コーヒー|ココア|モンスター|麦茶|ブレンド|カフェラ|オーレ|茶|コーラ|ジュース|커피|음료|콜라|주스|coffee|latte|cocoa|cola|soda", text, re.I))
     return True
+
+
+def _same_need_alternative(
+    alternative: AnalysisTransaction,
+    current: list[AnalysisTransaction],
+) -> bool:
+    if not has_item_detail(alternative):
+        return False
+    signature = unicodedata.normalize("NFKC", purchase_note(alternative)).casefold()
+    title = unicodedata.normalize("NFKC", alternative.title).casefold().strip()
+    # 단순히 같은 종류라는 이유로 용량·조제량·계약 기간이 다른 거래를 비교하지 않는다.
+    if not re.search(r"\d+\s*(?:개|정|포|개월|個|錠|包|本|か月|ml\b|kg\b|g\b|tablets?\b|packs?\b|months?\b)", signature):
+        return False
+    return any(
+        item.refId != alternative.refId
+        and item.date != alternative.date
+        and _category_name(item) == _category_name(alternative)
+        and unicodedata.normalize("NFKC", item.title).casefold().strip() == title
+        and has_item_detail(item)
+        and unicodedata.normalize("NFKC", purchase_note(item)).casefold() == signature
+        and Decimal(alternative.amount) < Decimal(item.amount)
+        for item in current
+    )
 
 
 def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) -> SpendingAnalysisResponse:
@@ -285,6 +301,7 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
     all_source = source | historical
     findings: list[SpendingAnalysisFinding] = []
     used: set[str] = set()
+    omitted = 0
 
     def display(text: str, allowed: set[str], *, min_length: int = 0) -> str:
         def replace(match: re.Match[str]) -> str:
@@ -318,15 +335,30 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
         targets = item.targetRefs
         if len(set(targets)) != len(targets) or not set(targets).issubset(refs):
             raise ValueError("Savings targets must belong to current evidence")
+        transactions = [source[ref] for ref in refs]
+        past = [historical[ref] for ref in history_refs]
+        allowed = set(refs + history_refs)
+        narrative = " ".join((item.title, item.observation, item.opinion, item.action, item.assumption))
+        # 질문이나 단발 구매는 개선안 한 건에서 제외한다. 나머지 근거와 금액은 유지한다.
+        if "?" in narrative or "？" in narrative or len({row.date for row in transactions + past}) < 2:
+            omitted += 1
+            continue
+        alternative_ref = item.essentialAlternativeRef
+        if alternative_ref is not None:
+            # 동일 품목 설명과 실제 가격이 있는 대안만 필수 목적을 유지하는 비교에 사용한다.
+            if (alternative_ref not in allowed or targets or item.estimateKind != "NONE"
+                    or not _same_need_alternative(all_source[alternative_ref], transactions)):
+                omitted += 1
+                continue
+        elif any(protected_cost(transaction) for transaction in transactions):
+            omitted += 1
+            continue
+        if not any(has_purchase_context(transaction, request.comment) for transaction in transactions):
+            omitted += 1
+            continue
         if used.intersection(targets):
             raise ValueError("Overlapping recommendation scope")
         used.update(targets)
-        transactions = [source[ref] for ref in refs]
-        if any(protected_cost(transaction) for transaction in transactions):
-            continue
-        if not any(has_purchase_context(transaction, request.comment) for transaction in transactions):
-            continue
-        narrative = " ".join((item.title, item.observation, item.opinion, item.action, item.assumption))
         anchors = [value for transaction in transactions for value in (transaction.title, transaction.storeName, transaction.date.isoformat()) if value]
         # 점포 접미사·상품명이 붙은 제목에서도 브랜드 본문을 인식한다. 의미 판단은 별도 검토가 맡는다.
         anchors += [token for transaction in transactions for value in (transaction.title, transaction.storeName or "")
@@ -339,22 +371,29 @@ def finalize_coaching(draft: CoachingDraft, request: SpendingAnalysisRequest) ->
         cites_purchase = bool(set(re.findall(PURCHASE_REF, narrative)).intersection(refs))
         if not cites_purchase and not any(normalize_anchor(anchor) in normalize_anchor(narrative) for anchor in anchors):
             raise ValueError("Concrete purchase anchor is missing")
-        if "?" in narrative or "？" in narrative:
-            raise ValueError("Coaching must not end in questions")
         target_transactions = [source[ref] for ref in targets]
         with localcontext() as context:
             context.prec = 80
             amount = sum((Decimal(transaction.amount) for transaction in target_transactions), Decimal(0))
         # 표본·혼합/불명 거래의 금액을 전체 개선 여지처럼 확대하지 않는다.
         can_estimate = bool(targets) and not request.coverage.isPartial and all(estimate_eligible(transaction, item.estimateKind, request.comment) for transaction in target_transactions)
-        allowed = set(refs + history_refs)
         saving = scenario(amount, item.estimateKind, request.decimalPlaces, display(item.assumption, allowed)) if can_estimate else None
         reason = display(item.observation, allowed, min_length=MIN_OBSERVATION_LENGTH)
         findings.append(SpendingAnalysisFinding(title=display(item.title, allowed), reason=reason,
             opinion=display(item.opinion, allowed), action=display(item.action, allowed), contextQuestion=None,
             uncertainty=display(item.assumption, allowed), evidenceTransactionRefs=refs,
             historicalTransactionRefs=history_refs, savings=saving, savingsTransactionRefs=targets if saving else []))
-    summary = display(draft.summary, set(all_source))
+    if omitted or "?" in draft.summary or "？" in draft.summary:
+        # 제외된 후보가 요약에서 권고로 남지 않게 통과한 개선안만 요약한다.
+        titles = " · ".join(item.title for item in findings[:3])
+        summaries = {
+            "ko": f"반복 지출에서 근거와 개선 방법을 확인한 제안은 {len(findings)}건입니다.",
+            "ja": f"繰り返しの支出で根拠と見直し方を確認できた提案は{len(findings)}件です。",
+            "en": f"There are {len(findings)} supported ways to improve recurring spending.",
+        }
+        summary = summaries[request.locale] + (f" {titles}" if titles else "")
+    else:
+        summary = display(draft.summary, set(all_source))
     return SpendingAnalysisResponse(summary=summary, findings=findings, policyVersion=POLICY_VERSION, savings=combine_scenarios(findings))
 
 

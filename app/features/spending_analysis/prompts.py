@@ -4,14 +4,25 @@ and what they could change in their next decisions. Use the supplied ledger and 
 
 Before writing, work through every supplied spendingAreas entry and its months. Use monthly
 counts and amounts to spot changes and use detailRefs and the original purchase records to
-explain them. The index helps locate evidence. Look for repeated optional extras, products
-serving similar roles, optional one-off add-ons, and realistic substitutions or ways to buy
-less of the same thing. Check food and drinks, daily goods, services, leisure, and durable
-purchases whenever those records exist. Also inspect small areas and earlier months.
+explain them. The index helps locate evidence. Look for recurring optional habits, repeatedly
+paid convenience costs, and equivalent ways to meet recurring needs. Check food and drinks,
+daily goods, services, leisure, and durable purchases whenever those records exist. Also
+inspect small areas and earlier months.
 Do not stop when one obvious purchase cluster already yields a useful idea.
 
+Every finding needs a recurring decision evidenced on at least two different transaction dates
+across its current and earlier purchases, and a feasible action for the next occurrence.
+One-off purchases and several line items from one occasion do not establish a habit.
+Products in the same category are not necessarily the same behavior. Base frequency on the
+recorded dates and counts; call something daily only when the records establish it.
+For frequent purchased coffee, consider bringing coffee prepared from beans or water when the
+purpose is hydration, while leaving purchases the user values. For repeated delivery, keep a
+suitable meal and suggest realistic substitutions such as fewer deliveries, a planned quick meal,
+or a supported pickup option. Distinguish verified delivery from a restaurant name alone.
+Apply this reasoning to all evidenced habits; these are examples, not a list of required topics.
+
 Describe the WHOLE supplied period: distinguish ordinary living costs, large one-off purchases,
-and optional choices. If coverage.isPartial, say the overview is based on supplied transactions.
+and recurring choices. If coverage.isPartial, say the overview is based on supplied transactions.
 Return as many distinct, defensible next decisions as the evidence supports, up to maxFindings.
 Group purchases with the same behavior change into one finding. Prefer distinct behaviors
 across areas and months over several versions of the same advice. One broad category can
@@ -52,8 +63,14 @@ or payments do not prove duplicate billing, impulse buying, low satisfaction or 
 Do not invent quantities, diners, toppings, syrups, fees, discounts, purchase times or upgrades.
 When roles seem close, state the interpretation conditionally, without asking a question.
 
-Respect health, housing, commuting, accessibility, basic meals, work/learning tools and explained
-gifts. Multiple AI/developer subscriptions alone do not justify cancellation. If a comment
+Preserve health, housing, commuting, accessibility, basic meals, work/learning needs and explained
+gifts. For a necessary recurring purchase, only suggest a concrete way to meet the same need
+without reducing safety, necessary quantity or quality. Never advise changing treatment,
+medication or a necessary service just because it is expensive. For a documented like-for-like
+price comparison of a protected purchase, set essentialAlternativeRef to the cheaper cited
+transaction with the same item/service and quantity recorded. Use NONE and no targetRefs for
+that comparison. Otherwise leave essentialAlternativeRef null. Multiple AI/developer
+subscriptions alone do not justify cancellation. If a comment
 explains a purpose, acknowledge it and revise the priority; do not ask for that purpose again.
 An item already purchased is not money that can now be refunded. Recommend fewer FUTURE extra
 choices, not cancellation, returns, moving the payment date, or splitting payments.
@@ -100,6 +117,9 @@ draft missed, including in categories it already cites. Add those findings when 
 Keep distinct changes across areas and months. Merge variants of the same action. The number
 in the draft is not a limit or a target. Keep a short list when few findings are justified.
 Order the final findings by usefulness, prioritizing distinct and well-supported actions.
+Check that each proposal addresses a recurring decision, with comparable purchases on at least
+two different dates. Remove isolated or unrelated purchases, even when large. Keep useful
+specific substitutions for recurring optional purchases and unnecessary convenience costs.
 Write an overview of the whole supplied period, including ordinary expenses and distinct
 optional patterns. Disclose if coverage.isPartial. Keep findings concise.
 Keep useful item-specific interpretation. Remove unsupported assertions, not just add caveats.
@@ -111,8 +131,11 @@ Do not recommend a weekly cap that would not reduce the observed purchase freque
 Check every claimed product, purpose, quantity, price, date and earlier purchase against the
 provided records. Do not turn unknown merchant charges into products or medical expenses.
 Do not infer topping/syrup upgrades, impulse buying, low satisfaction, household size, visits
-or purchase times. Exclude necessities, work tools, unknown-purpose charges and comments that
-already explain a purchase. A few optional purchases need not imply excess.
+or purchase times. Exclude unknown-purpose charges and explained purchases. Preserve necessary
+quantity and purpose. A concrete essential alternative requires a cheaper cited purchase with
+the same recorded item/service and quantity, identified in essentialAlternativeRef, with no
+targets or estimate. Leave essentialAlternativeRef null elsewhere. Do not claim a healthier
+or safer result or change treatment. A few optional purchases need not imply excess.
 
 Observation is fact; opinion may describe a CONDITIONAL tradeoff. Actions concern future
 choices, not refunds/cancellation of purchases already made, payment deferral or bookkeeping.

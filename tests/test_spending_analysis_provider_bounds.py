@@ -60,11 +60,14 @@ async def test_half_year_keeps_verified_references_beyond_model_requested_list_s
 
 
 @pytest.mark.asyncio
-async def test_half_year_keeps_first_eight_when_both_model_steps_return_nine():
-    # 준비: 우선순위가 낮은 아홉 번째 제안을 두 응답에 모두 포함한다.
+async def test_half_year_excludes_an_unsubstantiated_ninth_finding_without_losing_eight_valid_ones():
+    # 준비: 실제 기록이 한 번뿐인 아홉 번째 제안을 두 응답에 모두 포함한다.
     ordered = wide_review()
     last = deepcopy(ordered["findings"][0])
-    last.update(evidenceRefs=["tx-10"], targetRefs=[], estimateKind="NONE")
+    last.update(
+        observation="品目不明のカード明細が一日分だけあります。この一回の記録では同じ選択の繰り返しは分かりません。 (tx-10)",
+        evidenceRefs=["tx-10"], targetRefs=[], estimateKind="NONE",
+    )
     ordered["findings"].append(last)
     provider = AsyncMock()
     provider.call.side_effect = [ordered, ordered]
@@ -72,8 +75,8 @@ async def test_half_year_keeps_first_eight_when_both_model_steps_return_nine():
     # 실행
     result = await SpendingAnalysisService(provider).analyze(half_year_request())
 
-    # 검증: 검토 요청과 저장 가능한 결과 모두에 기간 상한을 적용한다.
+    # 검증: 기간별 상한 대신 실제 반복 구매 근거를 적용한다.
     review = json.loads(provider.call.await_args_list[1].kwargs["data"])
-    assert len(review["draft"]["findings"]) == 8
+    assert len(review["draft"]["findings"]) == 9
     assert len(result.findings) == 8
-    assert result.findings[-1].evidenceTransactionRefs == ["tx-8"]
+    assert result.findings[-1].evidenceTransactionRefs == ["tx-8", "tx-591"]

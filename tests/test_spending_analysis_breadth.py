@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from app.features.spending_analysis.coaching import finding_limit
+from app.features.spending_analysis.coaching import prepare_coaching_payload
 from app.features.spending_analysis.service import SpendingAnalysisService
 from app.schemas.spending_analysis import SpendingAnalysisRequest
 from tests.test_spending_analysis import request_data
@@ -33,12 +33,14 @@ def half_year_request() -> SpendingAnalysisRequest:
     ]
     # 같은 구매 묶음의 금액을 첫 달에 몰아넣는 회귀와 긴 기간의 참조 한도를 함께 잡는다.
     transactions.append({**transactions[1], "refId": "tx-9", "date": "2026-08-05"})
-    for index in range(10, 592):
+    for index in range(10, 585):
         transactions.append({
             "refId": f"tx-{index}", "date": f"2026-{7 + index % 5:02}-10",
             "title": f"品目不明のカード明細 {index}", "storeName": None,
             "category": "その他", "memo": None, "amount": "3000",
         })
+    for index, item in enumerate((row for row in transactions[:8] if row["refId"] != "tx-2"), 585):
+        transactions.append({**item, "refId": f"tx-{index}", "date": item["date"][:8] + "18"})
     data.update(
         periodType="HALF_YEARLY", month=None, half=2, locale="ja",
         periodStart="2026-07-01", periodEndExclusive="2027-01-01", previousPeriod=None,
@@ -99,14 +101,14 @@ async def test_half_year_review_can_add_missed_choices_from_other_areas_and_mont
     areas = {area["name"]: area for area in inspected["spendingAreas"]}
     assert areas["식비"]["months"] == [
         {"month": "2026-07", "amount": "2000", "transactionCount": 1},
-        {"month": "2026-08", "amount": "5000", "transactionCount": 2},
+        {"month": "2026-08", "amount": "8000", "transactionCount": 3},
     ]
     assert areas["쇼핑"]["detailRefsNotCitedByDraft"] == ["tx-8"]
     assert areas["식비"]["detailRefsNotCitedByDraft"] == ["tx-2", "tx-3"]
     assert areas["その他"]["detailRefsNotCitedByDraft"] == []
     for call in (generation, review):
         schema = call["schema"]
-        assert schema["properties"]["findings"]["maxItems"] == 8
+        assert schema["properties"]["findings"]["maxItems"] == 40
         items = schema["$defs"]["CoachingFinding"]["properties"]["evidenceRefs"]["items"]
         assert "pattern" in items and "enum" not in items
 
@@ -114,9 +116,9 @@ async def test_half_year_review_can_add_missed_choices_from_other_areas_and_mont
     assert len(result.findings) == 8
     assert result.findings[0].reason.endswith("(取引日 2026-07-05)")
     assert result.findings[1].evidenceTransactionRefs == ["tx-2", "tx-9"]
-    assert result.findings[-1].evidenceTransactionRefs == ["tx-8"]
+    assert result.findings[-1].evidenceTransactionRefs == ["tx-8", "tx-591"]
     assert all("tx-" not in finding.reason for finding in result.findings)
-    assert result.savings and result.savings.estimate == "9000"
+    assert result.savings and result.savings.estimate == "18000"
 
 
 @pytest.mark.asyncio
@@ -148,20 +150,14 @@ async def test_large_request_with_pattern_schema_rejects_evidence_the_model_did_
     assert provider.call.await_count == (2 if hidden_history else 1)
 
 
-@pytest.mark.parametrize(("start", "end", "limit"), [
-    ("2026-01-31", "2026-02-28", 4),
-    ("2026-01-31", "2026-04-29", 4),
-    ("2026-01-31", "2026-04-30", 6),
-    ("2026-01-31", "2026-07-30", 6),
-    ("2026-01-31", "2026-07-31", 8),
-])
-def test_custom_limit_uses_complete_calendar_months(start, end, limit):
+@pytest.mark.parametrize("end", ["2026-02-28", "2026-04-30", "2026-07-31"])
+def test_custom_period_length_does_not_limit_number_of_supported_findings(end):
     # 준비
     data = request_data()
-    data.update(periodType="CUSTOM", month=None, periodStart=start, periodEndExclusive=end,
+    data.update(periodType="CUSTOM", month=None, periodStart="2026-01-31", periodEndExclusive=end,
                 transactionCount=0, totalExpense="0", transactions=[], previousPeriod=None)
     data["coverage"].update(analyzedTransactionCount=0, totalTransactionCount=0)
     request = SpendingAnalysisRequest.model_validate(data)
 
     # 실행 / 검증
-    assert finding_limit(request) == limit
+    assert prepare_coaching_payload(request)["maxFindings"] == 40

@@ -50,12 +50,12 @@ async def test_real_provider_adapter_resolves_generation_and_review_before_sdk_r
         # 이 등록 수정에서는 기존 adapter의 schema 전송 모드를 바꾸지 않는다.
         assert wire["type"] == "json_schema"
         assert wire["strict"] is False
-        assert wire["schema"]["properties"]["policyVersion"]["const"] == "purchase-context-v5"
-        assert wire["schema"]["properties"]["findings"]["maxItems"] == (8 if half_year else 4)
+        assert wire["schema"]["properties"]["policyVersion"]["const"] == "recurring-choice-v6"
+        assert wire["schema"]["properties"]["findings"]["maxItems"] == 40
         refs = (
             wire["schema"]["$defs"]["CoachingFinding"]["properties"]
             ["evidenceRefs"]["items"]["enum"]
         )
         assert refs == ["tx-1", "tx-2"]
-    assert result.policyVersion == "purchase-context-v5"
+    assert result.policyVersion == "recurring-choice-v6"
     assert result.findings
