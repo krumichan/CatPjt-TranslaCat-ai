@@ -1,0 +1,39 @@
+name: Boards AI candidate verification
+on:
+  push:
+    branches: [ci/boards-20261114]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Select the exact release candidate
+        run: git checkout --detach HEAD^
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libgomp1
+          python -m pip install -r requirements.txt -r requirements-test.txt
+      - name: Verify fail-fast and rollback with fake external commands
+        run: python3 scripts/check_deploy_release.py
+      - name: Run regression tests (no production secrets or model warm-up)
+        env:
+          AI_VOICE_WARM_UP: 'false'
+          OCR_WARM_UP: 'false'
+          NOVEL_AUTH_ENVIRONMENT: Development
+          NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
+        run: python -m pytest -q --junitxml=test-results/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-test-results
+          path: test-results/
