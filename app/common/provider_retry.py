@@ -1,6 +1,7 @@
 import math
 
 
+# 재시도 대기 시간을 응답에 전달할 정수 초로 바꾼다.
 def retry_after_details(error: Exception) -> dict[str, int]:
     # 기존 typed cooldown과 SDK의 기술 header만 읽고 오류 메시지의 숫자는 해석하지 않는다.
     value = getattr(error, "retry_after_seconds", None)
@@ -19,6 +20,8 @@ def retry_after_details(error: Exception) -> dict[str, int]:
                 return {}
         except (TypeError, ValueError, AttributeError, OverflowError):
             return {}
+
+    # 비정상 헤더 값이 클라이언트의 재시도 대기 시간으로 전달되지 않도록 검사한다.
     if not math.isfinite(value) or value <= 0 or value > 2**31 - 1:
         return {}
 
