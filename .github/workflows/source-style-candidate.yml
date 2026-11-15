@@ -1,0 +1,38 @@
+name: Source style AI candidate verification
+on:
+  push:
+    branches: [ci/source-style-20261115]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4ff987f8f79df9e417e81a8a41e931909e10eef7
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "4ff987f8f79df9e417e81a8a41e931909e10eef7"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libgomp1
+          python -m pip install -r requirements.txt -r requirements-test.txt
+      - name: Verify fail-fast and rollback with fake external commands
+        run: python3 scripts/check_deploy_release.py
+      - name: Run regression tests (no production secrets or model warm-up)
+        env:
+          AI_VOICE_WARM_UP: 'false'
+          OCR_WARM_UP: 'false'
+          NOVEL_AUTH_ENVIRONMENT: Development
+          NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
+        run: python -m pytest -q --junitxml=test-results/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-test-results
+          path: test-results/
