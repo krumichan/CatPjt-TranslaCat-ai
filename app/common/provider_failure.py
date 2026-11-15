@@ -4,9 +4,12 @@ import httpx
 from openai import APIConnectionError, APITimeoutError
 
 
+# 예외를 재시도·안전 정책이 해석할 수 있는 제한된 필드로 변환한다.
 def provider_failure_origin(error: Exception) -> dict[str, str | int]:
-    # SDK가 상태 없이 주는 표식은 고정 enum으로만 전달하며 원문은 경계를 넘기지 않는다.
+    # 예외 타입과 HTTP 응답을 기준으로 기술적 출처를 기록한다.
     details = _exception_origin(error)
+
+    # SDK 메시지는 분류에만 쓰고, 응답에는 고정된 신호만 담는다.
     message = f"{type(error).__name__} {error}".lower()
     if any(
         marker in message
@@ -23,9 +26,11 @@ def provider_failure_origin(error: Exception) -> dict[str, str | int]:
         details["failureSignal"] = "DEADLINE"
     elif any(marker in message for marker in ("safety", "blocked", "prohibited content", "unsafe")):
         details["failureSignal"] = "SAFETY"
+
     return details
 
 
+# SDK, 전송 계층, HTTP 상태, 입력 오류 순으로 출처를 판정한다.
 def _exception_origin(error: Exception) -> dict[str, str | int]:
     # SDK timeout은 일반 deadline 초과와 구분해야 호출자가 기존 정책을 유지할 수 있다.
     if isinstance(error, APITimeoutError):
