@@ -78,6 +78,7 @@ docker run -d --name "$CONTAINER" --restart unless-stopped \
     --network translacat-network --env-file "$ENV_FILE" \
     --env "AI_VOICE_STT_PROVIDER=$VOICE_STT_PROVIDER" \
     --env "AI_VOICE_REALTIME_PREVIEW_ENABLED=$VOICE_REALTIME_PREVIEW_ENABLED" \
+    --env "OPENAI_MODEL_DOCUMENT_TRANSLATION=gpt-5.4-mini-2026-03-17" \
     -v translacat-ai-model-cache:/root/.cache/huggingface -p 8000:8000 "$IMAGE"
 
 actual_revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CONTAINER")"
