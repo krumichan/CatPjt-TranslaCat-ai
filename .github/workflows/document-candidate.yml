@@ -36,8 +36,6 @@ jobs:
           NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
         run: |
           python -m pytest -q tests/test_document_translation_model_opt_in.py
-          python -m ruff check app/core/config.py app/ai/model_policy.py app/ai/providers/openai/client.py app/api/internal/model_execution.py tests/test_document_translation_model_opt_in.py
-          pyright app
       - name: Run regression tests (no production secrets or model warm-up)
         env:
           AI_VOICE_WARM_UP: 'false'
@@ -45,6 +43,12 @@ jobs:
           NOVEL_AUTH_ENVIRONMENT: Development
           NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
         run: python -m pytest -q --junitxml=test-results/pytest.xml
+      - name: Check static rules for the changed AI files
+        if: success() || failure()
+        run: python -m ruff check app/core/config.py app/ai/model_policy.py app/ai/providers/openai/client.py app/api/internal/model_execution.py tests/test_document_translation_model_opt_in.py
+      - name: Check AI application types
+        if: success() || failure()
+        run: pyright app
       - uses: actions/upload-artifact@v4
         if: always()
         with:
