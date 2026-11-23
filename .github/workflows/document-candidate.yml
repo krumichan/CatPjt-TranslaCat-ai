@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 8
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -43,12 +46,9 @@ jobs:
           NOVEL_AUTH_ENVIRONMENT: Development
           NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
         run: python -m pytest -q --junitxml=test-results/pytest.xml
-      - name: Check static rules for the changed AI files
+      - name: Compare full static diagnostics with the exact production baseline
         if: success() || failure()
-        run: python -m ruff check app/core/config.py app/ai/model_policy.py app/ai/providers/openai/client.py app/api/internal/model_execution.py tests/test_document_translation_model_opt_in.py
-      - name: Check AI application types
-        if: success() || failure()
-        run: pyright app
+        run: python .github/compare-document-static.py 4ff987f8f79df9e417e81a8a41e931909e10eef7
       - uses: actions/upload-artifact@v4
         if: always()
         with:

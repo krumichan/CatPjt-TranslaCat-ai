@@ -159,7 +159,8 @@ def test_sdk_uses_one_call_and_same_timeout(monkeypatch, override):
     result = asyncio.run(service.execute_explicit(
         instructions=body["instructions"], messages=body["messages"], tier=AiModelTier.MINI,
         reasoning_effort="low", verbosity="low", max_output_tokens=body["maxOutputTokens"],
-        remaining_milliseconds=body["remainingMilliseconds"], response_schema=body["responseSchema"],
+        remaining_milliseconds=body["remainingMilliseconds"],
+        response_schema=body["responseSchema"],
         schema_name_value=body["schemaName"], strict=True, **extra,
     ))
 
