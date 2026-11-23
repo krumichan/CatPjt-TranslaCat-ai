@@ -6,6 +6,9 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DocumentTranslationModel = Literal["gpt-5.4-mini-2026-03-17"]
+
+
 def _settings_environment_file() -> str:
     # 명시한 실행 도구의 파일만 읽는다. 미지정 기존 실행은 종전 .env 계약을 유지한다.
     configured = os.environ.get("AI_SETTINGS_ENV_FILE")
@@ -52,6 +55,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL_LUNA: str = "gpt-5.6-luna"
     OPENAI_MODEL_MINI: str = "gpt-5-mini"
+    OPENAI_MODEL_DOCUMENT_TRANSLATION: DocumentTranslationModel | Literal[""] = ""
     OPENAI_MODEL_NANO: str = "gpt-5-nano"
     OPENAI_REQUEST_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=300)
     # Selected after a fixed six-case A/B comparison. Only Reading passage,
