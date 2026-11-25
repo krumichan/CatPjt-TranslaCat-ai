@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.internal import (
+    image_translation,
     model_execution,
     model_profile_execution,
     speech_execution,
@@ -9,6 +10,7 @@ from app.api.internal import (
 )
 
 internal_router = APIRouter()
+internal_router.include_router(image_translation.router)
 internal_router.include_router(voice.router)
 internal_router.include_router(model_execution.router)
 internal_router.include_router(model_profile_execution.router)

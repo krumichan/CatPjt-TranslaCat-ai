@@ -1,3 +1,4 @@
+from app.features.image_translation.prompts import IMAGE_TRANSLATION_PROMPTS
 from app.features.receipt.prompts import RECEIPT_ANALYSIS_PROMPT
 from app.features.spending_analysis.prompts import SPENDING_ANALYSIS_PROMPT, SPENDING_REVIEW_PROMPT
 from app.features.translation.prompts import TRANSLATION_PROMPT_MAP
@@ -9,6 +10,7 @@ from app.features.voice_translation.prompts import (
 
 PROMPT_MAP = {
     **TRANSLATION_PROMPT_MAP,
+    **IMAGE_TRANSLATION_PROMPTS,
     "RECEIPT_ANALYSIS": RECEIPT_ANALYSIS_PROMPT,
     "ACCOUNT_BOOK_SPENDING_ANALYSIS": SPENDING_ANALYSIS_PROMPT,
     "ACCOUNT_BOOK_SPENDING_REVIEW": SPENDING_REVIEW_PROMPT,
