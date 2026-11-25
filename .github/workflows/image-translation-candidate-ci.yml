@@ -1,0 +1,40 @@
+name: Image translation candidate verification
+
+on:
+  push:
+    branches: [ci/image-translation-20261125]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2e9051a60143326cfe7a0ac3911ec605f18f0786
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libgomp1
+          python -m pip install -r requirements.txt -r requirements-test.txt
+      - name: Verify fail-fast and rollback with fake external commands
+        run: python3 scripts/check_deploy_release.py
+      - name: Run regression tests (no production secrets or model warm-up)
+        env:
+          AI_VOICE_WARM_UP: 'false'
+          OCR_WARM_UP: 'false'
+          NOVEL_AUTH_ENVIRONMENT: Development
+          NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
+        run: python -m pytest -q --junitxml=test-results/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-test-results
+          path: test-results/
