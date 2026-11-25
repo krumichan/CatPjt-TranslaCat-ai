@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from anyio.to_thread import run_sync
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps
 
@@ -88,6 +89,28 @@ class OCRService:
             except FileNotFoundError:
                 pass
 
+    async def extract_document_from_image(
+        self,
+        image: Image.Image,
+        *,
+        ocr_language: str,
+        ocr_version: str,
+    ) -> OCRDocument:
+        """正規化済み画像のピクセル座標を維持し、指定した OCR モデルで認識する。"""
+        ocr = await self._get_ocr(ocr_language, ocr_version=ocr_version)
+
+        # 共有モデルを並行して呼ばず、認識中は画像を呼び出し元へ戻さない。
+        async with self._predict_lock:
+            return await run_sync(self._extract_document_from_image, ocr, image)
+
+    # OCR が終了するまで一時ファイルを保持し、再縮小・損失圧縮を避ける。
+    def _extract_document_from_image(self, ocr: Any, image: Image.Image) -> OCRDocument:
+        with tempfile.TemporaryDirectory(prefix="image-ocr-") as directory:
+            path = str(Path(directory) / "page.png")
+            image.save(path, format="PNG", compress_level=1)
+
+            return self._extract_document_from_path(ocr, path)
+
     def _validate_file(self, file: UploadFile) -> None:
         content_type = file.content_type
         suffix = Path(file.filename or "").suffix.lower()
@@ -166,8 +189,10 @@ class OCRService:
 
         return image
 
-    async def _get_ocr(self, language: str) -> Any:
-        cache_key = (language, settings.OCR_VERSION)
+    # 言語とモデルを単位に共有し、既存の呼び出しには設定済みモデルを使う。
+    async def _get_ocr(self, language: str, *, ocr_version: str | None = None) -> Any:
+        version = ocr_version or settings.OCR_VERSION
+        cache_key = (language, version)
 
         if cache_key in self._ocr_cache:
             return self._ocr_cache[cache_key]
@@ -177,7 +202,7 @@ class OCRService:
                 self._ocr_cache[cache_key] = await asyncio.to_thread(
                     self._create_ocr,
                     language,
-                    settings.OCR_VERSION,
+                    version,
                 )
 
         return self._ocr_cache[cache_key]
