@@ -1,0 +1,60 @@
+name: Camera and wordbook candidate CI
+
+on:
+  push:
+    branches: [ci/camera-wordbook-operating-20261126]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Select exact product source
+        run: |
+          test "$(git rev-parse HEAD^)" = "dda506d97cafb326c9d705cf9d029ff129c9b75e"
+          git checkout --detach dda506d97cafb326c9d705cf9d029ff129c9b75e
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libgomp1
+          python -m pip install -r requirements.txt -r requirements-test.txt
+      - name: Verify fail-fast and rollback with fake external commands
+        run: python3 scripts/check_deploy_release.py
+      - name: Run regression tests (no production secrets or model warm-up)
+        env:
+          AI_VOICE_WARM_UP: 'false'
+          OCR_WARM_UP: 'false'
+          NOVEL_AUTH_ENVIRONMENT: Development
+          NOVEL_SERVER_API_KEY: synthetic-ci-novel-key
+        run: python -m pytest -q --junitxml=test-results/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-test-results
+          path: test-results/
+      - name: Check exact camera and wordbook test counts
+        run: |
+          python3 - <<'PY'
+          import collections
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          tests = collections.defaultdict(list)
+          for path in Path('test-results').glob("*.xml"):
+              for case in ET.parse(path).iter("testcase"):
+                  tests[case.get("classname", "")].append(case)
+          chosen = [case for name, cases in tests.items() if name.endswith("test_camera_translation_api") for case in cases]
+          assert len(chosen) == 8, len(chosen)
+          assert all(case.find(tag) is None for case in chosen for tag in ("failure", "error", "skipped"))
+          print(f"Verified {len(chosen)} camera/wordbook tests, no skipped cases")
+          PY
