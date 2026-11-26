@@ -33,7 +33,7 @@ from app.ai.providers.openai.response import (
     decode_response,
 )
 from app.ai.providers.openai.schema import build_explicit_text_config, build_openai_text_config
-from app.core.config import settings
+from app.core.config import DocumentTranslationModel, settings
 from app.features.voice_translation.prompts import build_voice_translation_prompt
 from app.schemas.voice_translation import VoiceTranslationProviderPayload
 
@@ -114,9 +114,11 @@ class OpenAIService:
         response_schema: dict | None,
         schema_name_value: str | None,
         strict: bool,
+        model_override: DocumentTranslationModel | None = None,
     ) -> StructuredGenerationResult:
-        """범용 모델 실행. task/prompt registry나 업무 validator를 참조하지 않는다."""
-        model = get_model_name_for_tier(tier)
+        """명시된 실행 조건으로 한 번 호출한다. 문서 모델은 인증된 호출부만 선택한다."""
+        # 문서 전용 선택이 없으면 기존 실행 tier의 모델을 사용한다.
+        model = model_override or get_model_name_for_tier(tier)
         text_config = build_explicit_text_config(
             schema=response_schema,
             schema_name_value=schema_name_value,
