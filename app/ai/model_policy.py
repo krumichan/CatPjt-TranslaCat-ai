@@ -73,7 +73,12 @@ def get_document_translation_model(
     strict: bool,
 ) -> DocumentTranslationModel | None:
     """기존 문서 실행 계약과 일치할 때 선택된 모델을 반환한다. 호출부가 권한을 확인한다."""
-    document_execution = ("DOCUMENT_TRANSLATION_V1", AiModelTier.MINI, "document_translation_v1", True)
+    document_execution = (
+        "DOCUMENT_TRANSLATION_V1",
+        AiModelTier.MINI,
+        "document_translation_v1",
+        True,
+    )
     if (task_name, tier, schema_name, strict) != document_execution:
         return None
     return settings.OPENAI_MODEL_DOCUMENT_TRANSLATION or None

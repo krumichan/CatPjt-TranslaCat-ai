@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 DocumentTranslationModel = Literal["gpt-5.4-mini-2026-03-17"]
 
 
